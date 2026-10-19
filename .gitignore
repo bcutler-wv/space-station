@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+.turbo/
+.vite/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+data/
+*.log
+.DS_Store
+# Local, instance-specific notes (hostnames, accounts). Never commit.
+LOCAL.md
+# Original import and local review captures.
+space-station-initial.zip
+wireframe-review*.png

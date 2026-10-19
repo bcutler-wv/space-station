@@ -1,0 +1,9 @@
+# Build workflow
+
+Read `CLAUDE.md`, `README.md`, the relevant `docs/` files, and `LOCAL.md` when present before implementation. `LOCAL.md` is private and must remain untracked. The docs are the product contract. If code exposes a gap, update the relevant doc and flag the rule change in the review summary.
+
+An Astra orchestrator assigns one bounded task with acceptance criteria to a Sol implementation agent. The Sol agent changes only the assigned scope, runs the relevant checks, and reports the diff, test results, risks, and any spec conflict. The Sol agent does not commit or push. Astra reviews the completed work against the spec, security and privacy boundaries, license provenance, and acceptance criteria. Astra requests fixes and reviews again until accepted. Only Astra integrates, commits, and proceeds to the next task. Repeat this review after every Sol task, including tasks within M0; do not batch unreviewed work.
+
+Prefer official provider SDKs and maintained, reputable upstream libraries. Verify current APIs against official documentation and current licensing against upstream repositories before writing adapter code. Pin dependencies with a committed lockfile, document chosen versions and source repositories in `THIRD_PARTY.md`, and avoid copying reference-project code. Custom code should connect and adapt these components.
+
+Use milestone definitions of done in `docs/ROADMAP.md`. The agent-dev host lacks Docker; run local lint, typecheck, unit and fixture tests there. Run Compose integration and end-to-end gates in GitHub Actions on an Ubuntu runner before accepting a milestone. Never claim a Docker gate passed from agent-dev, and do not use the production Docker VM for build validation. Workers do not deploy or alter production. Keep fake data and example.com identities in the repository.

@@ -1,0 +1,2590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Station: Mission Control wireframe (reference design)</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0..1,0&display=block" rel="stylesheet">
+
+<script>
+/* ==========================================================================
+   THEME ENGINE (wireframe version)
+   Turns one seed color into a full light and dark scheme of tonal roles,
+   in the spirit of Material 3. Works in OKLCH so lightness steps look even.
+
+   The production build should swap this for Google's Material Color
+   Utilities (Apache 2.0): QuantizerCelebi + Score to pick the seed from the
+   wallpaper, SchemeTonalSpot for the roles, Blend.harmonize for Orbit colors.
+   The token names below are the contract either way.
+   ========================================================================== */
+const ThemeEngine = (() => {
+  const toLinear = c => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const toGamma = c => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+
+  function rgbToOklch(r, g, b) {
+    r = toLinear(r / 255); g = toLinear(g / 255); b = toLinear(b / 255);
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    const L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    const C = Math.hypot(A, B);
+    let h = Math.atan2(B, A) * 180 / Math.PI;
+    if (h < 0) h += 360;
+    return { L, C, h };
+  }
+
+  function oklchToRgb(L, C, h) {
+    const a = C * Math.cos(h * Math.PI / 180);
+    const b = C * Math.sin(h * Math.PI / 180);
+    const l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3);
+    const m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3);
+    const s = Math.pow(L - 0.0894841775 * a - 1.2914855480 * b, 3);
+    return [
+      4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+      -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+    ];
+  }
+
+  /* Convert to hex, lowering chroma until the color fits in sRGB. */
+  function hex(L, C, h) {
+    let c = C;
+    let rgb = oklchToRgb(L, c, h);
+    while (c > 0 && rgb.some(v => v < -0.0001 || v > 1.0001)) {
+      c -= 0.002;
+      rgb = oklchToRgb(L, c, h);
+    }
+    return "#" + rgb
+      .map(v => Math.round(Math.min(1, Math.max(0, toGamma(Math.min(1, Math.max(0, v))))) * 255))
+      .map(v => v.toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase();
+  }
+
+  /* Nudge a hue up to `max` degrees toward the seed, like M3 harmonize. */
+  function harmonize(hue, seedHue, max = 12) {
+    const d = ((seedHue - hue + 540) % 360) - 180;
+    return (hue + Math.sign(d) * Math.min(Math.abs(d) * 0.5, max) + 360) % 360;
+  }
+
+  /* Pick a seed from image pixels: the most common colorful hue. */
+  function seedFromPixels(data) {
+    const bins = new Array(36).fill(null).map(() => ({ w: 0, c: 0, x: 0, y: 0 }));
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 128) continue;
+      const { L, C, h } = rgbToOklch(data[i], data[i + 1], data[i + 2]);
+      if (C < 0.03 || L < 0.12 || L > 0.96) continue;
+      const bin = bins[Math.floor(h / 10) % 36];
+      const w = C * C;
+      bin.w += w;
+      bin.c += C * w;
+      bin.x += Math.cos(h * Math.PI / 180) * w;
+      bin.y += Math.sin(h * Math.PI / 180) * w;
+    }
+    // Score each bin together with its neighbors so hue families win over specks
+    let best = -1, bestScore = 0;
+    for (let i = 0; i < 36; i++) {
+      const score = bins[i].w + 0.5 * (bins[(i + 35) % 36].w + bins[(i + 1) % 36].w);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    if (best < 0) return { h: 255, c: 0.03 };   // no color in the image: quiet blue-grey
+    const b = bins[best];
+    let h = Math.atan2(b.y, b.x) * 180 / Math.PI;
+    if (h < 0) h += 360;
+    return { h, c: b.c / b.w };
+  }
+
+  const ORBIT_HUES = { glassworks: 190, consulting: 25, campaigns: 290, personal: 85 };
+
+  /* Build every token for one mode. Values are [lightness, chroma, hue]. */
+  function scheme(seed, mode) {
+    const h = seed.h;
+    const pc = Math.max(0.04, Math.min(seed.c, mode === "dark" ? 0.12 : 0.15));
+    const nc = Math.min(0.014, seed.c * 0.12);   // neutral chroma, a faint tint of the seed
+    const th = (h + 60) % 360;                    // tertiary hue
+    const dark = mode === "dark";
+
+    const roles = dark ? {
+      "primary":                   [0.82, pc, h],
+      "on-primary":                [0.30, pc * 0.6, h],
+      "primary-container":         [0.38, pc * 0.7, h],
+      "on-primary-container":      [0.92, pc * 0.4, h],
+      "secondary-container":       [0.33, 0.035, h],
+      "on-secondary-container":    [0.90, 0.025, h],
+      "tertiary":                  [0.82, 0.08, th],
+      "tertiary-container":        [0.37, 0.07, th],
+      "on-tertiary-container":     [0.92, 0.04, th],
+      "surface":                   [0.205, nc, h],
+      "surface-container-lowest":  [0.175, nc, h],
+      "surface-container-low":     [0.225, nc, h],
+      "surface-container":         [0.25, nc, h],
+      "surface-container-high":    [0.28, nc, h],
+      "surface-container-highest": [0.31, nc, h],
+      "on-surface":                [0.93, nc * 0.6, h],
+      "on-surface-variant":        [0.78, nc, h],
+      "outline":                   [0.62, nc, h],
+      "outline-variant":           [0.38, nc, h],
+      "error":                     [0.80, 0.11, 25],
+      "error-container":           [0.40, 0.10, 25],
+      "on-error-container":        [0.92, 0.04, 25],
+      "warn":                      [0.83, 0.12, 75],
+      "ok":                        [0.80, 0.12, 150]
+    } : {
+      "primary":                   [0.50, pc, h],
+      "on-primary":                [0.99, 0.005, h],
+      "primary-container":         [0.90, pc * 0.45, h],
+      "on-primary-container":      [0.29, pc * 0.6, h],
+      "secondary-container":       [0.91, 0.03, h],
+      "on-secondary-container":    [0.30, 0.03, h],
+      "tertiary":                  [0.52, 0.10, th],
+      "tertiary-container":        [0.91, 0.05, th],
+      "on-tertiary-container":     [0.30, 0.06, th],
+      "surface":                   [0.985, nc * 0.5, h],
+      "surface-container-lowest":  [1.0, 0, h],
+      "surface-container-low":     [0.967, nc * 0.6, h],
+      "surface-container":         [0.95, nc * 0.7, h],
+      "surface-container-high":    [0.933, nc * 0.8, h],
+      "surface-container-highest": [0.915, nc, h],
+      "on-surface":                [0.22, nc, h],
+      "on-surface-variant":        [0.43, nc * 1.4, h],
+      "outline":                   [0.58, nc * 1.4, h],
+      "outline-variant":           [0.85, nc, h],
+      "error":                     [0.52, 0.17, 25],
+      "error-container":           [0.92, 0.05, 25],
+      "on-error-container":        [0.32, 0.10, 25],
+      "warn":                      [0.58, 0.13, 65],
+      "ok":                        [0.55, 0.12, 150]
+    };
+
+    const out = {};
+    for (const [name, [L, C, hue]] of Object.entries(roles)) out[name] = hex(L, C, hue);
+
+    for (const [orbit, baseHue] of Object.entries(ORBIT_HUES)) {
+      const oh = harmonize(baseHue, h);
+      out[`orbit-${orbit}`] = dark ? hex(0.80, 0.11, oh) : hex(0.55, 0.13, oh);
+      out[`orbit-${orbit}-container`] = dark ? hex(0.36, 0.07, oh) : hex(0.91, 0.05, oh);
+    }
+
+    // Frame color and the tint laid over the wallpaper (8-digit hex for alpha)
+    out["frame"] = dark ? out["surface-container-lowest"] : out["surface-container"];
+    out["wall-tint"] = out["surface"] + (dark ? "8C" : "73");
+    out["scrim"] = hex(0.1, nc, h) + "73";
+    return out;
+  }
+
+  return { scheme, seedFromPixels, hex, rgbToOklch };
+})();
+if (typeof module !== "undefined") module.exports = ThemeEngine;
+
+</script>
+
+<!--
+  Theme bootstrap. Runs before first paint.
+  Mode is "system", "light" or "dark". The seed comes from the wallpaper.
+  The engine writes every token onto :root, so the CSS defaults below are
+  only a fallback for when JavaScript has not run.
+-->
+<script>
+  window.ThemeState = { mode: "system", seed: { h: 270, c: 0.12 } };
+  window.resolvedMode = function () {
+    if (ThemeState.mode !== "system") return ThemeState.mode;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  };
+  window.applyTheme = function () {
+    var mode = resolvedMode();
+    var tokens = ThemeEngine.scheme(ThemeState.seed, mode);
+    var root = document.documentElement;
+    Object.keys(tokens).forEach(function (k) { root.style.setProperty("--" + k, tokens[k]); });
+    root.setAttribute("data-theme", mode);
+  };
+  applyTheme();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+    if (ThemeState.mode === "system") applyTheme();
+  });
+</script>
+
+<style>
+/* ==========================================================================
+   1. COLOR TOKENS
+   These are the fallback values for the default seed. At runtime the theme
+   engine regenerates every one of them from the wallpaper and writes them
+   onto :root, so the names are the contract and the values are generated.
+   Components only ever use these variables. No hex values appear below
+   this block.
+   ========================================================================== */
+:root, :root[data-theme="light"] {
+  color-scheme: light;
+  --primary: #495DA7;
+  --on-primary: #FBFCFE;
+  --primary-container: #D1DDFF;
+  --on-primary-container: #1E284F;
+  --secondary-container: #D9E1F6;
+  --on-secondary-container: #282D3D;
+  --tertiary: #895284;
+  --tertiary-container: #F5D6F1;
+  --on-tertiary-container: #3E223C;
+  --surface: #F9FAFE;
+  --surface-container-lowest: #FFFFFF;
+  --surface-container-low: #F2F4FA;
+  --surface-container: #ECEEF5;
+  --surface-container-high: #E6E9F1;
+  --surface-container-highest: #DFE3ED;
+  --on-surface: #181A21;
+  --on-surface-variant: #4B4F5B;
+  --outline: #767A86;
+  --outline-variant: #CACDD7;
+  --error: #B63132;
+  --error-container: #FEDBD7;
+  --on-error-container: #5C1717;
+  --warn: #AE6700;
+  --ok: #33854A;
+  --orbit-glassworks: #098188;
+  --orbit-glassworks-container: #BBECEF;
+  --orbit-consulting: #B04C5C;
+  --orbit-consulting-container: #FED5D9;
+  --orbit-campaigns: #6466BB;
+  --orbit-campaigns-container: #DBDFFF;
+  --orbit-personal: #9A6504;
+  --orbit-personal-container: #F6DDBE;
+  --frame: #ECEEF5;
+  --wall-tint: #F9FAFE73;
+  --scrim: #02030773;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --primary: #AEC2FE;
+  --on-primary: #202B52;
+  --primary-container: #313F6F;
+  --on-primary-container: #DAE4FF;
+  --secondary-container: #2E3548;
+  --on-secondary-container: #D7DEEF;
+  --tertiary: #E2B2DD;
+  --tertiary-container: #543151;
+  --on-tertiary-container: #F5DCF2;
+  --surface: #15171E;
+  --surface-container-lowest: #0E1017;
+  --surface-container-low: #191C22;
+  --surface-container: #1F2129;
+  --surface-container-high: #262930;
+  --surface-container-highest: #2D3038;
+  --on-surface: #E5E8EE;
+  --on-surface-variant: #B4B7C1;
+  --outline: #83868F;
+  --outline-variant: #3F424A;
+  --error: #FDA19A;
+  --error-container: #742E2B;
+  --on-error-container: #FEDBD7;
+  --warn: #F5BC69;
+  --ok: #83D494;
+  --orbit-glassworks: #56D3DC;
+  --orbit-glassworks-container: #03464B;
+  --orbit-consulting: #FCA0AA;
+  --orbit-consulting-container: #5C2C33;
+  --orbit-campaigns: #B0B7FF;
+  --orbit-campaigns-container: #363861;
+  --orbit-personal: #E9B26A;
+  --orbit-personal-container: #53360A;
+  --frame: #0E1017;
+  --wall-tint: #15171E8C;
+  --scrim: #02030773;
+}
+
+/* ==========================================================================
+   2. TYPE, SHAPE AND MOTION TOKENS
+   ========================================================================== */
+:root {
+  --font: "Rubik", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --step--1: 0.8125rem;
+  --step-0:  0.9375rem;
+  --step-1:  1.125rem;
+  --step-2:  1.5rem;
+  --step-3:  2.375rem;
+
+  --gap: 12px;
+  --frame-w: 12px;
+  --bar-w: 76px;
+  --top-h: 64px;
+
+  --r-xl: 28px;
+  --r-l: 22px;
+  --r-m: 16px;
+  --r-s: 12px;
+  --r-full: 999px;
+
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --t-color: 600ms;
+}
+
+/* ==========================================================================
+   3. BASE
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--font);
+  font-size: var(--step-0);
+  line-height: 1.45;
+  color: var(--on-surface);
+  background: var(--frame);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.4; }
+
+h1, h2, h3 { margin: 0; font-weight: 500; }
+
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.ms {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: normal;
+  white-space: nowrap;
+  direction: ltr;
+  font-variation-settings: "FILL" 1, "wght" 400, "opsz" 24;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.ms.sm { font-size: 18px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* Colors drift smoothly when the wallpaper changes */
+.frame, .tile, .bar-btn, .pill, .chip, .btn, .event, .item, .card, .col, .search-pill {
+  transition:
+    background-color var(--t-color) var(--ease-out),
+    color var(--t-color) var(--ease-out),
+    border-color var(--t-color) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* ==========================================================================
+   4. THE FRAME
+   The interior is a rounded window cut into a solid frame. The frame color
+   comes from a huge box-shadow on the interior, so its inner corners curve
+   inward where they meet the bar and the top strip, like Caelestia.
+   The wallpaper shows through inside the interior, between the tiles.
+   ========================================================================== */
+.frame {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--bar-w) 1fr;
+  grid-template-rows: var(--top-h) 1fr;
+  padding: 0 var(--frame-w) var(--frame-w) 0;
+  overflow: hidden;
+  background:
+    linear-gradient(var(--wall-tint), var(--wall-tint)),
+    var(--wallpaper, none) center / cover no-repeat,
+    var(--surface);
+}
+
+body.no-wall .frame { background: var(--surface); }
+
+.interior {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  z-index: 0;
+  border-radius: var(--r-xl);
+  box-shadow: 0 0 0 100vmax var(--frame);
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: box-shadow var(--t-color) var(--ease-out);
+}
+
+/* ==========================================================================
+   5. BAR (left) AND TOP STRIP
+   ========================================================================== */
+.bar {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 0 var(--frame-w);
+}
+
+.logo {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 10px;
+  color: var(--primary);
+}
+
+.bar-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--on-surface-variant);
+}
+
+.bar-btn:hover { background: var(--surface-container-high); color: var(--on-surface); }
+
+.bar-btn[aria-current="page"] {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
+.bar-sep {
+  width: 28px;
+  height: 2px;
+  margin: 8px 0;
+  border-radius: 2px;
+  background: var(--outline-variant);
+}
+
+/* Orbit pills: a workspace strip. The active one stretches. */
+.orbit-pills {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-radius: var(--r-full);
+  background: var(--surface-container);
+  width: 52px;
+}
+
+.pill {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--orbit-c);
+  color: var(--on-surface);
+  font-weight: 600;
+  font-size: var(--step--1);
+  transition:
+    height 420ms var(--ease-spring),
+    background-color var(--t-color) var(--ease-out),
+    color var(--t-color) var(--ease-out);
+}
+
+.pill:hover { filter: brightness(1.08); }
+
+.pill[aria-current="page"] {
+  height: 64px;
+  background: var(--orbit);
+  color: var(--surface);
+}
+
+.pill .badge {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: var(--r-full);
+  background: var(--error);
+  color: var(--surface);
+  font-size: 0.6875rem;
+  line-height: 17px;
+  font-weight: 600;
+}
+
+.bar-spacer { flex: 1; }
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--tertiary-container);
+  color: var(--on-tertiary-container);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+/* Tooltips for the narrow bar */
+[data-tip] { position: relative; }
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 12px;
+  border-radius: var(--r-s);
+  background: var(--on-surface);
+  color: var(--surface);
+  font-size: var(--step--1);
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.top {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 0 6px 0 10px;
+}
+
+.crumb {
+  min-width: 160px;
+  font-weight: 500;
+  font-size: var(--step-1);
+}
+
+.crumb small {
+  display: block;
+  margin-top: -2px;
+  color: var(--on-surface-variant);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.search-pill {
+  flex: 1;
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px 0 16px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
+  text-align: left;
+}
+
+.search-pill:hover { background: var(--surface-container-highest); }
+
+.search-pill .txt { flex: 1; }
+
+kbd {
+  font-family: var(--font);
+  font-size: 0.75rem;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+}
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+  justify-content: flex-end;
+}
+
+.clock {
+  padding: 0 6px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.icon-toggle {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
+}
+
+.icon-toggle[aria-pressed="true"] {
+  background: var(--on-surface);
+  color: var(--surface);
+}
+
+/* ==========================================================================
+   6. INTERIOR LAYOUT AND TILES
+   ========================================================================== */
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: var(--gap);
+  min-height: 100%;
+}
+
+.view[hidden] { display: none; }
+
+.tile {
+  border-radius: var(--r-xl);
+  background: var(--surface-container);
+  overflow: hidden;
+}
+
+.tile-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px 6px;
+}
+
+.tile-head h2 { font-size: var(--step-1); }
+
+.tile-head .meta {
+  margin-left: auto;
+  color: var(--on-surface-variant);
+  font-size: var(--step--1);
+}
+
+.tile-body { padding: 8px 22px 20px; }
+
+.row-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+
+.row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.blackout-note {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: var(--r-full);
+  background: var(--on-surface);
+  color: var(--surface);
+  font-size: var(--step--1);
+}
+
+body.blackout .blackout-note { display: flex; }
+
+/* Briefing */
+.briefing {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  align-items: end;
+  padding: 26px 28px;
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+}
+
+.briefing h1 {
+  font-size: var(--step-3);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+.briefing p {
+  margin: 10px 0 0;
+  max-width: 66ch;
+  font-size: var(--step-1);
+  line-height: 1.5;
+}
+
+.briefing .greet {
+  font-size: var(--step-0);
+  opacity: 0.8;
+}
+
+/* Buttons and chips */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+  font-size: var(--step--1);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.btn:hover { filter: brightness(1.06); }
+
+.btn.filled { background: var(--primary); color: var(--on-primary); }
+
+.btn.text { background: transparent; color: var(--primary); padding: 0 12px; }
+
+.btn.text:hover { background: var(--surface-container-high); filter: none; }
+
+.btn .ms { font-size: 18px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--on-surface-variant);
+  font-size: var(--step--1);
+}
+
+.chip .ms { font-size: 16px; display: none; }
+
+.chip[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
+.chip[aria-pressed="true"] .ms { display: inline; }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--r-full);
+  background: var(--surface-container-highest);
+  color: var(--on-surface-variant);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.tag.orbit { background: var(--orbit-c); color: var(--on-surface); }
+
+.tag.ai { box-shadow: inset 0 0 0 1px var(--outline); background: transparent; }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--orbit);
+}
+
+/* ==========================================================================
+   7. FLIGHT TRACK (today across all Orbits)
+   ========================================================================== */
+.track-scroll { overflow-x: auto; }
+
+.track-grid {
+  position: relative;
+  min-width: 700px;
+  padding: 6px 22px 34px;
+}
+
+.track-hours, .lane {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+}
+
+.track-hours-inner {
+  position: relative;
+  height: 22px;
+  color: var(--on-surface-variant);
+  font-size: 0.75rem;
+}
+
+.track-hours-inner span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+
+.lane { align-items: center; height: 46px; }
+
+.lane-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--step--1);
+  color: var(--on-surface-variant);
+}
+
+.lane-bar {
+  position: relative;
+  height: 38px;
+  border-radius: var(--r-full);
+  background: var(--surface-container-low);
+}
+
+.event {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  display: block;
+  line-height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--orbit-c);
+  color: var(--on-surface);
+  font-size: var(--step--1);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.event.past { opacity: 0.5; }
+
+.track-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(22px + 104px);
+  right: 22px;
+  pointer-events: none;
+}
+
+.now-line {
+  position: absolute;
+  top: 28px;
+  bottom: 30px;
+  width: 3px;
+  margin-left: -1px;
+  border-radius: 3px;
+  background: var(--primary);
+}
+
+.now-line::before {
+  content: attr(data-label);
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.conflict {
+  position: absolute;
+  top: 26px;
+  bottom: 30px;
+  border-radius: var(--r-m);
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 30%, transparent) 0 5px,
+    transparent 5px 11px
+  );
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+
+.conflict-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 22px 18px;
+  padding: 10px 16px;
+  border-radius: var(--r-m);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface-container));
+  font-size: var(--step--1);
+}
+
+.conflict-note .ms { color: var(--warn); font-size: 20px; }
+
+/* ==========================================================================
+   8. NEEDS YOU, UP NEXT, TRAY, PROMISES, CLEARED
+   ========================================================================== */
+.list { display: flex; flex-direction: column; gap: 6px; }
+
+.item {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+}
+
+.item:first-child { border-top-left-radius: var(--r-l); }
+
+.monogram {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-full);
+  background: var(--orbit-c);
+  color: var(--on-surface);
+  font-weight: 600;
+  font-size: var(--step--1);
+}
+
+.item-who { font-weight: 500; }
+
+.item-who small {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+}
+
+.item-what { margin-top: 2px; }
+
+.item-why {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 6px;
+  font-size: var(--step--1);
+  color: var(--on-surface-variant);
+}
+
+.item-why .ms { font-size: 16px; margin-top: 1px; }
+
+.item.urgent .item-why { color: var(--error); }
+
+.item-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.age { color: var(--on-surface-variant); font-size: var(--step--1); }
+
+.actions { display: flex; gap: 4px; }
+
+.upnext .tile-head .tag { margin-left: auto; }
+
+.upnext-title { font-size: var(--step-2); line-height: 1.15; font-weight: 500; }
+
+.upnext-when { margin-top: 4px; color: var(--on-surface-variant); font-size: var(--step--1); }
+
+.upnext-warn {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface-container));
+  font-size: var(--step--1);
+}
+
+.upnext-warn .ms { color: var(--warn); font-size: 18px; }
+
+.upnext h3 {
+  margin: 18px 0 8px;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--on-surface-variant);
+}
+
+.wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.prep {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prep li {
+  padding: 10px 14px;
+  border-radius: var(--r-m);
+  background: var(--surface-container-high);
+  font-size: var(--step--1);
+}
+
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--r-full);
+  background: var(--surface-container-highest);
+  color: var(--primary);
+  font-size: var(--step--1);
+  text-decoration: none;
+}
+
+.link-chip .ms { font-size: 16px; }
+
+.upnext-actions { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+
+.proposal {
+  padding: 14px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+}
+
+.proposal-title { font-weight: 500; }
+
+.proposal-source {
+  margin-top: 6px;
+  color: var(--on-surface-variant);
+  font-size: var(--step--1);
+}
+
+.proposal .wrap { margin-top: 8px; }
+
+.proposal .actions { margin-top: 12px; }
+
+.empty {
+  padding: 18px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-low);
+  color: var(--on-surface-variant);
+  font-size: var(--step--1);
+}
+
+.group-label {
+  margin: 4px 4px 8px;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--on-surface-variant);
+}
+
+.group-label + .list { margin-bottom: 14px; }
+
+.promise {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 12px 14px 12px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+}
+
+.promise .detail {
+  grid-column: 1;
+  font-size: var(--step--1);
+  color: var(--on-surface-variant);
+}
+
+.promise .btn { grid-row: 1 / span 2; grid-column: 2; }
+
+.promise.late .detail { color: var(--error); }
+
+.cleared {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+  font-size: var(--step--1);
+}
+
+.cleared .check {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--ok) 22%, var(--surface-container-high));
+  color: var(--ok);
+}
+
+.cleared s { color: var(--on-surface-variant); }
+
+.cleared .why { display: block; color: var(--on-surface-variant); }
+
+/* ==========================================================================
+   9. WEEK BOARD
+   ========================================================================== */
+.board-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 22px 14px;
+}
+
+.segmented {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-left: 1px solid var(--outline);
+  background: transparent;
+  color: var(--on-surface);
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+
+.segmented button:first-child { border-left: 0; }
+
+.segmented button[aria-pressed="true"] {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
+.segmented button .ms { font-size: 16px; display: none; }
+.segmented button[aria-pressed="true"] .ms { display: inline; }
+
+.board-scroll { overflow-x: auto; padding: 0 12px 12px; }
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(170px, 1fr));
+  gap: 8px;
+  min-width: 1400px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-low);
+}
+
+.col.today { background: color-mix(in srgb, var(--primary) 12%, var(--surface-container-low)); }
+
+.col.unscheduled { background: var(--surface-container-high); }
+
+.col-head { padding: 14px 14px 8px; }
+
+.col-day {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--step-1);
+  font-weight: 500;
+}
+
+.col-day small { font-size: 0.75rem; font-weight: 400; color: var(--on-surface-variant); }
+
+.col.today .col-day small {
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 500;
+}
+
+.load { margin-top: 8px; font-size: 0.75rem; color: var(--on-surface-variant); }
+
+.load-bar {
+  height: 6px;
+  margin-top: 5px;
+  border-radius: var(--r-full);
+  background: var(--surface-container-highest);
+  overflow: hidden;
+}
+
+.load-bar i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--primary);
+}
+
+.load-bar.heavy i { background: var(--warn); }
+
+.col-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 10px;
+  border-radius: var(--r-l);
+}
+
+.col-body.drag-over { box-shadow: inset 0 0 0 2px var(--primary); }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--r-m);
+  background: var(--surface-container-highest);
+  cursor: grab;
+  font-size: var(--step--1);
+}
+
+.card.dragging { opacity: 0.4; }
+
+.card.overdue { box-shadow: inset 0 0 0 2px var(--error); }
+
+.card-title { font-size: var(--step-0); font-weight: 500; line-height: 1.3; }
+
+.card-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+
+.flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+}
+
+.flag .ms { font-size: 14px; }
+
+.card.overdue .due { color: var(--error); font-weight: 500; }
+
+/* ==========================================================================
+   10. ORBIT VIEW
+   ========================================================================== */
+.orbit-hero {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  padding: 26px 28px;
+  background: var(--orbit-c);
+  color: var(--on-surface);
+}
+
+.orbit-hero h1 { font-size: var(--step-3); line-height: 1.05; }
+
+.orbit-hero p { margin: 8px 0 0; max-width: 70ch; color: var(--on-surface-variant); }
+
+.orbit-hero .btn { margin-left: auto; flex: none; }
+
+.sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+
+.msg {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+  font-size: var(--step--1);
+}
+
+.msg .from { font-weight: 500; font-size: var(--step-0); }
+
+.msg .from small { margin-left: 6px; font-weight: 400; font-size: 0.75rem; color: var(--on-surface-variant); }
+
+.msg .snippet { color: var(--on-surface-variant); }
+
+.msg .when { color: var(--on-surface-variant); white-space: nowrap; }
+
+.msg.unread .from::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  vertical-align: middle;
+}
+
+.meeting {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+  font-size: var(--step--1);
+}
+
+.meeting time { font-weight: 500; }
+
+.meeting .note { display: block; margin-top: 2px; color: var(--on-surface-variant); }
+
+.mini-task {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+  font-size: var(--step--1);
+}
+
+.mini-task input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--primary); }
+
+.mini-task .flag { display: block; margin-top: 2px; }
+
+/* ==========================================================================
+   11. CAPCOM PANEL
+   Grows out of the search pill when opened.
+   ========================================================================== */
+.capcom {
+  position: fixed;
+  top: calc(var(--top-h) + 8px);
+  right: calc(var(--frame-w) + 8px);
+  bottom: calc(var(--frame-w) + 8px);
+  width: min(420px, calc(100vw - 32px));
+  display: none;
+  flex-direction: column;
+  border-radius: var(--r-xl);
+  background: var(--surface-container-high);
+  box-shadow: 0 12px 40px var(--scrim);
+  transform-origin: top left;
+  z-index: 30;
+  overflow: hidden;
+}
+
+.capcom.open { display: flex; }
+
+.capcom-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 18px 8px 22px;
+}
+
+.capcom-head h2 { font-size: var(--step-2); }
+
+.capcom-head .icon-toggle { margin-left: auto; width: 40px; height: 40px; }
+
+.capcom-scope { padding: 0 22px 10px; }
+
+.capcom-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 18px 18px;
+}
+
+.bubble {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 10px 16px;
+  border-radius: var(--r-l) var(--r-l) 6px var(--r-l);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: var(--r-l);
+  background: var(--surface-container);
+  list-style: none;
+  font-size: var(--step--1);
+  color: var(--on-surface-variant);
+}
+
+.steps li { display: flex; gap: 8px; align-items: center; }
+
+.steps .ms { font-size: 16px; color: var(--ok); }
+
+.answer p { margin: 0 0 10px; line-height: 1.55; }
+
+.answer .link-chip { height: 24px; padding: 0 10px; font-size: 0.75rem; vertical-align: 1px; }
+
+.capcom-input {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.capcom-input input {
+  flex: 1;
+  height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--surface-container-highest);
+}
+
+.capcom-input .btn { height: 48px; padding: 0 18px; }
+
+.morph-content { display: contents; }
+
+/* ==========================================================================
+   12. SETTINGS
+   Grows out of the gear when opened.
+   ========================================================================== */
+.settings {
+  width: min(820px, calc(100vw - 32px));
+  height: min(600px, calc(100vh - 48px));
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xl);
+  background: var(--surface-container);
+  color: var(--on-surface);
+  overflow: hidden;
+  transform-origin: top left;
+}
+
+.settings::backdrop { background: var(--scrim); }
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  height: 100%;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 12px;
+  background: var(--surface-container-low);
+}
+
+.settings-nav h2 { padding: 0 14px 14px; font-size: var(--step-2); }
+
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--on-surface-variant);
+  text-align: left;
+}
+
+.settings-nav button[aria-current="true"] {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
+.settings-body {
+  position: relative;
+  overflow-y: auto;
+  padding: 22px 26px 26px;
+}
+
+.settings-body > .icon-toggle { position: absolute; top: 14px; right: 14px; width: 40px; height: 40px; }
+
+.settings-body h3 { font-size: var(--step-2); margin-bottom: 16px; }
+
+.setting {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: var(--r-l);
+  background: var(--surface-container-high);
+}
+
+.setting + .setting { margin-top: 6px; }
+
+.setting .info { flex: 1; min-width: 0; }
+
+.setting .info small { display: block; color: var(--on-surface-variant); font-size: var(--step--1); }
+
+.wall-row { align-items: stretch; }
+
+.wall-preview {
+  width: 180px;
+  aspect-ratio: 16 / 10;
+  flex: none;
+  border-radius: var(--r-m);
+  background: var(--wallpaper, none) center / cover no-repeat, var(--surface-container-highest);
+}
+
+.wall-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+.wall-actions label { cursor: pointer; }
+
+.palette {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.palette span {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  background: var(--sw);
+  box-shadow: inset 0 0 0 1px var(--outline-variant);
+}
+
+/* M3-style switch */
+.switch {
+  position: relative;
+  width: 52px;
+  height: 32px;
+  flex: none;
+  border: 2px solid var(--outline);
+  border-radius: var(--r-full);
+  background: var(--surface-container-highest);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--outline);
+  transition: all 260ms var(--ease-spring);
+}
+
+.switch[aria-checked="true"] { border-color: var(--primary); background: var(--primary); }
+
+.switch[aria-checked="true"]::after {
+  top: 2px;
+  left: 22px;
+  width: 24px;
+  height: 24px;
+  background: var(--on-primary);
+}
+
+/* ==========================================================================
+   13. RESPONSIVE
+   ========================================================================== */
+@media (max-width: 1150px) {
+  .row-2, .row-3 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  :root { --bar-w: 0px; --top-h: 60px; }
+
+  .frame {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--top-h) 1fr 72px;
+    padding: 0 var(--frame-w) 0 var(--frame-w);
+  }
+
+  .interior { grid-column: 1; }
+
+  .top { grid-column: 1; padding: 0 2px; }
+
+  .bar {
+    grid-column: 1;
+    grid-row: 3;
+    flex-direction: row;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .logo, .bar-sep, .bar-spacer, .bar .tools { display: none; }
+
+  .orbit-pills { flex-direction: row; width: auto; padding: 0 8px; height: 52px; }
+
+  .pill[aria-current="page"] { height: 36px; width: 64px; }
+
+  .crumb, .clock { display: none; }
+
+  .top-right { min-width: 0; }
+
+  .search-pill kbd { display: none; }
+
+  [data-tip]:hover::after { display: none; }
+
+  .item { grid-template-columns: 40px 1fr; }
+
+  .item-side { grid-column: 2; align-items: flex-start; }
+
+  .settings-layout { grid-template-columns: 1fr; }
+
+  .settings-nav { display: none; }
+
+  .setting.wall-row { flex-direction: column; }
+
+  .wall-preview { width: 100%; }
+}
+</style>
+</head>
+
+<body>
+<div class="frame" id="frame">
+
+  <!-- ===================== BAR ===================== -->
+  <nav class="bar" aria-label="Main">
+    <div class="logo" aria-hidden="true">
+      <svg width="30" height="30" viewBox="0 0 30 30">
+        <circle cx="15" cy="15" r="5" fill="currentColor"/>
+        <ellipse cx="15" cy="15" rx="13" ry="5.5" fill="none" stroke="currentColor" stroke-width="2" transform="rotate(-25 15 15)"/>
+      </svg>
+    </div>
+
+    <button class="bar-btn" data-nav="mission" aria-current="page" data-tip="Mission Control  0" aria-label="Mission Control">
+      <span class="ms">space_dashboard</span>
+    </button>
+
+    <div class="bar-sep" aria-hidden="true"></div>
+
+    <div class="orbit-pills" id="orbit-pills" role="group" aria-label="Orbits"></div>
+
+    <div class="bar-sep tools" aria-hidden="true"></div>
+
+    <button class="bar-btn tools" disabled data-tip="Mail" aria-label="Mail"><span class="ms">mail</span></button>
+    <button class="bar-btn tools" disabled data-tip="Calendar" aria-label="Calendar"><span class="ms">calendar_month</span></button>
+
+    <div class="bar-spacer"></div>
+
+    <button class="avatar" data-tip="Alex" aria-label="Account: Alex">AK</button>
+    <button class="bar-btn" id="settings-btn" data-tip="Settings" aria-label="Settings"><span class="ms">settings</span></button>
+  </nav>
+
+  <!-- ===================== TOP STRIP ===================== -->
+  <header class="top">
+    <div class="crumb" id="crumb">Mission Control<small>All Orbits</small></div>
+
+    <button class="search-pill" id="capcom-launch" aria-label="Open CAPCOM">
+      <span class="ms">search</span>
+      <span class="txt">Search or ask CAPCOM</span>
+      <kbd>Ctrl K</kbd>
+    </button>
+
+    <div class="top-right">
+      <span class="clock" id="clock">9:40</span>
+      <button class="icon-toggle" id="blackout-btn" aria-pressed="false" aria-label="Blackout" title="Blackout: hold notifications from other Orbits">
+        <span class="ms">do_not_disturb_on</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===================== INTERIOR ===================== -->
+  <div class="interior" id="interior">
+
+    <main class="view" id="view-mission">
+
+      <div class="blackout-note"><span class="ms sm">do_not_disturb_on</span>Blackout is on. Notifications outside the current Orbit are held until you turn it off. Urgent items still come through.</div>
+
+      <section class="tile briefing" aria-labelledby="brief-h">
+        <div>
+          <div class="greet">Good morning, Alex</div>
+          <h1 id="brief-h">Monday, October 19</h1>
+          <p>Six meetings today, and two of them overlap at 11:00. Four replies are waiting on you, the oldest from Thursday. The batch materials quote is due Wednesday and still has no draft.</p>
+        </div>
+        <button class="btn filled" data-open-capcom><span class="ms">auto_awesome</span>Plan my day</button>
+      </section>
+
+      <section class="tile" aria-labelledby="track-h">
+        <div class="tile-head">
+          <h2 id="track-h">Today across all Orbits</h2>
+          <span class="meta">8 am to 6 pm</span>
+        </div>
+        <div class="track-scroll"><div class="track-grid" id="track"></div></div>
+        <div id="conflict-note"></div>
+      </section>
+
+      <div class="row-2">
+        <section class="tile" aria-labelledby="needs-h">
+          <div class="tile-head">
+            <h2 id="needs-h">Needs you</h2>
+            <span class="meta">Most urgent first</span>
+          </div>
+          <div class="tile-body"><div class="list" id="needs"></div></div>
+        </section>
+
+        <section class="tile upnext" id="upnext" aria-labelledby="next-h"></section>
+      </div>
+
+      <div class="row-3">
+        <section class="tile" aria-labelledby="tray-h">
+          <div class="tile-head">
+            <h2 id="tray-h">Review tray</h2>
+            <span class="meta" id="tray-count"></span>
+          </div>
+          <div class="tile-body"><div class="list" id="tray"></div></div>
+        </section>
+
+        <section class="tile" aria-labelledby="promises-h">
+          <div class="tile-head">
+            <h2 id="promises-h">Promises</h2>
+            <span class="meta">Yours and theirs</span>
+          </div>
+          <div class="tile-body" id="promises"></div>
+        </section>
+
+        <section class="tile" aria-labelledby="cleared-h">
+          <div class="tile-head">
+            <h2 id="cleared-h">Recently auto-cleared</h2>
+          </div>
+          <div class="tile-body"><div class="list" id="cleared"></div></div>
+        </section>
+      </div>
+
+      <section class="tile" aria-labelledby="week-h">
+        <div class="tile-head">
+          <h2 id="week-h">This week</h2>
+          <span class="meta">Drag a task to reschedule it. The due date stays the same.</span>
+        </div>
+        <div class="board-toolbar">
+          <div class="wrap" id="tag-filters"></div>
+          <div class="segmented" role="group" aria-label="Task view">
+            <button aria-pressed="true"><span class="ms">check</span>Week</button>
+            <button disabled title="Recommended during build">List</button>
+            <button disabled title="Recommended during build">Calendar</button>
+          </div>
+        </div>
+        <div class="board-scroll"><div class="board" id="board"></div></div>
+      </section>
+    </main>
+
+    <main class="view" id="view-orbit" hidden></main>
+  </div>
+</div>
+
+<!-- ===================== CAPCOM ===================== -->
+<aside class="capcom" id="capcom" aria-label="CAPCOM">
+  <div class="capcom-head">
+    <span class="ms" style="color:var(--primary)">auto_awesome</span>
+    <h2>CAPCOM</h2>
+    <button class="icon-toggle" id="capcom-close" aria-label="Close CAPCOM"><span class="ms">close</span></button>
+  </div>
+  <div class="capcom-scope"><span class="tag" id="capcom-scope">Searching all Orbits</span></div>
+  <div class="capcom-log">
+    <div class="bubble">What did the sand supplier say about price changes this fall?</div>
+    <ul class="steps">
+      <li><span class="ms">check_circle</span>Matched "sand supplier" to Riverside Silica</li>
+      <li><span class="ms">check_circle</span>Searched mail from their 2 domains since Aug 1</li>
+      <li><span class="ms">check_circle</span>Semantic search: price increase, surcharge</li>
+      <li><span class="ms">check_circle</span>Read 3 threads and 1 PDF attachment</li>
+    </ul>
+    <div class="answer">
+      <p>Riverside Silica announced a 6% increase on batch sand starting November 1, citing freight costs. <a class="link-chip" href="#">Sep 22 email</a></p>
+      <p>Their rep offered to hold the old price on orders placed before October 31 if you commit to a quarterly volume. <a class="link-chip" href="#">Oct 2 thread</a></p>
+      <p>The attached rate sheet lists the new prices per ton by grade. <a class="link-chip" href="#">Rate sheet PDF</a></p>
+    </div>
+  </div>
+  <div class="capcom-input">
+    <label for="capcom-q" class="sr-only">Ask CAPCOM</label>
+    <input id="capcom-q" placeholder="Ask about anything across your Orbits">
+    <button class="btn filled" aria-label="Send"><span class="ms">arrow_upward</span></button>
+  </div>
+</aside>
+
+<!-- ===================== SETTINGS ===================== -->
+<dialog class="settings" id="settings" aria-label="Settings">
+  <div class="settings-layout">
+    <nav class="settings-nav" aria-label="Settings sections">
+      <h2>Settings</h2>
+      <button aria-current="true"><span class="ms">palette</span>Appearance</button>
+      <button disabled><span class="ms">alternate_email</span>Accounts</button>
+      <button disabled><span class="ms">orbit</span>Orbits</button>
+      <button disabled><span class="ms">auto_awesome</span>AI provider</button>
+      <button disabled><span class="ms">shield</span>Privacy</button>
+      <button disabled><span class="ms">notifications</span>Notifications</button>
+    </nav>
+    <div class="settings-body">
+      <button class="icon-toggle" id="settings-close" aria-label="Close settings"><span class="ms">close</span></button>
+      <h3>Appearance</h3>
+
+      <div class="setting wall-row">
+        <div class="wall-preview" aria-hidden="true"></div>
+        <div class="info">
+          Wallpaper
+          <small>Station builds its colors from your wallpaper. Upload any image and the theme shifts to match.</small>
+          <div class="palette" id="palette" aria-label="Current palette"></div>
+          <div class="wall-actions">
+            <label class="btn filled" for="wall-file"><span class="ms">upload</span>Upload image</label>
+            <input id="wall-file" type="file" accept="image/*" class="sr-only">
+            <button class="btn" id="wall-reset"><span class="ms">restart_alt</span>Use default</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="info">Theme<small>System follows your device's light or dark setting.</small></div>
+        <div class="segmented" role="group" aria-label="Theme" style="margin-left:0">
+          <button data-mode="system" aria-pressed="true"><span class="ms">check</span>System</button>
+          <button data-mode="light" aria-pressed="false"><span class="ms">check</span>Light</button>
+          <button data-mode="dark" aria-pressed="false"><span class="ms">check</span>Dark</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="info">Show wallpaper between panels<small>Turn off for a solid background.</small></div>
+        <button class="switch" id="wall-switch" role="switch" aria-checked="true" aria-label="Show wallpaper between panels"></button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<script>
+/* ==========================================================================
+   WIREFRAME DATA (all fake)
+   ========================================================================== */
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DATES = [18, 19, 20, 21, 22, 23, 24];
+const TODAY = 1;
+const NOW_HOUR = 9.67;
+const DAY_START = 8;
+const DAY_END = 18;
+
+const ORBITS = [
+  { id: "glassworks", name: "Glassworks", letter: "G", key: "1", badge: 7,
+    context: "Glass manufacturer. I handle vendors, purchasing, IT, and marketing.",
+    sources: ["Google Workspace mail", "Slack", "Google Calendar"] },
+  { id: "consulting", name: "Consulting", letter: "C", key: "2", badge: 3,
+    context: "IT consulting. Client networks, support tickets, and project work.",
+    sources: ["Microsoft 365 mail", "Teams", "Outlook Calendar"] },
+  { id: "campaigns", name: "Campaigns", letter: "M", key: "3", badge: 3,
+    context: "Campaign work. Client campaigns, email programs, and signup forms.",
+    sources: ["Google Workspace mail", "Slack", "Google Calendar"] },
+  { id: "personal", name: "Personal", letter: "P", key: "4", badge: 1,
+    context: "Home, family, and anything not assigned to another Orbit.",
+    sources: ["IMAP mail", "CalDAV calendar"] }
+];
+
+const EVENTS = [
+  { orbit: "glassworks",   title: "Production standup",           start: 9,    end: 9.5 },
+  { orbit: "consulting", title: "Client network review",        start: 10.5, end: 11.5 },
+  { orbit: "campaigns",  title: "Campaign check-in",            start: 11,   end: 11.5 },
+  { orbit: "glassworks",   title: "Vendor call: batch materials", start: 13,   end: 14 },
+  { orbit: "campaigns",  title: "Email program sync",           start: 15,   end: 15.5 },
+  { orbit: "personal", title: "Hold: errands",                start: 16.5, end: 17 }
+];
+
+const MEETING_LOAD = [0, 4.5, 6, 2, 3, 1.5, 0];
+
+let TASKS = [
+  { id: 1, title: "Draft batch materials quote request", orbit: "glassworks", tags: ["purchasing", "finance"], day: 1, due: 3 },
+  { id: 2, title: "Approve October vendor invoices", orbit: "glassworks", tags: ["finance", "accounting"], day: 2, due: 4, recurring: "Monthly" },
+  { id: 3, title: "Replace AP in east warehouse", orbit: "glassworks", tags: ["IT", "operations"], day: 4, due: null },
+  { id: 4, title: "Send firewall change summary to client", orbit: "consulting", tags: ["IT"], day: 1, due: 1 },
+  { id: 5, title: "Invoice October retainer", orbit: "consulting", tags: ["finance", "accounting"], day: 5, due: 5, recurring: "Monthly" },
+  { id: 6, title: "Review warmup stats", orbit: "campaigns", tags: ["marketing"], day: 2, due: null, recurring: "Weekly" },
+  { id: 7, title: "Update signup form copy", orbit: "campaigns", tags: ["marketing"], day: 3, due: 4 },
+  { id: 8, title: "Board report: Q3 numbers", orbit: "glassworks", tags: ["finance", "board"], day: null, due: 6 },
+  { id: 9, title: "Renew vehicle registration", orbit: "personal", tags: ["admin"], day: null, due: 6 },
+  { id: 10, title: "Weekly backup check", orbit: "personal", tags: ["IT"], day: 0, due: null, recurring: "Weekly" }
+];
+
+const NEEDS = [
+  { orbit: "consulting", who: "Northgate Clinic", via: "Teams", age: "1h", urgent: true,
+    what: "Asked for the revised SOW with the added switch.",
+    why: "You meet with them at 10:30, and it hasn't been sent." },
+  { orbit: "glassworks", who: "Dana Reyes", via: "Email", age: "4d",
+    what: "Wants to lock the kiln repair window for the week of November 2.",
+    why: "Unanswered since Thursday. The repair crew is waiting on you to schedule." },
+  { orbit: "glassworks", who: "Riverside Silica", via: "Email", age: "3d",
+    what: "Sent November pricing. Old price holds on orders placed before October 31.",
+    why: "Affects the batch materials quote due Wednesday." },
+  { orbit: "consulting", who: "Priya Shah", via: "Email", age: "20m",
+    what: "Has a question about VLAN 30 on the diagram you sent this morning.",
+    why: "She's in your 10:30 meeting. A quick answer now saves time on the call." }
+];
+
+const UP_NEXT = {
+  orbit: "consulting",
+  title: "Client network review",
+  when: "10:30 to 11:30 am on Teams",
+  warn: "Overlaps your Campaigns campaign check-in at 11:00",
+  people: ["Priya Shah, Northgate IT", "Marcus Lee, Northgate operations"],
+  prep: [
+    "Priya replied 20 minutes ago with a question about VLAN 30.",
+    "The revised SOW they asked for this morning is still unsent.",
+    "On October 5 you agreed to price a second switch. No pricing has gone out yet."
+  ],
+  links: [["mail", "Network diagram, sent 8:47 am"], ["description", "SOW draft v2"], ["event_note", "Oct 5 meeting notes"]]
+};
+
+let PROPOSALS = [
+  { id: 101, title: "Reply to Dana Reyes about the kiln repair schedule", orbit: "glassworks", tags: ["operations"],
+    source: "From email, Oct 16. Clears when you reply to Dana." },
+  { id: 102, title: "Send updated SOW to Northgate Clinic", orbit: "consulting", tags: ["sales"],
+    source: "From Teams chat, today 8:12 am. Clears when the SOW is sent." },
+  { id: 103, title: "Schedule a debrief with the campaign manager", orbit: "campaigns", tags: ["operations"],
+    source: "From a Slack thread, yesterday. Clears when a meeting is booked." }
+];
+
+const PROMISES = {
+  mine: [
+    { text: "Send second switch pricing to Northgate", detail: "Promised Oct 5 in a meeting. 14 days ago.", late: true, act: "Make task" },
+    { text: "Share warmup stats with the campaign team", detail: "You said Tuesday in Slack. Due tomorrow.", act: "Make task" },
+    { text: "Confirm quarterly volume with Riverside Silica", detail: "You said by October 31. 12 days left.", act: "Make task" }
+  ],
+  theirs: [
+    { text: "Jordan Pike: September reconciliation", detail: "You asked 6 days ago. No reply.", late: true, act: "Draft nudge" },
+    { text: "Northgate: signed change order", detail: "You asked 9 days ago. No reply.", late: true, act: "Draft nudge" }
+  ]
+};
+
+let CLEARED = [
+  { id: 201, title: "Reply to Tom Hale about pallet pickup", orbit: "glassworks", tags: ["operations"],
+    why: "Cleared by your Slack DM to Tom, 9:02 am" },
+  { id: 202, title: "Send network diagram to Priya Shah", orbit: "consulting", tags: ["IT"],
+    why: "Cleared by your email with the attachment, 8:47 am" }
+];
+
+const ORBIT_DETAIL = {
+  glassworks: {
+    inbox: [
+      { from: "Dana Reyes", via: "Email", subject: "Kiln repair window", snippet: "Can we lock the week of the 2nd? The crew needs...", when: "Thu", unread: true },
+      { from: "Riverside Silica", via: "Email", subject: "Updated rate sheet", snippet: "Attached is the November pricing we discussed...", when: "Fri", unread: true },
+      { from: "#purchasing", via: "Slack", subject: "Cullet delivery moved", snippet: "Truck is now Wednesday afternoon, not morning.", when: "8:31 am", unread: true },
+      { from: "Tom Hale", via: "Slack DM", subject: "Pallets", snippet: "Perfect, thanks. I'll let the driver know.", when: "9:05 am" }
+    ],
+    meetings: [
+      { time: "9:00 am", title: "Production standup", note: "No open items with attendees." },
+      { time: "1:00 pm", title: "Vendor call: batch materials", note: "Rate sheet arrived Friday. Quote request is still in draft." }
+    ]
+  },
+  consulting: {
+    inbox: [
+      { from: "Northgate Clinic", via: "Teams", subject: "SOW revision", snippet: "Can you send the version with the added switch?", when: "8:12 am", unread: true },
+      { from: "Priya Shah", via: "Email", subject: "Re: Network diagram", snippet: "Got it, thank you. One question on VLAN 30...", when: "9:20 am", unread: true }
+    ],
+    meetings: [
+      { time: "10:30 am", title: "Client network review", note: "Overlaps with the Campaigns check-in at 11:00." }
+    ]
+  },
+  campaigns: {
+    inbox: [
+      { from: "#email-program", via: "Slack", subject: "Warmup day 14", snippet: "Open rates are holding above target on all three domains.", when: "Sun" }
+    ],
+    meetings: [
+      { time: "11:00 am", title: "Campaign check-in", note: "Overlaps with the Consulting review." },
+      { time: "3:00 pm", title: "Email program sync", note: "Warmup stats task is scheduled for tomorrow." }
+    ]
+  },
+  personal: {
+    inbox: [
+      { from: "County DMV", via: "Email", subject: "Registration renewal", snippet: "Your registration expires at the end of the month.", when: "Wed" }
+    ],
+    meetings: [
+      { time: "4:30 pm", title: "Hold: errands", note: "" }
+    ]
+  }
+};
+
+/* ==========================================================================
+   HELPERS
+   ========================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const orbitById = id => ORBITS.find(o => o.id === id);
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Inline style that points a component at one Orbit's color pair */
+const orbitStyle = id => `--orbit:var(--orbit-${id});--orbit-c:var(--orbit-${id}-container)`;
+
+function esc(str) {
+  return String(str).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function fmtHour(h) {
+  const hr = Math.floor(h);
+  const min = Math.round((h - hr) * 60);
+  const suffix = hr >= 12 ? "pm" : "am";
+  const h12 = hr % 12 === 0 ? 12 : hr % 12;
+  return min ? `${h12}:${String(min).padStart(2, "0")} ${suffix}` : `${h12} ${suffix}`;
+}
+
+const pct = h => ((h - DAY_START) / (DAY_END - DAY_START)) * 100;
+
+const tag = (t, ai) => `<span class="tag${ai ? " ai" : ""}">${esc(t)}</span>`;
+
+const orbitTag = id => `<span class="tag orbit" style="${orbitStyle(id)}"><span class="dot"></span>${esc(orbitById(id).name)}</span>`;
+
+/* ==========================================================================
+   MORPH: panels grow out of the control that opened them
+   ========================================================================== */
+function morphOpen(panel, origin) {
+  if (reducedMotion() || !origin) return;
+  const o = origin.getBoundingClientRect();
+  const p = panel.getBoundingClientRect();
+  panel.animate([
+    {
+      transform: `translate(${o.left - p.left}px, ${o.top - p.top}px) scale(${o.width / p.width}, ${o.height / p.height})`,
+      borderRadius: "999px",
+      opacity: 0.4
+    },
+    { transform: "none", borderRadius: "28px", opacity: 1 }
+  ], { duration: 460, easing: "cubic-bezier(0.34, 1.2, 0.64, 1)" });
+
+  Array.from(panel.children).forEach(child => child.animate(
+    [{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }],
+    { duration: 460, easing: "ease-out" }
+  ));
+}
+
+function morphClose(panel, origin, done) {
+  if (reducedMotion() || !origin) { done(); return; }
+  const o = origin.getBoundingClientRect();
+  const p = panel.getBoundingClientRect();
+  const anim = panel.animate([
+    { transform: "none", borderRadius: "28px", opacity: 1 },
+    {
+      transform: `translate(${o.left - p.left}px, ${o.top - p.top}px) scale(${o.width / p.width}, ${o.height / p.height})`,
+      borderRadius: "999px",
+      opacity: 0
+    }
+  ], { duration: 260, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)" });
+  anim.onfinish = done;
+}
+
+/* ==========================================================================
+   WALLPAPER AND COLOR
+   ========================================================================== */
+function makeDefaultWallpaper() {
+  const c = document.createElement("canvas");
+  c.width = 1600; c.height = 1000;
+  const g = c.getContext("2d");
+
+  const base = g.createLinearGradient(0, 0, 1600, 1000);
+  base.addColorStop(0, "rgb(18, 22, 52)");
+  base.addColorStop(0.55, "rgb(44, 36, 92)");
+  base.addColorStop(1, "rgb(16, 64, 88)");
+  g.fillStyle = base;
+  g.fillRect(0, 0, 1600, 1000);
+
+  const blob = (x, y, r, color) => {
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, color);
+    rg.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = rg;
+    g.fillRect(0, 0, 1600, 1000);
+  };
+  blob(1150, 280, 520, "rgba(120, 96, 220, 0.55)");
+  blob(320, 780, 460, "rgba(40, 150, 190, 0.45)");
+  blob(820, 520, 300, "rgba(190, 120, 230, 0.25)");
+
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 320; i++) {
+    g.fillStyle = `rgba(255,255,255,${0.15 + rand() * 0.6})`;
+    const s = rand() < 0.92 ? 1 : 2;
+    g.fillRect(rand() * 1600, rand() * 1000, s, s);
+  }
+  return c.toDataURL("image/jpeg", 0.88);
+}
+
+function seedFromImage(img) {
+  const c = document.createElement("canvas");
+  c.width = 96; c.height = 96;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0, 96, 96);
+  return ThemeEngine.seedFromPixels(g.getImageData(0, 0, 96, 96).data);
+}
+
+function setWallpaper(url) {
+  const img = new Image();
+  img.onload = () => {
+    ThemeState.seed = seedFromImage(img);
+    document.documentElement.style.setProperty("--wallpaper", `url("${url}")`);
+    applyTheme();
+    renderPalette();
+  };
+  img.src = url;
+}
+
+function renderPalette() {
+  const roles = ["primary", "primary-container", "secondary-container", "tertiary", "orbit-glassworks", "orbit-consulting", "orbit-campaigns", "orbit-personal"];
+  $("#palette").innerHTML = roles.map(r => `<span title="${r}" style="--sw:var(--${r})"></span>`).join("");
+}
+
+/* ==========================================================================
+   RENDER: BAR
+   ========================================================================== */
+function renderPills() {
+  $("#orbit-pills").innerHTML = ORBITS.map(o => `
+    <button class="pill" data-nav="${o.id}" style="${orbitStyle(o.id)}" data-tip="${esc(o.name)}  ${o.key}" aria-label="${esc(o.name)}">
+      ${o.letter}
+      ${o.badge ? `<span class="badge">${o.badge}</span>` : ""}
+    </button>`).join("");
+}
+
+/* ==========================================================================
+   RENDER: FLIGHT TRACK
+   ========================================================================== */
+function renderTrack() {
+  const hours = [];
+  for (let h = DAY_START; h <= DAY_END; h += 2) hours.push(`<span style="left:${pct(h)}%">${fmtHour(h)}</span>`);
+
+  const lanes = ORBITS.map(o => `
+    <div class="lane">
+      <div class="lane-name" style="${orbitStyle(o.id)}"><span class="dot"></span>${esc(o.name)}</div>
+      <div class="lane-bar">
+        ${EVENTS.filter(e => e.orbit === o.id).map(e => `
+          <div class="event${e.end <= NOW_HOUR ? " past" : ""}" style="${orbitStyle(o.id)};left:${pct(e.start)}%;width:${pct(e.end) - pct(e.start)}%"
+               title="${esc(e.title)}, ${fmtHour(e.start)} to ${fmtHour(e.end)}">${esc(e.title)}</div>`).join("")}
+      </div>
+    </div>`).join("");
+
+  const conflicts = [];
+  for (let i = 0; i < EVENTS.length; i++) {
+    for (let j = i + 1; j < EVENTS.length; j++) {
+      const a = EVENTS[i], b = EVENTS[j];
+      const start = Math.max(a.start, b.start), end = Math.min(a.end, b.end);
+      if (start < end && a.orbit !== b.orbit) conflicts.push({ start, end, a, b });
+    }
+  }
+
+  $("#track").innerHTML = `
+    <div class="track-hours"><div></div><div class="track-hours-inner">${hours.join("")}</div></div>
+    ${lanes}
+    <div class="track-overlay">
+      ${conflicts.map(c => `<div class="conflict" style="left:${pct(c.start)}%;width:${pct(c.end) - pct(c.start)}%"></div>`).join("")}
+      <div class="now-line" data-label="Now ${fmtHour(NOW_HOUR)}" style="left:${pct(NOW_HOUR)}%"></div>
+    </div>`;
+
+  $("#conflict-note").innerHTML = conflicts.map(c => `
+    <div class="conflict-note"><span class="ms">warning</span>
+      ${esc(c.a.title)} (${esc(orbitById(c.a.orbit).name)}) overlaps ${esc(c.b.title)} (${esc(orbitById(c.b.orbit).name)}) at ${fmtHour(c.start)}.
+    </div>`).join("");
+}
+
+/* ==========================================================================
+   RENDER: NEEDS YOU, UP NEXT, TRAY, PROMISES, CLEARED
+   ========================================================================== */
+function renderNeeds() {
+  $("#needs").innerHTML = NEEDS.map(n => `
+    <div class="item${n.urgent ? " urgent" : ""}">
+      <div class="monogram" style="${orbitStyle(n.orbit)}">${esc(orbitById(n.orbit).letter)}</div>
+      <div>
+        <div class="item-who">${esc(n.who)}<small>${esc(n.via)}</small></div>
+        <div class="item-what">${esc(n.what)}</div>
+        <div class="item-why"><span class="ms">${n.urgent ? "priority_high" : "info"}</span>${esc(n.why)}</div>
+      </div>
+      <div class="item-side">
+        <span class="age">${esc(n.age)}</span>
+        <div class="actions">
+          <button class="btn"><span class="ms">reply</span>Reply</button>
+          <button class="btn text" title="Make task" aria-label="Make task"><span class="ms">add_task</span></button>
+          <button class="btn text" title="Snooze" aria-label="Snooze"><span class="ms">snooze</span></button>
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+function renderUpNext() {
+  const u = UP_NEXT;
+  $("#upnext").innerHTML = `
+    <div class="tile-head">
+      <h2 id="next-h">Up next</h2>
+      ${orbitTag(u.orbit)}
+    </div>
+    <div class="tile-body">
+      <div class="upnext-title">${esc(u.title)}</div>
+      <div class="upnext-when">${esc(u.when)}</div>
+      ${u.warn ? `<div class="upnext-warn"><span class="ms">warning</span>${esc(u.warn)}</div>` : ""}
+      <h3>Attendees</h3>
+      <div class="wrap">${u.people.map(p => `<span class="tag">${esc(p)}</span>`).join("")}</div>
+      <h3>Before you join</h3>
+      <ul class="prep">${u.prep.map(p => `<li>${esc(p)}</li>`).join("")}</ul>
+      <h3>Related</h3>
+      <div class="wrap">${u.links.map(([icon, label]) => `<a class="link-chip" href="#"><span class="ms">${icon}</span>${esc(label)}</a>`).join("")}</div>
+      <div class="upnext-actions">
+        <button class="btn filled"><span class="ms">videocam</span>Join call</button>
+        <button class="btn" data-open-capcom><span class="ms">auto_awesome</span>Prep me</button>
+      </div>
+    </div>`;
+}
+
+function renderTray() {
+  $("#tray-count").textContent = PROPOSALS.length ? `${PROPOSALS.length} proposed` : "";
+  $("#tray").innerHTML = PROPOSALS.length ? PROPOSALS.map(p => `
+    <div class="proposal">
+      <div class="proposal-title">${esc(p.title)}</div>
+      <div class="wrap">${orbitTag(p.orbit)}${p.tags.map(t => tag(t, true)).join("")}</div>
+      <div class="proposal-source">${esc(p.source)}</div>
+      <div class="actions">
+        <button class="btn filled" data-approve="${p.id}"><span class="ms">add</span>Add task</button>
+        <button class="btn text" data-dismiss="${p.id}">Dismiss</button>
+      </div>
+    </div>`).join("")
+    : `<div class="empty">Nothing to review. New tasks found in mail and chat will show up here.</div>`;
+}
+
+function renderPromises() {
+  const row = p => `
+    <div class="promise${p.late ? " late" : ""}">
+      <span>${esc(p.text)}</span>
+      <span class="detail">${esc(p.detail)}</span>
+      <button class="btn text">${esc(p.act)}</button>
+    </div>`;
+  $("#promises").innerHTML = `
+    <div class="group-label">You promised</div>
+    <div class="list">${PROMISES.mine.map(row).join("")}</div>
+    <div class="group-label">Waiting on others</div>
+    <div class="list">${PROMISES.theirs.map(row).join("")}</div>`;
+}
+
+function renderCleared() {
+  $("#cleared").innerHTML = CLEARED.length ? CLEARED.map(c => `
+    <div class="cleared">
+      <span class="check"><span class="ms sm">check</span></span>
+      <div><s>${esc(c.title)}</s><span class="why">${esc(c.why)}</span></div>
+      <button class="btn text" data-undo="${c.id}">Undo</button>
+    </div>`).join("")
+    : `<div class="empty">Tasks that close on their own will show up here, with a way to undo.</div>`;
+}
+
+/* ==========================================================================
+   RENDER: TAG FILTERS AND WEEK BOARD
+   ========================================================================== */
+let activeTags = new Set();
+
+const allTags = () => Array.from(new Set(TASKS.flatMap(t => t.tags))).sort();
+
+function renderTagFilters() {
+  $("#tag-filters").innerHTML =
+    `<button class="chip" data-tag="__all" aria-pressed="${activeTags.size === 0}"><span class="ms">check</span>All tags</button>` +
+    allTags().map(t => `<button class="chip" data-tag="${esc(t)}" aria-pressed="${activeTags.has(t)}"><span class="ms">check</span>${esc(t)}</button>`).join("");
+}
+
+const visible = t => activeTags.size === 0 || t.tags.some(x => activeTags.has(x));
+
+function card(t) {
+  const overdue = t.due !== null && t.day !== null && t.day > t.due;
+  const due = t.due === null ? "" : overdue ? `Past due ${DAYS[t.due]}` : `Due ${DAYS[t.due]}`;
+  return `
+    <div class="card${overdue ? " overdue" : ""}" draggable="true" data-task="${t.id}">
+      <div class="card-title">${esc(t.title)}</div>
+      <div class="card-meta">${orbitTag(t.orbit)}${t.tags.map(x => tag(x)).join("")}</div>
+      ${due || t.recurring ? `<div class="card-meta">
+        ${due ? `<span class="flag due"><span class="ms">flag</span>${due}</span>` : ""}
+        ${t.recurring ? `<span class="flag"><span class="ms">repeat</span>${t.recurring}</span>` : ""}
+      </div>` : ""}
+    </div>`;
+}
+
+function renderBoard() {
+  const unscheduled = TASKS.filter(t => t.day === null && visible(t));
+  let html = `
+    <div class="col unscheduled">
+      <div class="col-head">
+        <div class="col-day">Unscheduled</div>
+        <div class="load">${unscheduled.length} without a day</div>
+      </div>
+      <div class="col-body" data-day="none">${unscheduled.map(card).join("")}</div>
+    </div>`;
+
+  DAYS.forEach((d, i) => {
+    const load = MEETING_LOAD[i];
+    html += `
+      <div class="col${i === TODAY ? " today" : ""}">
+        <div class="col-head">
+          <div class="col-day">${d} <small>${i === TODAY ? "Today" : "Oct " + DATES[i]}</small></div>
+          <div class="load">${load ? load + "h of meetings" : "No meetings"}
+            <div class="load-bar${load >= 5 ? " heavy" : ""}"><i style="width:${Math.min(100, load / 8 * 100)}%"></i></div>
+          </div>
+        </div>
+        <div class="col-body" data-day="${i}">${TASKS.filter(t => t.day === i && visible(t)).map(card).join("")}</div>
+      </div>`;
+  });
+
+  $("#board").innerHTML = html;
+  wireDrag();
+}
+
+/* Native drag for the wireframe. The build uses dnd-kit for touch and keyboard. */
+function wireDrag() {
+  $$(".card").forEach(c => {
+    c.addEventListener("dragstart", e => {
+      c.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", c.dataset.task);
+    });
+    c.addEventListener("dragend", () => c.classList.remove("dragging"));
+  });
+  $$(".col-body").forEach(b => {
+    b.addEventListener("dragover", e => { e.preventDefault(); b.classList.add("drag-over"); });
+    b.addEventListener("dragleave", () => b.classList.remove("drag-over"));
+    b.addEventListener("drop", e => {
+      e.preventDefault();
+      b.classList.remove("drag-over");
+      const t = TASKS.find(x => x.id === Number(e.dataTransfer.getData("text/plain")));
+      if (!t) return;
+      t.day = b.dataset.day === "none" ? null : Number(b.dataset.day);
+      renderBoard();
+    });
+  });
+}
+
+/* ==========================================================================
+   RENDER: ORBIT VIEW
+   ========================================================================== */
+function renderOrbitView(id) {
+  const o = orbitById(id);
+  const d = ORBIT_DETAIL[id];
+  const tasks = TASKS.filter(t => t.orbit === id);
+
+  $("#view-orbit").innerHTML = `
+    <section class="tile orbit-hero" style="${orbitStyle(id)}">
+      <div>
+        <h1>${esc(o.name)}</h1>
+        <p>${esc(o.context)}</p>
+        <div class="sources">${o.sources.map(s => `<span class="tag">${esc(s)}</span>`).join("")}</div>
+      </div>
+      <button class="btn filled" data-open-capcom><span class="ms">auto_awesome</span>Ask about ${esc(o.name)}</button>
+    </section>
+
+    <div class="row-2">
+      <section class="tile" aria-labelledby="oi-h">
+        <div class="tile-head"><h2 id="oi-h">Inbox and chat</h2></div>
+        <div class="tile-body"><div class="list">
+          ${d.inbox.map(m => `
+            <div class="msg${m.unread ? " unread" : ""}">
+              <div class="monogram" style="${orbitStyle(id)}">${esc(m.from.replace("#", "").charAt(0).toUpperCase())}</div>
+              <div>
+                <div class="from">${esc(m.from)}<small>${esc(m.via)}</small></div>
+                <div>${esc(m.subject)}</div>
+                <div class="snippet">${esc(m.snippet)}</div>
+              </div>
+              <div class="when">${esc(m.when)}</div>
+            </div>`).join("")}
+        </div></div>
+      </section>
+
+      <div class="view" style="padding:0;min-height:0">
+        <section class="tile" aria-labelledby="om-h">
+          <div class="tile-head"><h2 id="om-h">Today's meetings</h2></div>
+          <div class="tile-body"><div class="list">
+            ${d.meetings.map(m => `
+              <div class="meeting"><time>${esc(m.time)}</time>
+                <div>${esc(m.title)}${m.note ? `<span class="note">${esc(m.note)}</span>` : ""}</div>
+              </div>`).join("")}
+          </div></div>
+        </section>
+
+        <section class="tile" aria-labelledby="ot-h">
+          <div class="tile-head"><h2 id="ot-h">Open tasks</h2><span class="meta">${tasks.length}</span></div>
+          <div class="tile-body"><div class="list">
+            ${tasks.length ? tasks.map(t => `
+              <label class="mini-task">
+                <input type="checkbox">
+                <span>${esc(t.title)}
+                  <span class="flag">${t.day === null ? "Unscheduled" : DAYS[t.day]}${t.due !== null ? ", due " + DAYS[t.due] : ""}</span>
+                </span>
+              </label>`).join("") : `<div class="empty">No open tasks in this Orbit.</div>`}
+          </div></div>
+        </section>
+      </div>
+    </div>`;
+}
+
+/* ==========================================================================
+   NAVIGATION
+   ========================================================================== */
+let current = "mission";
+
+function navigate(target) {
+  if (target === current) return;
+  current = target;
+
+  $$("[data-nav]").forEach(b => {
+    if (!b.closest(".bar")) return;
+    if (b.dataset.nav === target) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
+
+  const mission = target === "mission";
+  $("#view-mission").hidden = !mission;
+  $("#view-orbit").hidden = mission;
+  if (!mission) renderOrbitView(target);
+
+  $("#crumb").innerHTML = mission
+    ? "Mission Control<small>All Orbits</small>"
+    : `${esc(orbitById(target).name)}<small>Orbit</small>`;
+  $("#capcom-scope").textContent = mission ? "Searching all Orbits" : `Searching ${orbitById(target).name} only`;
+
+  $("#interior").scrollTop = 0;
+  const view = mission ? $("#view-mission") : $("#view-orbit");
+  if (!reducedMotion()) {
+    view.animate(
+      [{ opacity: 0, transform: "translateY(8px) scale(0.995)" }, { opacity: 1, transform: "none" }],
+      { duration: 280, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+    );
+  }
+}
+
+/* ==========================================================================
+   CAPCOM AND SETTINGS
+   ========================================================================== */
+let capcomOrigin = null;
+
+function openCapcom(origin) {
+  const panel = $("#capcom");
+  if (panel.classList.contains("open")) return;
+  capcomOrigin = origin || $("#capcom-launch");
+  panel.classList.add("open");
+  morphOpen(panel, capcomOrigin);
+  setTimeout(() => $("#capcom-q").focus(), 120);
+}
+
+function closeCapcom() {
+  const panel = $("#capcom");
+  if (!panel.classList.contains("open")) return;
+  morphClose(panel, capcomOrigin, () => panel.classList.remove("open"));
+}
+
+function openSettings() {
+  const dlg = $("#settings");
+  dlg.showModal();
+  morphOpen(dlg, $("#settings-btn"));
+}
+
+function closeSettings() {
+  const dlg = $("#settings");
+  morphClose(dlg, $("#settings-btn"), () => dlg.close());
+}
+
+/* ==========================================================================
+   EVENTS
+   ========================================================================== */
+document.addEventListener("click", e => {
+  const nav = e.target.closest("[data-nav]");
+  if (nav) { navigate(nav.dataset.nav); return; }
+
+  const opener = e.target.closest("[data-open-capcom]");
+  if (opener) { openCapcom(opener); return; }
+
+  const mode = e.target.closest("[data-mode]");
+  if (mode) {
+    ThemeState.mode = mode.dataset.mode;
+    applyTheme();
+    $$("[data-mode]").forEach(b => b.setAttribute("aria-pressed", String(b === mode)));
+    return;
+  }
+
+  const approve = e.target.closest("[data-approve]");
+  if (approve) {
+    const p = PROPOSALS.find(x => x.id === Number(approve.dataset.approve));
+    PROPOSALS = PROPOSALS.filter(x => x !== p);
+    TASKS.push({ id: p.id, title: p.title, orbit: p.orbit, tags: p.tags, day: null, due: null });
+    renderTray(); renderTagFilters(); renderBoard();
+    return;
+  }
+
+  const dismiss = e.target.closest("[data-dismiss]");
+  if (dismiss) {
+    PROPOSALS = PROPOSALS.filter(x => x.id !== Number(dismiss.dataset.dismiss));
+    renderTray();
+    return;
+  }
+
+  const undo = e.target.closest("[data-undo]");
+  if (undo) {
+    const c = CLEARED.find(x => x.id === Number(undo.dataset.undo));
+    CLEARED = CLEARED.filter(x => x !== c);
+    TASKS.push({ id: c.id, title: c.title, orbit: c.orbit, tags: c.tags, day: TODAY, due: TODAY });
+    renderCleared(); renderTagFilters(); renderBoard();
+    return;
+  }
+
+  const chip = e.target.closest("[data-tag]");
+  if (chip) {
+    const t = chip.dataset.tag;
+    if (t === "__all") activeTags.clear();
+    else if (activeTags.has(t)) activeTags.delete(t);
+    else activeTags.add(t);
+    renderTagFilters(); renderBoard();
+  }
+});
+
+$("#capcom-launch").addEventListener("click", e => openCapcom(e.currentTarget));
+$("#capcom-close").addEventListener("click", closeCapcom);
+
+$("#settings-btn").addEventListener("click", openSettings);
+$("#settings-close").addEventListener("click", closeSettings);
+$("#settings").addEventListener("cancel", e => { e.preventDefault(); closeSettings(); });
+$("#settings").addEventListener("click", e => { if (e.target === $("#settings")) closeSettings(); });
+
+$("#blackout-btn").addEventListener("click", () => {
+  const on = $("#blackout-btn").getAttribute("aria-pressed") !== "true";
+  $("#blackout-btn").setAttribute("aria-pressed", String(on));
+  document.body.classList.toggle("blackout", on);
+});
+
+$("#wall-file").addEventListener("change", e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => setWallpaper(reader.result);
+  reader.readAsDataURL(file);
+  e.target.value = "";
+});
+
+$("#wall-reset").addEventListener("click", () => setWallpaper(DEFAULT_WALL));
+
+$("#wall-switch").addEventListener("click", e => {
+  const on = e.currentTarget.getAttribute("aria-checked") !== "true";
+  e.currentTarget.setAttribute("aria-checked", String(on));
+  document.body.classList.toggle("no-wall", !on);
+});
+
+document.addEventListener("keydown", e => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openCapcom($("#capcom-launch"));
+    return;
+  }
+  if (e.key === "Escape") { closeCapcom(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || $("#settings").open) return;
+  if (e.key === "0") navigate("mission");
+  const o = ORBITS.find(x => x.key === e.key);
+  if (o) navigate(o.id);
+});
+
+/* ==========================================================================
+   INIT
+   ========================================================================== */
+const DEFAULT_WALL = makeDefaultWallpaper();
+setWallpaper(DEFAULT_WALL);
+
+renderPills();
+$$(".bar [data-nav]").forEach(b => { if (b.dataset.nav === "mission") b.setAttribute("aria-current", "page"); });
+renderTrack();
+renderNeeds();
+renderUpNext();
+renderTray();
+renderPromises();
+renderCleared();
+renderTagFilters();
+renderBoard();
+renderPalette();
+</script>
+</body>
+</html>

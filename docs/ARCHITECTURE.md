@@ -1,0 +1,110 @@
+# Architecture
+
+## Stack
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Language | TypeScript everywhere, Node LTS | One language for client, server, and worker. Shared types. |
+| Repo layout | pnpm workspaces monorepo | See layout below |
+| Web client | React + Vite, built as a PWA | Plain CSS with design tokens. No CSS framework. |
+| Client data | TanStack Query (evaluate TanStack Router alongside it) | |
+| Drag and drop | dnd-kit | Touch and keyboard support |
+| API server | Fastify | REST for requests, Server-Sent Events or WebSocket for live updates |
+| Database | PostgreSQL 16+ with pgvector | Drizzle ORM and Drizzle migrations |
+| Job queue | pg-boss | Postgres-backed, so no Redis container |
+| Validation | zod | Every API payload and every AI output |
+| Lexical search | Meilisearch Community Edition | Typo tolerance, prefix search, facets |
+| Embeddings | Local embedding service in its own container | Evaluate Hugging Face text-embeddings-inference and Ollama. OpenAI embeddings as an option. |
+| Attachment text | Apache Tika server, with Tesseract for OCR | |
+| Remote images | go-camo | Proxies remote images and hides the client IP; images remain blocked by default because unique URLs can reveal opens |
+| Theme | @material/material-color-utilities | Seed extraction and scheme generation |
+| Tests | Vitest for units, Playwright for end to end | |
+
+Any choice marked "evaluate" should be settled in milestone 0 with a short note in `docs/decisions/`.
+
+## Containers
+
+```
+                         reverse proxy (user's own: NPM, Caddy, Traefik)
+                                        |
+                                   [ app ]  web client + API     <- only exposed service
+                                        |
+     +---------------+------------------+------------------+---------------+
+     |               |                  |                  |               |
+ [ worker ]    [ postgres ]      [ meilisearch ]     [ embeddings ]   [ tika ]   [ camo ]
+ sync, parse,   data, queue,      lexical index       local model      text, OCR   image proxy
+ extract        vectors
+```
+
+- **app** serves the built web client and the API. Stateless.
+- **worker** runs sync, MIME parsing, indexing, embedding, rules, and AI extraction from the job queue. It can run as several processes. MIME parsing runs in a separate process/container with hard memory, CPU, input-size, and wall-clock limits. Node worker-thread `resourceLimits` do not cap external buffers.
+- Everything except **app** sits on an internal Docker network with no published ports.
+
+## Repo layout
+
+```
+apps/
+  web/              React client
+  server/           Fastify API
+  worker/           job runners
+packages/
+  shared/           zod schemas, types, constants (including PRODUCT_NAME)
+  db/               Drizzle schema and migrations
+  connectors/       gmail, graph, imap, caldav, slack (one folder each, one interface)
+  ai/               provider adapters, prompts, tools, extraction
+  search/           Meilisearch and pgvector query layer
+  theme/            tokens, scheme generation
+design/
+  wireframe.html    reference design, open it in a browser
+docs/
+```
+
+## Data flow
+
+```
+connector sync
+  -> page provider changes using a durable per-collection cursor
+  -> parse (isolated process/container for mail)
+  -> normalize into items, threads, people
+  -> Tier 1 rules (deterministic labels, bulk mail detection, Orbit routing)
+  -> compute effective privacy across all matching Orbits
+  -> commit normalized page and cursor atomically
+  -> index in Meilisearch
+  -> embed into pgvector
+  -> Tier 2 extraction (if not bulk and not excluded)
+  -> derived records: proposals, promises, entities, task updates
+  -> push live update to the client
+```
+
+Each step is its own job type, so any step can be retried or re-run for history (for example, re-running extraction after a prompt improves).
+
+Sync is at-least-once. Each provider object has a stable key scoped by account and collection; upserts and downstream jobs deduplicate by that key and provider revision. Commit a cursor only after its page and deletion tombstones are durable. A crash replays the page safely. Treat provider cursor expiry as a bounded rescan with reconciliation; remove or tombstone provider-deleted items and invalidate their search/AI derivatives. Retry transient failures with capped exponential backoff and jitter; persist permanent permission errors for user repair. Initial backfill and incremental catch-up must converge without gaps.
+
+Outbound sends and provider changes start from an authenticated user action and a durable `outbound_operations` row. Claim one operation per idempotency key. If a provider supports idempotency, pass its key. If a send times out after submission, mark `outcome_unknown`; reconcile Sent/provider IDs before offering a manual retry. Never automatically resend an unknown outcome. Only a confirmed success produces a sent item or completion evidence.
+
+## Connector interface
+
+Every source implements the same interface in `packages/connectors`:
+
+```ts
+interface Connector {
+  kind: "gmail" | "graph" | "imap" | "caldav" | "slack" | "teams";
+  initialSync(account: Account, since: Date): AsyncIterable<RawItem>;
+  incrementalSync(account: Account, state: SyncState): Promise<SyncResult>;
+  watch?(account: Account, onChange: () => void): Promise<Unsubscribe>;
+  send?(account: Account, draft: OutgoingMessage): Promise<SentRef>;
+  applyChange?(account: Account, change: ItemChange): Promise<void>;   // labels, read state, archive
+}
+```
+
+Sending and changes are only ever called from a user action in the API. The AI layer has no path to these methods.
+
+## Live updates
+
+The server pushes small events (`item.created`, `task.updated`, `proposal.created`) over a single SSE or WebSocket channel. The client invalidates the matching TanStack Query keys. No polling from the browser.
+
+## Configuration
+
+- `.env` holds only deployment bootstrap values listed in `.env.example`: Postgres password, master encryption key, and app port. The database URL is assembled inside the Compose network; do not duplicate its password in a separate variable.
+- OAuth client IDs, client secrets, tokens, IMAP passwords, and AI API keys are entered in the setup wizard and stored encrypted in the database.
+- `PRODUCT_NAME` lives in `packages/shared/src/constants.ts`. Never hard-code the product name anywhere else.

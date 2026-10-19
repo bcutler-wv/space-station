@@ -1,0 +1,71 @@
+# Design
+
+**Reference:** open [design/wireframe.html](../design/wireframe.html) in a browser. It is the source of truth for layout, components, and motion. The data in it is fake.
+
+## Direction
+
+Inspired by the Caelestia shell for Hyprland: Material 3 color generated from the wallpaper, a framed screen, big soft shapes, and morphing motion. Do not copy Caelestia's code, icons, or assets (it is GPL-3.0 and a different platform). Match the feel.
+
+### The frame
+
+The app sits inside a solid frame. The left bar and the top strip are part of the frame. The content area is a large rounded window cut into it, so the inner corners curve where frame meets content. The wallpaper shows inside that window, in the gaps between panels. In the wireframe this is done with a very large `box-shadow` on the interior element.
+
+### Shapes
+
+- Panel radius 28px, list items 22px, cards 16px, buttons and chips fully rounded.
+- Depth comes from stepping between surface-container tones, not borders or drop shadows.
+- Icons: Material Symbols Rounded, filled. Type: Rubik. Serve font and icon assets locally in production; pin their sources and licenses.
+
+### Motion
+
+- Panels grow out of the control that opened them (CAPCOM from the search pill, Settings from the gear) and shrink back into it when closed.
+- The active Orbit pill stretches with a spring curve.
+- Colors cross-fade when the theme changes.
+- With `prefers-reduced-motion`, everything becomes an instant change.
+
+### Layout
+
+- **Bar (left):** logo, Mission Control, Orbit pills (letter, color, unread badge, active pill stretched), Mail, Calendar, then the user's avatar and the settings gear at the bottom. Icon only, with tooltips.
+- **Top strip:** current location, the CAPCOM search pill (Ctrl or Cmd K), clock, Blackout toggle.
+- **Mission Control:** briefing, today's timeline across Orbits, Needs you with Up next, then the review tray, Promises, and Recently auto-cleared, then the week board.
+- **Orbit view:** a hero in the Orbit's color with its context and sources, inbox and chat, today's meetings, open tasks.
+- **Mobile:** the bar moves to the bottom as a horizontal strip.
+
+No filler. Every panel shows real items the user can act on. No count-only rollup cards.
+
+## Color system
+
+### Tokens
+
+All colors are CSS custom properties on `:root`, named after Material 3 roles:
+
+`primary`, `on-primary`, `primary-container`, `on-primary-container`, `secondary-container`, `on-secondary-container`, `tertiary`, `tertiary-container`, `on-tertiary-container`, `surface`, `surface-container-lowest`, `surface-container-low`, `surface-container`, `surface-container-high`, `surface-container-highest`, `on-surface`, `on-surface-variant`, `outline`, `outline-variant`, `error`, `error-container`, `on-error-container`, `warn`, `ok`, `frame`, `wall-tint`, `scrim`, and for each Orbit color slot `orbit-N` and `orbit-N-container`.
+
+Components only use these names. No hex values anywhere outside the token file. CI should grep for stray hex values.
+
+The prototype also has layout tokens such as `--bar-w`, `--gap`, and `--r-l`; these are not color roles. Its named Orbit tokens are sample data. Production uses generated `--orbit-N` and `--orbit-N-container` color slots; normalize the prototype's shorthand `--orbit-c` to the selected slot container role in implementation. Resolve all aliases in the central token file so components consume one vocabulary.
+
+### Generation
+
+1. The user uploads a wallpaper (Settings, Appearance).
+2. Extract a seed color with Material Color Utilities (`QuantizerCelebi` then `Score`).
+3. Generate light and dark schemes with `SchemeTonalSpot`.
+4. Orbit colors come from fixed base hues per color slot, run through `Blend.harmonize` toward the seed.
+5. Write every token onto `:root` and persist the seed and wallpaper in `settings`.
+
+The wireframe uses a lightweight OKLCH stand-in for this (`design/theme-engine-prototype.js`). Replace it with Material Color Utilities in the build and keep the token names.
+
+The reference's dark mode has weak contrast in briefing text, event labels, and some buttons. Preserve layout and motion, but tune tonal roles and text roles to meet WCAG AA contrast for normal text (4.5:1) and large text/UI controls (3:1). Check both modes with automated contrast assertions and visual review.
+
+### Modes
+
+System (default), Light, and Dark, in Settings, Appearance. System follows `prefers-color-scheme` live. The resolved mode is set as `data-theme` on `<html>` before first paint to avoid a flash. Both modes must be polished for v1.0.0.
+
+Settings also has: a wallpaper preview, upload and reset, a palette preview, and a switch to hide the wallpaper between panels.
+
+## Writing in the UI
+
+- Plain verbs, sentence case, no filler.
+- Theme words in names and headings only (Mission Control, Orbits, CAPCOM, Flight Plan, Blackout). Buttons say what they do: Reply, Add task, Dismiss, Undo.
+- Every "why" line explains why something matters now, in one sentence.
+- Empty states say what will appear there and how.
