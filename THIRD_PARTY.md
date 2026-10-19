@@ -24,6 +24,21 @@ On 2026-10-19, we checked each pinned package's installed `LICENSE` or `LICENSE.
 | @playwright/test 1.64.1 | https://github.com/microsoft/playwright | Apache-2.0 | `45873d00a0dd` | Browser smoke tests |
 | spdx-expression-parse 5.0.0 | https://github.com/jslicense/spdx-expression-parse.js | MIT | `7edb57f70653` | License expression validation |
 
+## Adopted in M0.2
+
+Checked pinned package versions and repository links against npm metadata and opened the upstream repositories on 2026-10-19. Read the installed license texts where the package included them. Drizzle's published packages omit license files: the ORM package declares Apache-2.0, the Kit package declares MIT, and the upstream repository contains an Apache-2.0 LICENSE. Both declared licenses are compatible with this project, but the missing Kit license text in its tarball is a packaging gap to revisit before a public release. The images use exact version tags; registry queries returned HTTP 200 for both tags on 2026-10-19.
+
+| Package/image version | Upstream repository | License evidence | Use |
+|---|---|---|---|
+| drizzle-orm 0.45.4 | https://github.com/drizzle-team/drizzle-orm | Apache-2.0; package manifest and upstream LICENSE, no bundled LICENSE | Database schema and migrator |
+| drizzle-kit 0.31.11 | https://github.com/drizzle-team/drizzle-orm | MIT in package manifest; upstream root LICENSE is Apache-2.0; no bundled LICENSE | Generate migrations in development |
+| pg 8.23.1 | https://github.com/brianc/node-postgres | MIT; installed LICENSE SHA-256 prefix `192b8f5c9690` | PostgreSQL driver |
+| @types/pg 8.23.1 | https://github.com/DefinitelyTyped/DefinitelyTyped | MIT; installed LICENSE SHA-256 prefix `c2cfccb812fe` | Driver types |
+| pg-boss 12.38.0 | https://github.com/timgit/pg-boss | MIT; installed LICENSE SHA-256 prefix `51ad77d65578` | Durable job queue |
+| @fastify/static 10.1.6 | https://github.com/fastify/fastify-static | MIT; installed LICENSE SHA-256 prefix `ba9677e5a34c` | Built web assets |
+| pgvector/pgvector:0.8.7-pg16-bookworm | https://github.com/pgvector/pgvector | PostgreSQL; upstream LICENSE | PostgreSQL 16 and vector extension |
+| node:22.23.2-bookworm-slim | https://github.com/nodejs/docker-node | MIT for image build repo; Node and Debian component licenses also apply | Build and runtime base image |
+
 ## Planned dependencies
 
 | Package | Use | License (verify when adding) |
@@ -43,7 +58,7 @@ On 2026-10-19, we checked each pinned package's installed `LICENSE` or `LICENSE.
 | @material/material-color-utilities | Theme generation | Apache-2.0 |
 | dnd-kit | Drag and drop | MIT |
 | rrule | Recurrence | BSD-3-Clause |
-| React, Vite, Fastify, Drizzle, pg-boss, zod | Core stack | MIT |
+| React, Vite, Fastify, Drizzle, pg-boss, zod | Core stack | MIT or Apache-2.0 |
 
 ## References (ideas only, no code copied)
 

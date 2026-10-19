@@ -63,7 +63,7 @@ Station holds a person's entire working life: every email, chat, and calendar ev
 ## Network
 
 - Station runs fine with no public exposure (LAN or tailnet).
-- Only the app container is published. Everything else stays on an internal Docker network.
+- Only the app container is published. The default binding is loopback. The other containers have no published ports; the Compose bridge permits outbound requests needed by later connectors.
 
 ## Dependencies
 

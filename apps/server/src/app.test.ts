@@ -10,3 +10,15 @@ test('GET /health returns the shared API contract', async () => {
   expect(response.statusCode).toBe(200);
   expect(healthResponseSchema.parse(response.json())).toEqual({ status: 'ok' });
 });
+
+test('readiness reports database failure without exposing details', async () => {
+  const unavailable = buildApp(async () => { throw new Error('database secret'); });
+  try {
+    const response = await unavailable.inject({ method: 'GET', url: '/ready' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ status: 'unavailable' });
+    expect(response.body).not.toContain('database secret');
+  } finally {
+    await unavailable.close();
+  }
+});

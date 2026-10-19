@@ -38,7 +38,7 @@ Any choice marked "evaluate" should be settled in milestone 0 with a short note 
 
 - **app** serves the built web client and the API. Stateless.
 - **worker** runs sync, MIME parsing, indexing, embedding, rules, and AI extraction from the job queue. It can run as several processes. MIME parsing runs in a separate process/container with hard memory, CPU, input-size, and wall-clock limits. Node worker-thread `resourceLimits` do not cap external buffers.
-- Everything except **app** sits on an internal Docker network with no published ports.
+- Everything except **app** has no published ports. Containers share a Compose bridge so future connectors can make outbound provider requests; ingress remains limited to the app's configured host binding.
 
 ## Repo layout
 
@@ -105,6 +105,6 @@ The server pushes small events (`item.created`, `task.updated`, `proposal.create
 
 ## Configuration
 
-- `.env` holds only deployment bootstrap values listed in `.env.example`: Postgres password, master encryption key, and app port. The database URL is assembled inside the Compose network; do not duplicate its password in a separate variable.
+- `.env` holds only deployment bootstrap values listed in `.env.example`: Postgres password, master encryption key, and app port. The database URL is assembled inside the Compose network with URL-safe encoding; do not duplicate its password in a separate variable.
 - OAuth client IDs, client secrets, tokens, IMAP passwords, and AI API keys are entered in the setup wizard and stored encrypted in the database.
 - `PRODUCT_NAME` lives in `packages/shared/src/constants.ts`. Never hard-code the product name anywhere else.

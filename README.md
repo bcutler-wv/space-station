@@ -35,7 +35,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 
 Docker Compose on any Linux host. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). A first-run wizard walks you through creating your OAuth apps and connecting each account.
 
-M0.1 provides a development scaffold only. With Node 22.12+ and Corepack, run `corepack pnpm install --frozen-lockfile`, then `corepack pnpm check`. `corepack pnpm --filter @station/server start` serves a development `/health` endpoint after `corepack pnpm build`. `corepack pnpm --filter @station/web dev` opens a minimal React page. The database, queue, authentication, and deployable Compose stack are scheduled for later M0 steps.
+M0.2 provides a development runtime scaffold only. With Node 22.12+ and Corepack, run `corepack pnpm install --frozen-lockfile`, then `corepack pnpm check`. On a disposable Docker host, `node scripts/init-env.mjs`, `docker compose up -d --build postgres migrate`, then `docker compose up -d --build --wait app worker` start the placeholder page, API, database, and worker. Authentication and the usable shell are scheduled for later M0 steps.
 
 Provider permissions and data-use terms can change. Verify current official documentation when enabling each connector, especially Slack indexed mode. The default Slack mode is live and stores no long-term content.
 

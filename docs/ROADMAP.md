@@ -8,7 +8,7 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
-M0.1 is implemented and Astra-reviewed. Local checks pass; the committed CI workflow is the remote gate. M0.2 through M0.5 remain to be built. This scaffold is not a deployable mail client.
+M0.1 is implemented, Astra-reviewed, and green in CI. M0.2 is implemented and reviewed for its first Docker CI run; runtime acceptance requires that gate. M0.3 through M0.5 remain to be built. This scaffold is not a deployable mail client.
 
 Each substep ends with Astra review and fixes before the next begins:
 

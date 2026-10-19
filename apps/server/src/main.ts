@@ -1,10 +1,18 @@
+import fastifyStatic from '@fastify/static';
+import { databaseUrl, loadRuntimeConfig, openDatabase, settings } from '@station/db';
+import { fileURLToPath } from 'node:url';
 import { buildApp } from './app.js';
 
-const app = buildApp();
-const port = Number.parseInt(process.env.PORT ?? '3000', 10);
+const config = loadRuntimeConfig(process.env);
+const database = openDatabase(databaseUrl(config));
+const app = buildApp(async () => { await database.db.select().from(settings).limit(1); });
+app.addHook('onClose', database.close);
+await app.register(fastifyStatic, {
+  root: fileURLToPath(new URL('../../web/dist/', import.meta.url)),
+});
 try {
-  await app.listen({ host: '127.0.0.1', port });
-} catch (error) {
-  app.log.error(error);
+  await app.listen({ host: config.APP_HOST, port: config.APP_PORT });
+} catch {
+  console.error('API startup failed. Check database and runtime configuration.');
   process.exitCode = 1;
 }

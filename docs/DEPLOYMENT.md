@@ -7,16 +7,24 @@
 - Disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
 - A hostname with HTTPS, served by your own reverse proxy.
 
-## Quick start
+## M0.2 runtime validation
+
+This milestone is a runtime scaffold, not a usable or authenticated deployment. On a disposable Linux host with Docker, run:
 
 ```
-git clone <repo>
-cd <repo>
-cp .env.example .env        # set POSTGRES_PASSWORD and STATION_MASTER_KEY
-docker compose up -d
+node scripts/init-env.mjs
+docker compose up -d --build postgres migrate
+docker compose up -d --build --wait app worker
+curl --fail http://127.0.0.1:8080/ready
 ```
 
-Then open the hostname in a browser and follow the setup wizard.
+The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`. The app serves the built placeholder page and health endpoints. Authentication and the setup wizard come in later M0 steps.
+
+Compose binds the app to `127.0.0.1` by default. A reverse proxy on another host cannot reach that binding. When the authenticated release is ready for deployment, bind the app port to an explicitly chosen private interface in `compose.yaml` and restrict access at the host firewall and proxy. Do not publish the database or worker ports.
+
+`migrate` is a one-shot service. It takes an advisory lock, enables pgvector, applies generated Drizzle migrations, and prepares pg-boss. App and worker start only after it succeeds. On updates, rebuild and run `migrate` before starting the app and worker, as in the commands above. Run `docker compose up -d --force-recreate migrate` explicitly if a migration must be retried without an image change. A failed migration blocks app and worker startup.
+
+The worker health check requires a live pg-boss heartbeat from this container with the probe consumer registered, then verifies that the consumer completes a fresh probe within ten seconds. A stopped or stalled consumer becomes unhealthy. Completed probe jobs are retained for one hour. CI also queues a probe while the worker is stopped and verifies that the worker completes it after restart.
 
 ## Reverse proxy
 
@@ -50,10 +58,14 @@ Meilisearch and embeddings can be rebuilt from the database, so backing them up 
 
 ```
 git pull
-docker compose pull
-docker compose up -d
+docker compose stop app worker
+docker compose pull postgres
+docker compose build --pull migrate app worker
+docker compose up -d postgres
+docker compose up -d --force-recreate migrate
+docker compose up -d --force-recreate --wait app worker
 ```
 
-Migrations run automatically on app start.
+Migrations run in the controlled `migrate` service before app and worker startup.
 
 Backups contain sensitive message content and metadata even though application-level encryption protects provider credentials only. Restrict access and encrypt backup storage. Use disposable data for automated restore checks in CI; do not use the production host for build tests.
