@@ -7,20 +7,20 @@
 | Language | TypeScript everywhere, Node LTS | One language for client, server, and worker. Shared types. |
 | Repo layout | pnpm workspaces monorepo | See layout below |
 | Web client | React + Vite, built as a PWA | Plain CSS with design tokens. No CSS framework. |
-| Client data | TanStack Query (evaluate TanStack Router alongside it) | |
+| Client data | TanStack Query | Evaluate TanStack Router at M1 when Mail and deep links add URL semantics. M0.3 uses local React view state. |
 | Drag and drop | dnd-kit | Touch and keyboard support |
-| API server | Fastify | REST for requests, Server-Sent Events or WebSocket for live updates |
+| API server | Fastify | REST for requests; decide SSE versus WebSocket before M1 live updates |
 | Database | PostgreSQL 16+ with pgvector | Drizzle ORM and Drizzle migrations |
 | Job queue | pg-boss | Postgres-backed, so no Redis container |
 | Validation | zod | Every API payload and every AI output |
 | Lexical search | Meilisearch Community Edition | Typo tolerance, prefix search, facets |
-| Embeddings | Local embedding service in its own container | Evaluate Hugging Face text-embeddings-inference and Ollama. OpenAI embeddings as an option. |
+| Embeddings | Local embedding service in its own container | Evaluate Hugging Face text-embeddings-inference and Ollama before M6 semantic search. OpenAI embeddings as an option. |
 | Attachment text | Apache Tika server, with Tesseract for OCR | |
 | Remote images | go-camo | Proxies remote images and hides the client IP; images remain blocked by default because unique URLs can reveal opens |
 | Theme | @material/material-color-utilities | Seed extraction and scheme generation |
 | Tests | Vitest for units, Playwright for end to end | |
 
-Any choice marked "evaluate" should be settled in milestone 0 with a short note in `docs/decisions/`.
+Settle evaluated choices before implementing the feature that uses them. M0.3 records scoped deferrals for routing, live transport, and embeddings in decision 0003; M1 and M6 own the resulting decisions.
 
 ## Containers
 
@@ -101,7 +101,7 @@ Sending and changes are only ever called from a user action in the API. The AI l
 
 ## Live updates
 
-The server pushes small events (`item.created`, `task.updated`, `proposal.created`) over a single SSE or WebSocket channel. The client invalidates the matching TanStack Query keys. No polling from the browser.
+When live updates are implemented in M1, the server will push small events (`item.created`, `task.updated`, `proposal.created`) over one SSE or WebSocket channel. Decide that transport in M1. The client invalidates matching TanStack Query keys; it does not poll for live changes.
 
 ## Configuration
 

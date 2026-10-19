@@ -75,3 +75,17 @@ When code is copied from another project, keep its original header, add a row he
 | File in this repo | Source | Commit | License |
 |---|---|---|---|
 | (none yet) | | | |
+
+## Adopted in M0.3
+
+Checked npm version and repository metadata, the installed license text where present, and the upstream repositories on 2026-10-19. The listed SHA-256 prefixes identify the installed LICENSE text. `@img/sharp-libvips-linux-x64` ships a native binary without a bundled license file; its npm manifest declares LGPL-3.0-or-later, while the packaging repository's root LICENSE is Apache-2.0 and the libvips project itself is LGPL-2.1-or-later. The license gate has an exact package/version exception for this binary and Rubik's OFL font rather than allowing those license families for arbitrary future packages. Preserve upstream notices and review native binary redistribution obligations before a public release.
+
+| Package/version | Upstream repository | License evidence | Use |
+|---|---|---|---|
+| @material/material-color-utilities 0.3.0 | https://github.com/material-foundation/material-color-utilities | Apache-2.0, installed LICENSE `8ded460ad5b` | Quantization, scoring, tonal schemes, harmonized Orbit slots. 0.4.0 failed direct Node 22 ESM import due extensionless relative imports. |
+| @fontsource/rubik 5.3.0 | https://github.com/fontsource/font-files and https://github.com/googlefonts/rubik | OFL-1.1, installed LICENSE `46a250495a96`; upstream Rubik OFL.txt | Locally served Rubik Latin fonts |
+| material-symbols 0.48.0 | https://github.com/marella/material-symbols | Apache-2.0, installed LICENSE `cfc7749b96f6` | Locally served rounded icon font |
+| @tanstack/react-query 5.104.5 | https://github.com/TanStack/query | MIT, installed LICENSE `a405ee70c632` | Appearance API cache and mutations |
+| sharp 0.35.5 | https://github.com/lovell/sharp | Apache-2.0, installed LICENSE `73ba74dfaa52` | Bounded raster decode and WebP reencode |
+| @img/sharp-libvips-linux-x64 1.3.4 | https://github.com/lovell/sharp-libvips and https://github.com/libvips/libvips | LGPL-3.0-or-later in installed package manifest; no bundled LICENSE; upstream packaging and libvips licenses reviewed | Native image processing binary on Ubuntu/Linux x64 |
+| Prettier 3.9.10 | https://github.com/prettier/prettier | MIT, installed LICENSE `b0f241719988` | Reviewable source formatting |

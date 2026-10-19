@@ -8,7 +8,7 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
-M0.1 is implemented, Astra-reviewed, and green in CI. M0.2 is implemented and reviewed for its first Docker CI run; runtime acceptance requires that gate. M0.3 through M0.5 remain to be built. This scaffold is not a deployable mail client.
+M0.1 and M0.2 are implemented, Astra-reviewed, and green in CI. M0.3 is implemented and Astra-reviewed for Docker/browser CI acceptance. M0.4 and M0.5 remain to be built. This shell is unauthenticated and is not a deployable mail client.
 
 Each substep ends with Astra review and fixes before the next begins:
 
@@ -16,12 +16,13 @@ Each substep ends with Astra review and fixes before the next begins:
 2. **Database and runtime.** Postgres/pgvector, migrations, queue, Compose services and health checks, config validation, durable migration strategy. Test fresh boot and restart on the CI runner.
 3. **Theme and shell.** Material Color Utilities tokens, light/dark/system modes, wallpaper upload, local fonts/icons, shell with fake data matching the wireframe. Test contrast, reduced motion, and responsive layouts.
 4. **Authentication.** One-time owner bootstrap, passkey or Argon2id password plus TOTP, recovery codes, sessions, CSRF, rate limiting. Test setup replay and unauthorized access.
-5. **Integrated acceptance.** Full fresh-clone Compose startup, Playwright smoke in both themes, lint, typecheck, unit/fixture tests, license and CSS token gates. Record decisions for evaluated choices.
+5. **Integrated acceptance.** Full fresh-clone Compose startup, Playwright smoke in both themes, lint, typecheck, unit/fixture tests, license and CSS token gates. Record choices and scoped deferrals. Resolve routing and live transport by M1; resolve embedding engine by M6 before those features are implemented.
 
 **Done when:** GitHub Actions brings up a fresh clone with one documented command, authentication protects the shell, the shell matches the reference layout with readable dark/light text, and every M0 gate is green.
 
 ## M1: Gmail and the mail view
 
+- Decide client routing and live-update transport before implementing Mail deep links and live sync events.
 - Data model for accounts, Orbits, threads, items, people, labels, attachments.
 - Minimal owner-to-first-Orbit setup and privacy rules before sync, account connection, and backfill choice. M3 expands this wizard.
 - Google OAuth (user-supplied client), Gmail initial sync with a backfill window, History API incremental sync, Pub/Sub pull or polling.
@@ -62,6 +63,7 @@ Each substep ends with Astra review and fixes before the next begins:
 
 ## M6: AI foundation and CAPCOM
 
+- Choose the local embedding engine before implementing semantic search.
 - Provider adapters (Anthropic, OpenAI, OpenAI-compatible), wizard step, spend cap, usage tracking.
 - Local embeddings and semantic search with rank fusion.
 - CAPCOM with read tools, server-side scoping, citations, step display.

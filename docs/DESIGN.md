@@ -39,7 +39,7 @@ No filler. Every panel shows real items the user can act on. No count-only rollu
 
 All colors are CSS custom properties on `:root`, named after Material 3 roles:
 
-`primary`, `on-primary`, `primary-container`, `on-primary-container`, `secondary-container`, `on-secondary-container`, `tertiary`, `tertiary-container`, `on-tertiary-container`, `surface`, `surface-container-lowest`, `surface-container-low`, `surface-container`, `surface-container-high`, `surface-container-highest`, `on-surface`, `on-surface-variant`, `outline`, `outline-variant`, `error`, `error-container`, `on-error-container`, `warn`, `ok`, `frame`, `wall-tint`, `scrim`, and for each Orbit color slot `orbit-N` and `orbit-N-container`.
+`primary`, `on-primary`, `primary-container`, `on-primary-container`, `secondary-container`, `on-secondary-container`, `tertiary`, `tertiary-container`, `on-tertiary-container`, `surface`, `surface-container-lowest`, `surface-container-low`, `surface-container`, `surface-container-high`, `surface-container-highest`, `on-surface`, `on-surface-variant`, `outline`, `outline-variant`, `error`, `on-error`, `error-container`, `on-error-container`, `warn`, `ok`, `frame`, `wall-tint`, `scrim`, and for each Orbit color slot `orbit-N`, `orbit-N-container`, and `on-orbit-N-container`.
 
 Components only use these names. No hex values anywhere outside the token file. CI should grep for stray hex values.
 
@@ -51,7 +51,7 @@ The prototype also has layout tokens such as `--bar-w`, `--gap`, and `--r-l`; th
 2. Extract a seed color with Material Color Utilities (`QuantizerCelebi` then `Score`).
 3. Generate light and dark schemes with `SchemeTonalSpot`.
 4. Orbit colors come from fixed base hues per color slot, run through `Blend.harmonize` toward the seed.
-5. Write every token onto `:root` and persist the seed and wallpaper in `settings`.
+5. Write every token onto `:root` and persist the seed and wallpaper in `settings`. The M0.3 wallpaper is normalized to bounded WebP and stored in the `appearance` settings row; it can move to the private data volume when the attachment store exists.
 
 The wireframe uses a lightweight OKLCH stand-in for this (`design/theme-engine-prototype.js`). Replace it with Material Color Utilities in the build and keep the token names.
 

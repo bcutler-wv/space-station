@@ -10,7 +10,7 @@ PostgreSQL with Drizzle. This lists the tables and the fields that matter. Claud
 | `auth_credentials` | id, user_id, kind (passkey, password, totp), password_hash (Argon2id only for password), encrypted_secret (TOTP only), passkey_public_key and counter (passkey only), created_at |
 | `recovery_codes` | user_id, code_hash, used_at. Show once during enrollment; never store plaintext. |
 | `sessions` | id, user_id, token_hash, created_at, expires_at, revoked_at. Rotate after login and privilege changes. |
-| `settings` | key, value (jsonb). Theme mode, wallpaper path, seed color, confidence thresholds, AI budgets. |
+| `settings` | key, value (jsonb). Theme mode, seed color, confidence thresholds, AI budgets. M0.3 stores a bounded normalized WebP wallpaper in the `appearance` value; a later private file store may replace the embedded image. |
 
 ## Orbits and accounts
 

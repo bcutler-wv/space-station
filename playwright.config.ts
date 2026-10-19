@@ -1,11 +1,16 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig } from "@playwright/test";
 
+const external = process.env.STATION_E2E_BASE_URL;
 export default defineConfig({
-  testDir: './tests/e2e',
-  use: { baseURL: 'http://127.0.0.1:4173' },
-  webServer: {
-    command: 'corepack pnpm --filter @station/web preview --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-  },
+  testDir: "./tests/e2e",
+  use: { baseURL: external ?? "http://127.0.0.1:4173" },
+  ...(external
+    ? {}
+    : {
+        webServer: {
+          command: "node tests/support/preview-server.mjs",
+          url: "http://127.0.0.1:4173",
+          reuseExistingServer: !process.env.CI,
+        },
+      }),
 });

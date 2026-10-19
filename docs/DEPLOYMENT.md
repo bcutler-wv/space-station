@@ -7,9 +7,9 @@
 - Disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
 - A hostname with HTTPS, served by your own reverse proxy.
 
-## M0.2 runtime validation
+## M0.3 development validation
 
-This milestone is a runtime scaffold, not a usable or authenticated deployment. On a disposable Linux host with Docker, run:
+This milestone is a theme and shell demo with sample data. Its appearance API is not authenticated. Do not expose it to other users or a production network. On a disposable Linux host with Docker, run:
 
 ```
 node scripts/init-env.mjs
@@ -18,7 +18,7 @@ docker compose up -d --build --wait app worker
 curl --fail http://127.0.0.1:8080/ready
 ```
 
-The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`. The app serves the built placeholder page and health endpoints. Authentication and the setup wizard come in later M0 steps.
+The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`. The app serves the sample Mission Control shell and health endpoints. Appearance settings and a normalized wallpaper persist in the database. Authentication and the setup wizard come in later M0 steps.
 
 Compose binds the app to `127.0.0.1` by default. A reverse proxy on another host cannot reach that binding. When the authenticated release is ready for deployment, bind the app port to an explicitly chosen private interface in `compose.yaml` and restrict access at the host firewall and proxy. Do not publish the database or worker ports.
 

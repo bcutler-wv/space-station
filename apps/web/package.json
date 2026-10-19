@@ -1,6 +1,26 @@
 {
-  "name": "@station/web", "version": "0.0.0", "private": true, "type": "module",
-  "scripts": { "dev": "vite --host 127.0.0.1", "build": "vite build", "preview": "vite preview" },
-  "dependencies": { "@station/shared": "workspace:*", "react": "19.3.1", "react-dom": "19.3.1" },
-  "devDependencies": { "@types/react": "19.3.0", "@types/react-dom": "19.3.0", "@vitejs/plugin-react": "6.1.2", "vite": "8.3.4" }
+  "name": "@station/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/rubik": "5.3.0",
+    "@station/shared": "workspace:*",
+    "@station/theme": "workspace:*",
+    "@tanstack/react-query": "5.104.5",
+    "material-symbols": "0.48.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "vite": "8.3.4"
+  }
 }
