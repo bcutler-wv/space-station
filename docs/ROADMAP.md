@@ -8,6 +8,8 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
+M0.1 is implemented and Astra-reviewed. Local checks pass; the committed CI workflow is the remote gate. M0.2 through M0.5 remain to be built. This scaffold is not a deployable mail client.
+
 Each substep ends with Astra review and fixes before the next begins:
 
 1. **Scaffold and CI.** pnpm monorepo, strict TypeScript, shared schemas, pinned lockfile, unit-test harness, license and stray-color gates, GitHub Actions Ubuntu jobs. Record upstream repository and license provenance.

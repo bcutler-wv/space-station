@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/db" },
+    { "path": "packages/connectors" },
+    { "path": "packages/ai" },
+    { "path": "packages/search" },
+    { "path": "packages/theme" },
+    { "path": "apps/server" },
+    { "path": "apps/worker" },
+    { "path": "apps/web" }
+  ]
+}

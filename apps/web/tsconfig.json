@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler", "jsx": "react-jsx", "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo", "noEmit": true, "composite": false, "declaration": false },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "references": [{ "path": "../../packages/shared" }]
+}

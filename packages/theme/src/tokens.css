@@ -1,0 +1,2 @@
+:root, :root[data-theme='light'] { --surface: #ffffff; --on-surface: #202124; }
+:root[data-theme='dark'] { --surface: #202124; --on-surface: #ffffff; }

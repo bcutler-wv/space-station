@@ -4,6 +4,26 @@ Station is AGPL-3.0. It plans to use maintained upstream packages instead of imp
 
 For every adopted dependency, record package/version, official repository URL, license and verification date, and the feature using it. Pin versions in the committed lockfile. Prefer provider-maintained SDKs, libraries with active maintenance and security response, and official documentation. Re-evaluate packages whose licenses, APIs, or maintenance status change. Keep custom glue narrow.
 
+## Adopted in M0.1
+
+On 2026-10-19, we checked each pinned package's installed `LICENSE` or `LICENSE.md`/`LICENSE.txt` text, confirmed its MIT permission grant or Apache-2.0 heading, and opened the corresponding upstream source repository. The hash column is the first 12 hexadecimal characters of the installed license file's SHA-256 digest, to make the exact text reviewed identifiable. Package versions, Node requirements, and peer ranges were also checked against npm metadata. The lockfile pins transitive versions. `pnpm check:licenses` scans the installed dependency tree; its reviewed license set is in `scripts/check-licenses.mjs`.
+
+| Package/version | Upstream repository | License | License file hash | Use |
+|---|---|---|---|---|
+| pnpm 10.34.7 | https://github.com/pnpm/pnpm | MIT | `e0a867ff513e` | Workspace package manager |
+| TypeScript 5.9.3 | https://github.com/microsoft/TypeScript | Apache-2.0 | `a7d00bfd5452` | Strict typecheck; 8.72.0 typescript-eslint supports TypeScript below 6.1 |
+| ESLint 10.13.0, @eslint/js 10.0.1 | https://github.com/eslint/eslint | MIT | `3b6be04f862a` (both) | Lint |
+| typescript-eslint 8.72.0 | https://github.com/typescript-eslint/typescript-eslint | MIT | `2eb5c7a0bba9` | TypeScript lint rules |
+| React, React DOM 19.3.1 | https://github.com/react/react | MIT | `da6d3703ed11` (both) | Minimal web client |
+| @types/react, @types/react-dom 19.3.0; @types/node 22.15.30 | https://github.com/DefinitelyTyped/DefinitelyTyped | MIT | `c2cfccb812fe` (all) | Type definitions |
+| Vite 8.3.4 | https://github.com/vitejs/vite | MIT | `a47172e44a86` | Web build and preview |
+| @vitejs/plugin-react 6.1.2 | https://github.com/vitejs/vite-plugin-react | MIT | `29b68325fe02` | React transform |
+| Fastify 5.12.7 | https://github.com/fastify/fastify | MIT | `23c918638591` | API server and health check |
+| zod 4.6.7 | https://github.com/colinhacks/zod | MIT | `3f1189b28e38` | Shared response schema |
+| Vitest 5.0.5 | https://github.com/vitest-dev/vitest | MIT | `78fbac9e571c` | Unit test runner |
+| @playwright/test 1.64.1 | https://github.com/microsoft/playwright | Apache-2.0 | `45873d00a0dd` | Browser smoke tests |
+| spdx-expression-parse 5.0.0 | https://github.com/jslicense/spdx-expression-parse.js | MIT | `7edb57f70653` | License expression validation |
+
 ## Planned dependencies
 
 | Package | Use | License (verify when adding) |
