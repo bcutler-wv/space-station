@@ -7,3 +7,5 @@ Review fixes corrected private `.env` setup instructions, documented rebuilding 
 Local lint, typecheck, build, license/color checks, six unit tests, and two browser smoke tests passed. The Docker CI test covers boot, built assets, migration idempotency, and queued work surviving worker/database restarts. Docker is unavailable on the development host; the initial remote run is required before runtime acceptance.
 
 Search, OCR, images, and embedding containers remain for the milestones that use them. Authentication and the full shell remain for M0.3/M0.4. Nothing has been deployed to production or connected to real accounts. The audit reports one moderate transitive development-tool advisory, recorded with dependency provenance.
+
+The first Docker CI run built all images and brought PostgreSQL, the app, and worker to healthy state. The test then failed because the runner did not include `rg`. Sol replaced those test-script calls with standard `grep`/`sed`, added safe phase diagnostics, and Astra approved the correction for rerun.
