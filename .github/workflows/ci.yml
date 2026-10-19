@@ -44,7 +44,7 @@ jobs:
       - run: docker compose run --rm -T -e DB_NAME=station_passkey_test migrate
       - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_passkey_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/passkey-token
       - run: docker compose run -d --name station-passkey-app --no-deps -p 127.0.0.1:8081:8080 -e DB_NAME=station_passkey_test -e APP_ORIGIN=https://localhost:8081 app
-      - run: curl --insecure --fail --silent --retry 30 --retry-delay 1 --retry-connrefused https://localhost:8081/ready >/dev/null
+      - run: curl --insecure --fail --silent --show-error --retry 30 --retry-delay 1 --retry-max-time 60 --retry-all-errors --connect-timeout 2 --max-time 5 https://localhost:8081/ready >/dev/null
       - run: pnpm exec playwright install --with-deps chromium
       - run: node tests/integration/passkey-browser.mjs
         env:
@@ -54,7 +54,7 @@ jobs:
       - run: docker compose run --rm -T -e DB_NAME=station_password_test migrate
       - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_password_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/password-token
       - run: docker compose run -d --name station-password-app --no-deps -p 127.0.0.1:8082:8080 -e DB_NAME=station_password_test -e APP_ORIGIN=https://localhost:8082 app
-      - run: curl --insecure --fail --silent --retry 30 --retry-delay 1 --retry-connrefused https://localhost:8082/ready >/dev/null
+      - run: curl --insecure --fail --silent --show-error --retry 30 --retry-delay 1 --retry-max-time 60 --retry-all-errors --connect-timeout 2 --max-time 5 https://localhost:8082/ready >/dev/null
       - run: node tests/integration/password-browser.mjs
         env:
           STATION_PASSWORD_BASE_URL: https://localhost:8082
