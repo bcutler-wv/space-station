@@ -11,7 +11,14 @@ test.skip(
 test.describe.configure({ mode: "serial" });
 const password = "Example-only-password-123!";
 async function context() {
-  return request.newContext({ baseURL: baseURL!, ignoreHTTPSErrors: true });
+  // The test runner otherwise inherits use.storageState, which contains the owner cookie.
+  const isolated = await request.newContext({
+    baseURL: baseURL!,
+    ignoreHTTPSErrors: true,
+    storageState: { cookies: [], origins: [] },
+  });
+  expect((await isolated.storageState()).cookies.length).toBe(0);
+  return isolated;
 }
 async function csrf(context: Awaited<ReturnType<typeof request.newContext>>) {
   const response = await context.get("/api/auth/status");
