@@ -4,12 +4,14 @@ import { readFile } from "node:fs/promises";
 async function headers(request: APIRequestContext) {
   const origin = process.env.STATION_E2E_BASE_URL;
   if (!origin) return {};
-  const status = await (await request.get('/api/auth/status')).json();
-  return { Origin: origin, 'X-CSRF-Token': status.csrfToken as string };
+  const status = await (await request.get("/api/auth/status")).json();
+  return { Origin: origin, "X-CSRF-Token": status.csrfToken as string };
 }
 
 async function reset(request: APIRequestContext) {
-  await request.delete("/api/appearance/wallpaper", { headers: await headers(request) });
+  await request.delete("/api/appearance/wallpaper", {
+    headers: await headers(request),
+  });
   await request.put("/api/appearance", {
     headers: await headers(request),
     data: { mode: "system", showWallpaper: true },
@@ -74,7 +76,20 @@ test("system mode follows device changes and settings persist", async ({
   ).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.emulateMedia({ colorScheme: "light" });
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  try {
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  } catch (error) {
+    const browser = await page.evaluate(() => ({
+      mediaDark: matchMedia("(prefers-color-scheme: dark)").matches,
+      cachedMode: localStorage.getItem("station-theme-mode"),
+      theme: document.documentElement.dataset.theme,
+    }));
+    const server = await (await request.get("/api/appearance")).json();
+    throw new Error(
+      `System theme diagnostic: ${JSON.stringify({ browser, server })}`,
+      { cause: error },
+    );
+  }
   await page.getByRole("button", { name: "Settings" }).click();
   await page.screenshot({ path: "test-results/settings.png" });
   await page

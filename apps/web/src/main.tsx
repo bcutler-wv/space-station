@@ -1,4 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   QueryClient,
@@ -28,7 +33,7 @@ import "@fontsource/rubik/latin-500.css";
 import "@fontsource/rubik/latin-600.css";
 import "material-symbols/rounded.css";
 import "./style.css";
-import { AuthGate, csrfHeaders, logout } from './auth-screen.js';
+import { AuthGate, csrfHeaders, logout } from "./auth-screen.js";
 
 const queryClient = new QueryClient();
 function cachedMode(): AppearanceResponse["mode"] {
@@ -53,6 +58,11 @@ const fallback: AppearanceResponse = {
   hasWallpaper: false,
 };
 const media = window.matchMedia("(prefers-color-scheme: dark)");
+const subscribeSystemDark = (onChange: () => void) => {
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
+};
+const getSystemDark = () => media.matches;
 const icon = (name: string, className = "") => (
   <span
     className={`material-symbols-rounded icon ${className}`}
@@ -89,7 +99,9 @@ async function wallpaperRequest(
 ): Promise<AppearanceResponse> {
   const response = await fetch("/api/appearance/wallpaper", {
     method,
-    ...(file ? { headers: { "Content-Type": file.type, ...csrfHeaders() }, body: file } : { headers: csrfHeaders() }),
+    ...(file
+      ? { headers: { "Content-Type": file.type, ...csrfHeaders() }, body: file }
+      : { headers: csrfHeaders() }),
   });
   if (!response.ok) {
     const result = (await response.json().catch(() => ({}))) as {
@@ -580,7 +592,7 @@ function App() {
   const [capcomOpen, setCapcomOpen] = useState(false);
   const [blackout, setBlackout] = useState(false);
   const [notice, setNotice] = useState("");
-  const [systemDark, setSystemDark] = useState(media.matches);
+  const systemDark = useSyncExternalStore(subscribeSystemDark, getSystemDark);
   const [wallVersion, setWallVersion] = useState(0);
   const [clock, setClock] = useState(() =>
     new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
@@ -620,13 +632,6 @@ function App() {
   useEffect(() => {
     if (appearance.data) cacheMode(appearance.data.mode);
   }, [appearance.data]);
-  useEffect(() => {
-    const listener = (event: MediaQueryListEvent) =>
-      setSystemDark(event.matches);
-    media.addEventListener("change", listener);
-    setSystemDark(media.matches);
-    return () => media.removeEventListener("change", listener);
-  }, []);
   useEffect(() => {
     applyTheme(
       value.seed,
@@ -755,7 +760,13 @@ function App() {
         >
           {icon("settings")}
         </button>
-        <button className="nav-button" aria-label="Sign out" onClick={() => void logout()}>{icon("logout")}</button>
+        <button
+          className="nav-button"
+          aria-label="Sign out"
+          onClick={() => void logout()}
+        >
+          {icon("logout")}
+        </button>
       </nav>
       <header className="top-bar">
         <div className="location">
@@ -1015,7 +1026,9 @@ document.title = PRODUCT_NAME;
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AuthGate><App /></AuthGate>
+      <AuthGate>
+        <App />
+      </AuthGate>
     </QueryClientProvider>
   </React.StrictMode>,
 );
