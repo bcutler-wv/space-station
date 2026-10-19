@@ -1,9 +1,17 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+async function headers(request: APIRequestContext) {
+  const origin = process.env.STATION_E2E_BASE_URL;
+  if (!origin) return {};
+  const status = await (await request.get('/api/auth/status')).json();
+  return { Origin: origin, 'X-CSRF-Token': status.csrfToken as string };
+}
+
 async function reset(request: APIRequestContext) {
-  await request.delete("/api/appearance/wallpaper");
+  await request.delete("/api/appearance/wallpaper", { headers: await headers(request) });
   await request.put("/api/appearance", {
+    headers: await headers(request),
     data: { mode: "system", showWallpaper: true },
   });
 }
@@ -14,6 +22,7 @@ for (const mode of ["light", "dark"] as const) {
   test(`Mission Control renders in ${mode} mode`, async ({ page, request }) => {
     await reset(request);
     await request.put("/api/appearance", {
+      headers: await headers(request),
       data: { mode, showWallpaper: true },
     });
     await page.goto("/");

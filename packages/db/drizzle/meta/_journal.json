@@ -8,6 +8,13 @@
       "when": 1792448217786,
       "tag": "0000_wide_micromacro",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792452220430,
+      "tag": "0001_breezy_thunderbolt",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,9 @@
+# Owner authentication
+
+Sol implemented one-time owner setup, password with TOTP or passkey login, recovery and credential replacement, private appearance routes, and the setup/sign-in screens. The implementation assembles official Fastify plugins, SimpleWebAuthn, node-rs Argon2id, and otplib with PostgreSQL persistence. Dependency versions and license evidence are recorded in THIRD_PARTY.md.
+
+A fresh Astra review required restricted recovery sessions, credential-generation checks across concurrent login/reset operations, atomic session reads and expiry guards, and usable bootstrap retry. Sol implemented those fixes plus forgotten-password replacement requiring TOTP and an unused recovery code. Astra accepted the revised implementation for CI validation. Password-plus-code replaces TOTP; a passkey recovery code requires a new user-verified passkey. Credential replacement rotates recovery codes and invalidates older sessions.
+
+Local checks passed: lint, strict TypeScript, 19 unit tests, build, color and license gates, and eight shell browser tests. The dark sign-in layout was visually reviewed with mocked status and no credentials. Tests against real PostgreSQL cover bootstrap races, generation checks, expiry, replay, and stale session saves. Separate HTTPS browser fixtures exercise password and virtual-passkey enrollment, login, and recovery. Those Docker gates must pass in GitHub Actions before M0.4 acceptance; agent-dev has no Docker.
+
+Development Compose uses a private localhost TLS certificate and a configured non-root UID so Secure cookies are tested unchanged. Reverse-proxy operation requires an exact trusted proxy IP and public HTTPS origin. Bootstrap tokens and browser test credentials stay in ignored private files and are not logged. No provider accounts or production deployment were involved.

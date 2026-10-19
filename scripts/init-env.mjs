@@ -1,10 +1,16 @@
 import { randomBytes } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { open, mkdir, chmod, chown, access, unlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 
 const content = [
   `POSTGRES_PASSWORD=${randomBytes(32).toString('base64url')}`,
   `STATION_MASTER_KEY=${randomBytes(32).toString('base64')}`,
   'APP_PORT=8080',
+  'APP_ORIGIN=https://localhost:8080',
+  'APP_TLS_KEY_PATH=/run/tls/key.pem',
+  'APP_TLS_CERT_PATH=/run/tls/cert.pem',
+  `APP_UID=${process.getuid() === 0 ? 1000 : process.getuid()}`,
+  `APP_GID=${process.getgid() === 0 ? 1000 : process.getgid()}`,
   '',
 ].join('\n');
 
@@ -18,4 +24,31 @@ try {
   } else {
     throw error;
   }
+}
+
+await mkdir('.cache/tls', { recursive: true, mode: 0o700 });
+await chmod('.cache/tls', 0o700);
+let keyExists = true;
+let certExists = true;
+try { await access('.cache/tls/key.pem'); } catch { keyExists = false; }
+try { await access('.cache/tls/cert.pem'); } catch { certExists = false; }
+if (keyExists !== certExists) throw new Error('The local TLS pair is incomplete. Repair .cache/tls before starting the app.');
+if (keyExists) {
+  const validity = spawnSync('openssl', ['x509', '-checkend', '86400', '-noout', '-in', '.cache/tls/cert.pem'], { stdio: 'ignore' });
+  if (validity.status !== 0) {
+    await unlink('.cache/tls/key.pem');
+    await unlink('.cache/tls/cert.pem');
+    keyExists = false;
+  }
+}
+if (!keyExists) {
+  const result = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', '.cache/tls/key.pem', '-out', '.cache/tls/cert.pem', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-days', '7'], { stdio: 'ignore' });
+  if (result.status !== 0) throw new Error('Could not create the local TLS certificate. Install OpenSSL or configure an HTTPS reverse proxy.');
+  await chmod('.cache/tls/key.pem', 0o600);
+  console.info('Created a private, short-lived localhost TLS certificate.');
+}
+if (process.getuid() === 0) {
+  await chown('.cache/tls', 1000, 1000);
+  await chown('.cache/tls/key.pem', 1000, 1000);
+  await chown('.cache/tls/cert.pem', 1000, 1000);
 }

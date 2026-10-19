@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isIP } from 'node:net';
 
 const base64Key = z.string().refine((value) => {
   if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) return false;
@@ -11,6 +12,10 @@ const runtimeSchema = z.object({
   STATION_MASTER_KEY: base64Key,
   APP_PORT: port.default(8080),
   APP_HOST: z.string().default('127.0.0.1'),
+  APP_ORIGIN: z.string().url(),
+  APP_TLS_KEY_PATH: z.string().default(''),
+  APP_TLS_CERT_PATH: z.string().default(''),
+  APP_TRUSTED_PROXY_IP: z.string().refine((value) => !value || isIP(value) > 0, 'APP_TRUSTED_PROXY_IP must be one IP address').default(''),
   DB_HOST: z.string().default('127.0.0.1'),
   DB_PORT: port.default(5432),
   DB_NAME: z.string().default('station'),

@@ -3,9 +3,16 @@ import sharp from "sharp";
 import { buildApp } from "./app.js";
 import {
   defaultAppearance,
+  registerAppearance,
   type AppearanceStore,
   type StoredAppearance,
 } from "./appearance.js";
+
+function appearanceApp(store: AppearanceStore) {
+  const app = buildApp();
+  registerAppearance(app, store);
+  return app;
+}
 
 function memoryStore(): AppearanceStore {
   let value: StoredAppearance = { ...defaultAppearance };
@@ -19,7 +26,7 @@ function memoryStore(): AppearanceStore {
 }
 
 test("appearance settings validate and preserve uploaded wallpaper across mode changes", async () => {
-  const app = buildApp(undefined, memoryStore());
+  const app = appearanceApp(memoryStore());
   try {
     const image = await sharp({
       create: {
@@ -77,7 +84,7 @@ test("appearance settings validate and preserve uploaded wallpaper across mode c
 });
 
 test("rejects SVG and oversized raster input", async () => {
-  const app = buildApp(undefined, memoryStore());
+  const app = appearanceApp(memoryStore());
   try {
     const svg = await app.inject({
       method: "POST",
@@ -113,7 +120,7 @@ test("storage failures are server errors, not invalid image errors", async () =>
   store.patch = async () => {
     throw new Error("store unavailable");
   };
-  const app = buildApp(undefined, store);
+  const app = appearanceApp(store);
   try {
     const image = await sharp({
       create: {

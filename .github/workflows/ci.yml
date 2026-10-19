@@ -5,6 +5,7 @@ on:
 jobs:
   scaffold:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,6 +23,7 @@ jobs:
 
   runtime:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: scaffold
     steps:
       - uses: actions/checkout@v4
@@ -35,9 +37,35 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node scripts/init-env.mjs
       - run: bash scripts/compose-smoke.sh
+      - run: docker compose exec -T postgres createdb -U station station_auth_test
+      - run: docker compose run --rm -T -e DB_NAME=station_auth_test migrate
+      - run: docker compose run --rm -T --no-deps -e DB_NAME=station_auth_test app node tests/integration/auth-db.mjs
+      - run: docker compose exec -T postgres createdb -U station station_passkey_test
+      - run: docker compose run --rm -T -e DB_NAME=station_passkey_test migrate
+      - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_passkey_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/passkey-token
+      - run: docker compose run -d --name station-passkey-app --no-deps -p 127.0.0.1:8081:8080 -e DB_NAME=station_passkey_test -e APP_ORIGIN=https://localhost:8081 app
+      - run: curl --insecure --fail --silent --retry 30 --retry-delay 1 --retry-connrefused https://localhost:8081/ready >/dev/null
       - run: pnpm exec playwright install --with-deps chromium
+      - run: node tests/integration/passkey-browser.mjs
+        env:
+          STATION_PASSKEY_BASE_URL: https://localhost:8081
+          STATION_PASSKEY_BOOTSTRAP_PATH: .cache/bootstrap/passkey-token
+      - run: docker compose exec -T postgres createdb -U station station_password_test
+      - run: docker compose run --rm -T -e DB_NAME=station_password_test migrate
+      - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_password_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/password-token
+      - run: docker compose run -d --name station-password-app --no-deps -p 127.0.0.1:8082:8080 -e DB_NAME=station_password_test -e APP_ORIGIN=https://localhost:8082 app
+      - run: curl --insecure --fail --silent --retry 30 --retry-delay 1 --retry-connrefused https://localhost:8082/ready >/dev/null
+      - run: node tests/integration/password-browser.mjs
+        env:
+          STATION_PASSWORD_BASE_URL: https://localhost:8082
+          STATION_PASSWORD_BOOTSTRAP_PATH: .cache/bootstrap/password-token
       - run: pnpm test:e2e
         env:
-          STATION_E2E_BASE_URL: http://127.0.0.1:8080
+          STATION_E2E_BASE_URL: https://localhost:8080
+          STATION_E2E_BOOTSTRAP_PATH: .cache/bootstrap/token
+      - if: always()
+        run: docker rm -f station-passkey-app || true
+      - if: always()
+        run: docker rm -f station-password-app || true
       - if: always()
         run: docker compose down -v --remove-orphans

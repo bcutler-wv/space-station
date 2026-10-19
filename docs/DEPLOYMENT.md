@@ -7,20 +7,24 @@
 - Disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
 - A hostname with HTTPS, served by your own reverse proxy.
 
-## M0.3 development validation
+## M0.4 development validation
 
-This milestone is a theme and shell demo with sample data. Its appearance API is not authenticated. Do not expose it to other users or a production network. On a disposable Linux host with Docker, run:
+This milestone is an authenticated theme and shell demo with sample data. On a disposable Linux host with Docker, run:
 
 ```
 node scripts/init-env.mjs
 docker compose up -d --build postgres migrate
 docker compose up -d --build --wait app worker
-curl --fail http://127.0.0.1:8080/ready
+curl --insecure --fail https://localhost:8080/ready
+mkdir -p -m 700 .cache/bootstrap
+docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/token
 ```
 
-The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`. The app serves the sample Mission Control shell and health endpoints. Appearance settings and a normalized wallpaper persist in the database. Authentication and the setup wizard come in later M0 steps.
+The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. It creates a private seven-day localhost TLS certificate and renews it when less than a day remains. Your browser will ask you to trust that temporary certificate. It sets `APP_ORIGIN=https://localhost:8080` for development. Set `APP_ORIGIN` to the exact HTTPS origin browsers use before serving a real hostname. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`.
 
-Compose binds the app to `127.0.0.1` by default. A reverse proxy on another host cannot reach that binding. When the authenticated release is ready for deployment, bind the app port to an explicitly chosen private interface in `compose.yaml` and restrict access at the host firewall and proxy. Do not publish the database or worker ports.
+The setup command writes a 0600 token file without printing its contents. It expires after 15 minutes. Open `APP_ORIGIN`, paste the token, and choose a passkey or a password of at least 12 characters. Password setup must be completed with a six-digit TOTP code before owner creation commits. Save the ten recovery codes shown once. Delete the local token file after setup with `rm .cache/bootstrap/token`; to create another token before an owner exists, remove the expired file first and rerun the command. The command fails once an owner exists. Appearance settings and wallpaper persist in PostgreSQL and require login.
+
+Compose binds the app to `127.0.0.1` by default. A reverse proxy on another host cannot reach that binding. To serve another host, bind the app port to an explicitly chosen private interface in `compose.yaml` and restrict access at the host firewall and proxy. The reverse proxy must terminate HTTPS at the configured public origin. Clear `APP_TLS_KEY_PATH` and `APP_TLS_CERT_PATH` when the proxy talks HTTP to the app, and set `APP_TRUSTED_PROXY_IP` to the proxy's exact source IP as seen by the app; the proxy must set `X-Forwarded-Proto: https`. Do not publish the database or worker ports.
 
 `migrate` is a one-shot service. It takes an advisory lock, enables pgvector, applies generated Drizzle migrations, and prepares pg-boss. App and worker start only after it succeeds. On updates, rebuild and run `migrate` before starting the app and worker, as in the commands above. Run `docker compose up -d --force-recreate migrate` explicitly if a migration must be retried without an image change. A failed migration blocks app and worker startup.
 

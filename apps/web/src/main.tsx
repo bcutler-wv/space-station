@@ -28,6 +28,7 @@ import "@fontsource/rubik/latin-500.css";
 import "@fontsource/rubik/latin-600.css";
 import "material-symbols/rounded.css";
 import "./style.css";
+import { AuthGate, csrfHeaders, logout } from './auth-screen.js';
 
 const queryClient = new QueryClient();
 function cachedMode(): AppearanceResponse["mode"] {
@@ -75,7 +76,7 @@ async function changeAppearance(value: {
 }): Promise<AppearanceResponse> {
   const response = await fetch("/api/appearance", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
     body: JSON.stringify(value),
   });
   if (!response.ok)
@@ -88,7 +89,7 @@ async function wallpaperRequest(
 ): Promise<AppearanceResponse> {
   const response = await fetch("/api/appearance/wallpaper", {
     method,
-    ...(file ? { headers: { "Content-Type": file.type }, body: file } : {}),
+    ...(file ? { headers: { "Content-Type": file.type, ...csrfHeaders() }, body: file } : { headers: csrfHeaders() }),
   });
   if (!response.ok) {
     const result = (await response.json().catch(() => ({}))) as {
@@ -623,6 +624,7 @@ function App() {
     const listener = (event: MediaQueryListEvent) =>
       setSystemDark(event.matches);
     media.addEventListener("change", listener);
+    setSystemDark(media.matches);
     return () => media.removeEventListener("change", listener);
   }, []);
   useEffect(() => {
@@ -753,6 +755,7 @@ function App() {
         >
           {icon("settings")}
         </button>
+        <button className="nav-button" aria-label="Sign out" onClick={() => void logout()}>{icon("logout")}</button>
       </nav>
       <header className="top-bar">
         <div className="location">
@@ -1012,7 +1015,7 @@ document.title = PRODUCT_NAME;
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <AuthGate><App /></AuthGate>
     </QueryClientProvider>
   </React.StrictMode>,
 );

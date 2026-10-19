@@ -4,6 +4,7 @@ import { databaseUrl, loadRuntimeConfig } from './config.js';
 const valid = {
   POSTGRES_PASSWORD: 'strong-example-pass!#@:/',
   STATION_MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
+  APP_ORIGIN: 'https://localhost:8080',
 };
 
 test('rejects invalid bootstrap secrets without exposing their values', () => {

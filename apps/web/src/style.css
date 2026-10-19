@@ -1093,3 +1093,20 @@ h4 {
     scroll-behavior: auto !important;
   }
 }
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--frame); }
+.auth-card { width: min(100%, 460px); padding: clamp(24px, 5vw, 42px); border-radius: 28px; background: var(--surface-container); box-shadow: 0 16px 52px var(--outline-variant); }
+.auth-mark { display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 16px; color: var(--on-primary-container); background: var(--primary-container); font-size: 28px; }
+.auth-eyebrow { margin: 20px 0 4px; color: var(--primary); font-size: 0.85rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.auth-card h1 { margin: 8px 0 12px; font-size: clamp(1.8rem, 5vw, 2.3rem); line-height: 1.12; }
+.auth-card p { line-height: 1.5; }
+.auth-card form { display: grid; gap: 16px; margin-top: 26px; }
+.auth-card label { display: grid; gap: 7px; color: var(--on-surface-variant); font-size: 0.9rem; }
+.auth-card input { width: 100%; min-width: 0; padding: 12px 14px; border: 1px solid var(--outline); border-radius: 12px; color: var(--on-surface); background: var(--surface-container-lowest); }
+.auth-card input[readonly] { font-size: 0.8rem; }
+.auth-card .button { justify-content: center; min-height: 44px; }
+.auth-alternatives { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.auth-error { padding: 12px 14px; border-radius: 12px; color: var(--on-error-container); background: var(--error-container); }
+.recovery-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 22px 0; }
+.recovery-list code { overflow-wrap: anywhere; padding: 9px; border-radius: 8px; background: var(--surface-container-high); }
+@media (max-width: 420px) { .recovery-list { grid-template-columns: 1fr; } }
+.auth-passkey-recovery { display: grid; gap: 12px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--outline-variant); }

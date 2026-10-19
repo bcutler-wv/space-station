@@ -35,7 +35,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 
 Docker Compose on any Linux host. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). A first-run wizard walks you through creating your OAuth apps and connecting each account.
 
-M0.3 provides a development shell with sample data and unauthenticated appearance settings only. With Node 22.12+ and Corepack, run `corepack pnpm install --frozen-lockfile`, then `corepack pnpm check`. On a disposable Docker host, `node scripts/init-env.mjs`, `docker compose up -d --build postgres migrate`, then `docker compose up -d --build --wait app worker` start the sample shell, API, database, and worker. Authentication is scheduled for the next M0 step.
+M0.4 protects the sample shell and its settings with owner authentication. With Node 22.12+ and Corepack, run `corepack pnpm install --frozen-lockfile`, then `corepack pnpm check`. On a disposable Docker host, run `node scripts/init-env.mjs`, `docker compose up -d --build postgres migrate`, and `docker compose up -d --build --wait app worker`. Generate a short-lived setup token with the local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell still contains sample data; real account connection begins in M1.
 
 Provider permissions and data-use terms can change. Verify current official documentation when enabling each connector, especially Slack indexed mode. The default Slack mode is live and stores no long-term content.
 

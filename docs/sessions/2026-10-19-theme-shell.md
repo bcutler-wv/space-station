@@ -8,4 +8,6 @@ Local checks passed: 19 unit tests and eight Playwright tests, including light/d
 
 Material Color Utilities is pinned to 0.3.0 because 0.4.0 failed direct Node 22 ESM import. The icon font is large and remains a release-performance follow-up. Dependency source/license evidence is in THIRD_PARTY.md. Router/live transport choices are explicitly deferred to M1 and the embedding service to M6, when their integration requirements can be tested.
 
+GitHub Actions run `39338237031` passed both scaffold and runtime jobs for commit `3307722`, including the browser suite against PostgreSQL. M0.3 was accepted before M0.4 began.
+
 The appearance endpoints remain development-only until M0.4 adds authentication. There are no connected providers or production deployments.

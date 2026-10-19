@@ -105,6 +105,6 @@ When live updates are implemented in M1, the server will push small events (`ite
 
 ## Configuration
 
-- `.env` holds only deployment bootstrap values listed in `.env.example`: Postgres password, master encryption key, and app port. The database URL is assembled inside the Compose network with URL-safe encoding; do not duplicate its password in a separate variable.
+- `.env` holds only deployment bootstrap values listed in `.env.example`: Postgres password, master encryption key, app port, and exact public origin. The database URL is assembled inside the Compose network with URL-safe encoding; do not duplicate its password in a separate variable.
 - OAuth client IDs, client secrets, tokens, IMAP passwords, and AI API keys are entered in the setup wizard and stored encrypted in the database.
 - `PRODUCT_NAME` lives in `packages/shared/src/constants.ts`. Never hard-code the product name anywhere else.

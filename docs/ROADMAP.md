@@ -8,7 +8,7 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
-M0.1 and M0.2 are implemented, Astra-reviewed, and green in CI. M0.3 is implemented and Astra-reviewed for Docker/browser CI acceptance. M0.4 and M0.5 remain to be built. This shell is unauthenticated and is not a deployable mail client.
+M0.1 through M0.3 are implemented, Astra-reviewed, and green in CI. M0.4 authentication is implemented and Astra-reviewed; its new Compose/PostgreSQL/HTTPS browser gates remain pending CI. M0.5 remains to be built. The sample shell now requires an owner login but is not yet a deployable mail client.
 
 Each substep ends with Astra review and fixes before the next begins:
 

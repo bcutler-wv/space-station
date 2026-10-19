@@ -89,3 +89,17 @@ Checked npm version and repository metadata, the installed license text where pr
 | sharp 0.35.5 | https://github.com/lovell/sharp | Apache-2.0, installed LICENSE `73ba74dfaa52` | Bounded raster decode and WebP reencode |
 | @img/sharp-libvips-linux-x64 1.3.4 | https://github.com/lovell/sharp-libvips and https://github.com/libvips/libvips | LGPL-3.0-or-later in installed package manifest; no bundled LICENSE; upstream packaging and libvips licenses reviewed | Native image processing binary on Ubuntu/Linux x64 |
 | Prettier 3.9.10 | https://github.com/prettier/prettier | MIT, installed LICENSE `b0f241719988` | Reviewable source formatting |
+
+## Adopted in M0.4
+
+Checked pinned npm metadata, installed license text, and upstream documentation/repositories on 2026-10-19. The SHA-256 prefixes identify installed license files. These dependencies are pinned in `pnpm-lock.yaml`; the native `@node-rs/argon2` binding is provided by the same upstream project under MIT. `tslib` 1.14.1 and 2.8.1 entered transitively; both carry the 0BSD text with installed LICENSE SHA-256 prefix `210b19e54313`, reviewed against https://github.com/microsoft/tslib/blob/main/LICENSE.txt. The license gate allows only those exact 0BSD package/version pairs.
+
+| Package/version | Upstream repository | License and installed license hash | Use |
+|---|---|---|---|
+| @fastify/cookie 11.1.3 | https://github.com/fastify/fastify-cookie | MIT `ba9677e5a34c` | Cookie parsing and serialization |
+| @fastify/session 11.1.5 | https://github.com/fastify/session | MIT `169bc32eeedd` | Opaque rotating sessions with a PostgreSQL adapter storing SHA-256 IDs |
+| @fastify/csrf-protection 8.0.2 | https://github.com/fastify/csrf-protection | MIT `5ad64d5d248e` | Per-session CSRF tokens |
+| @fastify/rate-limit 11.2.1 | https://github.com/fastify/fastify-rate-limit | MIT `d24d2e5bdc50` | API and authentication rate limits; 11.2.1 includes the upstream IPv6 bypass fix |
+| @simplewebauthn/server 14.0.3, @simplewebauthn/browser 14.0.0 | https://github.com/MasterKale/SimpleWebAuthn | MIT `bd9e3f456964` | WebAuthn registration and assertion verification |
+| @node-rs/argon2 2.2.2 | https://github.com/napi-rs/node-rs | MIT `c748f2e7f93f` | Versioned Argon2id password hashing |
+| otplib 13.5.0 | https://github.com/yeojz/otplib | MIT `e143fd4930d8` | TOTP enrollment, verification, and test fixture generation |

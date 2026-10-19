@@ -36,6 +36,8 @@ Station holds a person's entire working life: every email, chat, and calendar ev
 - Store only hashed session tokens server-side; rotate after login or privilege changes and revoke on logout. Expire idle and absolute sessions. CSRF protection on every state-changing request, including same-site deployments.
 - Rate limits on login and on the API.
 
+M0.4 requires an exact configured HTTPS `APP_ORIGIN` for state-changing requests, in addition to per-session CSRF tokens. Local development uses a private localhost TLS certificate; reverse proxy deployments name one trusted proxy source IP. Password-plus-recovery-code access is restricted to a new confirmed TOTP seed; it cannot read or change private settings before confirmation. A forgotten password can be replaced with both a current TOTP code and an unused recovery code. If both are lost, there is no account recovery path. Recovery of a passkey-only account consumes a code and requires user verification on a new passkey. Replacing any credential increments the owner auth generation, invalidates pending old logins and recovery attempts, revokes prior sessions, and rotates recovery codes.
+
 ## Secrets
 
 - OAuth tokens, client secrets, IMAP passwords, and AI keys are encrypted with a master key (AES-256-GCM, envelope encryption) from `STATION_MASTER_KEY` in the environment. Password hashes are separate and never decryptable.

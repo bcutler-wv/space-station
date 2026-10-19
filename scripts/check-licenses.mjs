@@ -7,6 +7,8 @@ const allowed = new Set([
 const reviewedExceptions = new Set([
   'OFL-1.1:@fontsource/rubik@5.3.0',
   'LGPL-3.0-or-later:@img/sharp-libvips-linux-x64@1.3.4',
+  '0BSD:tslib@1.14.1',
+  '0BSD:tslib@2.8.1',
 ]);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;

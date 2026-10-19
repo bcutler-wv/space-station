@@ -21,6 +21,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       STATION_MASTER_KEY: ${STATION_MASTER_KEY:?Set STATION_MASTER_KEY in .env}
       APP_PORT: 8080
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN in .env}
+      APP_TLS_KEY_PATH: ${APP_TLS_KEY_PATH:-}
+      APP_TLS_CERT_PATH: ${APP_TLS_CERT_PATH:-}
+      APP_TRUSTED_PROXY_IP: ${APP_TRUSTED_PROXY_IP:-}
       APP_HOST: 0.0.0.0
       DB_HOST: postgres
     depends_on:
@@ -30,14 +34,17 @@ services:
 
   app:
     build: .
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment: *runtime_env
+    volumes:
+      - ./.cache/tls:/run/tls:ro
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "const s=process.env.APP_TLS_CERT_PATH?'https':'http';require(s).get(s+'://127.0.0.1:8080/ready',{rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 20

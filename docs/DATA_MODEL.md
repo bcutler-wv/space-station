@@ -1,15 +1,17 @@
 # Data model
 
-PostgreSQL with Drizzle. This lists the tables and the fields that matter. Claude Code fills in indexes, timestamps (`created_at`, `updated_at` on every table), and foreign key details.
+PostgreSQL with Drizzle. This lists the tables and the fields that matter. Future mutable domain tables use `created_at` and `updated_at`. M0.4 authentication records instead carry purpose-specific timestamps: owner and credentials have `created_at`; bootstrap tokens and challenges have `expires_at` and `consumed_at`; recovery codes have `used_at`; sessions have `created_at`, `last_seen_at`, and `revoked_at`. These timestamps record security events and expiry without an ambiguous blanket `updated_at`.
 
 ## Identity and settings
 
 | Table | Key fields |
 |---|---|
-| `users` | id, display_name. v1 has exactly one row. |
+| `users` | id, display_name, auth_generation, created_at. v1 has exactly one row. Credential replacement atomically increments `auth_generation`; any session or pending login from an older generation is invalid. |
 | `auth_credentials` | id, user_id, kind (passkey, password, totp), password_hash (Argon2id only for password), encrypted_secret (TOTP only), passkey_public_key and counter (passkey only), created_at |
 | `recovery_codes` | user_id, code_hash, used_at. Show once during enrollment; never store plaintext. |
-| `sessions` | id, user_id, token_hash, created_at, expires_at, revoked_at. Rotate after login and privilege changes. |
+| `sessions` | token_hash, data (server-side session payload), created_at, last_seen_at, revoked_at. The opaque cookie token is never stored. The adapter enforces 30-minute idle and seven-day absolute expiry using these timestamps; session payloads bind the current owner auth generation and distinguish restricted recovery from full login. Rotate after login and privilege changes. |
+| `bootstrap_tokens` | token_hash, expires_at, consumed_at. Local CLI issues one short-lived token; owner creation consumes it in the same transaction. |
+| `auth_challenges` | id, challenge_hash, kind, expires_at, consumed_at. WebAuthn challenges expire after five minutes and can be consumed once. |
 | `settings` | key, value (jsonb). Theme mode, seed color, confidence thresholds, AI budgets. M0.3 stores a bounded normalized WebP wallpaper in the `appearance` value; a later private file store may replace the embedded image. |
 
 ## Orbits and accounts
