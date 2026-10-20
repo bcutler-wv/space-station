@@ -1,5 +1,7 @@
 # Deployment
 
+OAuth callbacks can carry a short-lived authorization code and state in the query string. Configure the reverse proxy to omit query strings from access logs for `/api/google/callback`; do not log request bodies or authorization headers. The application returns `Cache-Control: no-store` and `Referrer-Policy: no-referrer` on the callback redirect.
+
 ## Requirements
 
 - For the current development shell: a disposable Linux host or VM with Node.js 22.12 or newer, OpenSSL, Docker with the Compose plugin, and access to its running daemon.

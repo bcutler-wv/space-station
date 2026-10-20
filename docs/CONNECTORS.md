@@ -1,6 +1,6 @@
 # Connectors
 
-Every user registers their own OAuth apps. Station never ships a shared client ID. This keeps each install independent and avoids the security reviews providers require for shared apps that read mail.
+Every user registers their own OAuth apps. Station never ships a shared client ID. Each install is independent; Google policy and verification requirements still depend on the app's audience and use.
 
 Provider policies change. Every connector's wizard step links to the provider's current documentation, and these notes should be checked against it during the build.
 
@@ -10,12 +10,12 @@ No connector needs a public inbound endpoint. Everything below works with Statio
 
 ## Gmail and Google Workspace
 
-- **Library:** googleapis (Google's official Node client).
+- **Library:** official `google-auth-library` and `@googleapis/gmail` packages for the mail-only M1 connection.
 - **Auth:** OAuth 2.0 web flow with the user's own Google Cloud project.
-  - Workspace: consent screen set to **Internal**. No verification, no token expiry schedule.
-  - Personal Gmail: consent screen **External**. Apps left in Testing mode issue refresh tokens that expire after 7 days. The wizard must tell the user to publish the app to production unverified (they click through a warning once) or use IMAP with an app password instead.
-  - Optional for Workspace admins: service account with domain-wide delegation.
-- **Scopes:** `gmail.modify`, `gmail.send`, `calendar` (or `calendar.events` plus `calendar.readonly`), `openid`, `email`, `profile`.
+  - Workspace apps with an Internal audience may qualify for a verification exception. Refresh grants can still be revoked or expire.
+  - External apps in Testing mode issue refresh tokens that expire after seven days unless only basic identity scopes are requested. Publishing and verification obligations depend on audience, scope, and use; the owner must review Google's current guidance.
+- **M1 scope:** `https://www.googleapis.com/auth/gmail.modify` only. Gmail `users.getProfile` supplies the account email; Calendar authorization follows in M5. The grant must include mail access and offline refresh.
+- **M1.2a storage:** OAuth app, account, and short-lived attempt rows are durable. A callback retains its code encrypted for at most ten minutes, then an authenticated same-origin confirmation exchanges it. Three outstanding attempts per owner session are allowed. Expired attempt secrets and unlinked app secrets are removed. A recovery reset invalidates pending attempts; existing account credentials remain encrypted under the station master key and should be reconnected if the owner rotates or loses that key.
 - **Mail sync:** initial sync pages through `messages.list` within the chosen backfill window. Incremental sync uses the History API (`history.list` from the stored `historyId`). If the history ID is too old, fall back to a full resync.
 - **Push:** Gmail `watch` publishes to a Google Pub/Sub topic. Station uses a **pull** subscription, so nothing needs to reach in. Renew the watch daily. If Pub/Sub isn't configured, poll history every 60 seconds.
 - **Labels and threads** map directly. Gmail labels are Station labels.

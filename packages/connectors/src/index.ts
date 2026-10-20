@@ -1,2 +1,1 @@
-// Connector interfaces and providers are scheduled for later milestones.
-export {};
+export { GoogleMailAuthorization, type GoogleTransport } from './google/index.js';

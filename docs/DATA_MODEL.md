@@ -1,6 +1,6 @@
 # Data model
 
-PostgreSQL with Drizzle. This lists the tables and the fields that matter. Future mutable domain tables use `created_at` and `updated_at`. M0.4 authentication records instead carry purpose-specific timestamps: owner and credentials have `created_at`; bootstrap tokens and challenges have `expires_at` and `consumed_at`; recovery codes have `used_at`; sessions have `created_at`, `last_seen_at`, and `revoked_at`. These timestamps record security events and expiry without an ambiguous blanket `updated_at`.
+PostgreSQL with Drizzle. This lists the tables and the fields that matter. Future mutable domain tables use `created_at` and `updated_at`. M0.4 authentication records instead carry purpose-specific timestamps: owner and credentials have `created_at`; bootstrap tokens and challenges have `expires_at` and `consumed_at`; recovery codes have `used_at`; sessions have `created_at`, `last_seen_at`, and `revoked_at`. These timestamps record security events and expiry without an ambiguous blanket `updated_at`. M1.2a adds Google authorization records; the connection UI and content sync are not implemented yet.
 
 ## Identity and settings
 
@@ -20,14 +20,17 @@ PostgreSQL with Drizzle. This lists the tables and the fields that matter. Futur
 | Table | Key fields |
 |---|---|
 | `orbits` | M1.1: id, name, unique slug, color_slot, context, privacy_defaults (jsonb), created_at, updated_at. Later Orbit management adds icon, shortcut_key and sort_order. |
-| `accounts` | id, orbit_id, kind (gmail, graph, imap, caldav, slack, teams), address, display_name, auth_kind, credentials (encrypted), status, slack_mode (indexed or live) |
-| `oauth_apps` | id, provider (google, microsoft, slack), client_id, client_secret (encrypted), secret_expires_at |
+| `accounts` | M1.2a: id, provider (`google`), app_id, orbit_id, normalized email, encrypted_refresh_token, encrypted_access_token, access_token_expires_at, granted_scopes (text[]), nullable backfill (`30_days`, `1_year`, `all`), revoked_at, created_at, updated_at. Unique by provider and case-insensitive email. An account is inserted only after confirmed authorization and belongs to the saved first Orbit. Future provider/kind, display, status and Slack fields remain planned. |
+| `oauth_apps` | M1.2a: id, provider (`google`), owner_id, client_id, encrypted_client_secret, exact redirect_uri, created_at, updated_at. Future Microsoft/Slack providers and client-secret expiry fields remain planned. |
+| `oauth_attempts` | M1.2a: id, provider (`google`), app_id, unique SHA-256 state_hash, initiating session_hash, auth_generation, encrypted_verifier, nullable encrypted_code, status (`started`, `returned`, `claimed`, `completed`, `failed`), expires_at, created_at, updated_at. The ten-minute callback/confirmation window is single-use. Three active attempts per owner session are allowed. Terminal failures clear temporary ciphertext; periodic/start cleanup deletes expired attempts and app rows without a linked account. |
 | `sync_state` | account_id, resource and provider collection ID, cursor (jsonb), generation, status, last_success_at, last_error. Unique per source collection. |
 | `sync_runs` | id, sync_state_id, started_at, finished_at, status, retry_count, error_class, cursor_before, cursor_after |
 | `routing_rules` | id, orbit_id, match (jsonb: person, org, domain, label, keyword) |
 | `exclusion_rules` | M1.1: id, nullable orbit_id (null means global), kind (account, sender, label), normalized exact value, effect (no_ai, no_index, no_ai_and_no_index), created_at, updated_at. |
 
-M1.1 implements `orbits` with name, unique slug, color slot, context and privacy defaults, and `exclusion_rules` with nullable Orbit FK for global scope, exact match kind/value, effect, timestamps and a uniqueness constraint. Exact account and sender values are full email addresses; labels use their whole provider label name. Matching is case-insensitive after normalization. The account Orbit and every routed Orbit must be present in policy evaluation; an item with no Orbit membership or missing Orbit policy is denied indexing and AI. Account connection and actual content sync arrive in later M1 tasks. No derived data exists yet, so deletion/invalidation jobs are not claimed here.
+M1.1 implements `orbits` with name, unique slug, color slot, context and privacy defaults, and `exclusion_rules` with nullable Orbit FK for global scope, exact match kind/value, effect, timestamps and a uniqueness constraint. Exact account and sender values are full email addresses; labels use their whole provider label name. Matching is case-insensitive after normalization. The account Orbit and every routed Orbit must be present in policy evaluation; an item with no Orbit membership or missing Orbit policy is denied indexing and AI. M1.2a adds the Google account authorization backend and persists a backfill choice without starting a sync job. The owner-facing connection and backfill UI follows in M1.2b; actual content sync follows in M1.3. No derived data exists yet, so deletion/invalidation jobs are not claimed here.
+
+Every M1.2a reversible secret field uses a versioned AES-256-GCM envelope. A random per-value data key encrypts the value and is wrapped by the station master key. Both layers authenticate version and table/record/field context, so a ciphertext cannot be moved to a different row or purpose. Client IDs, email addresses, granted scope names and audit targets are metadata, not reversible credentials. Losing the master key makes encrypted Google grants unreadable and requires account reconnection.
 
 An account belongs to exactly one Orbit. An item can appear in several Orbits through `item_orbits`, which combines the account's Orbit with routing rules and people or org assignments.
 
@@ -98,6 +101,6 @@ See [TASKS.md](TASKS.md) for behavior.
 
 | Table | Key fields |
 |---|---|
-| `audit_log` | id, action (send, archive, label, delete, settings_change, connect_account), target, created_at |
+| `audit_log` | M1.2a: id, actor_id, action (`connect_account`), target_id (account ID), created_at. No secret or provider content. Future send/archive/label/delete/settings actions remain planned. |
 
-Every outbound action is logged. AI proposals and their decisions are logged through `proposals` and `task_events`. `outbound_operations` is the durable execution record; `audit_log` is the human-readable trail.
+M1.2a records every successful account link in `audit_log` in the same transaction as the account. Future outbound actions will be logged; AI proposals and their decisions will use `proposals` and `task_events`. `outbound_operations` is planned as the durable execution record, while `audit_log` is the human-readable trail.

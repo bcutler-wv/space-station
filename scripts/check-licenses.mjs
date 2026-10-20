@@ -10,12 +10,14 @@ const reviewedExceptions = new Set([
   '0BSD:tslib@1.14.1',
   '0BSD:tslib@2.8.1',
   'Unlicense:isbot@5.2.2',
+  'BSD:url-template@2.0.8',
 ]);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
 const report = JSON.parse(input);
 
 function permitted(expression) {
+  if (expression === 'BSD') return false;
   const tree = parse(expression);
   function visit(node) {
     if (node.license) return allowed.has(node.license) && !node.exception;

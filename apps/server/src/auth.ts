@@ -37,6 +37,7 @@ import {
   type AuthStore,
 } from "./auth-store.js";
 import type { openDatabase } from "@station/db";
+import type { GoogleTransport } from '@station/connectors';
 
 const passwordParams = {
   algorithm: Algorithm.Argon2id,
@@ -51,6 +52,7 @@ const unauthorized = {
 const newCodes = () =>
   Array.from({ length: 10 }, () => randomBytes(12).toString("base64url"));
 const publicAuthRoutes = new Set([
+  '/api/google/callback',
   '/api/auth/status', '/api/auth/logout', '/api/auth/bootstrap/restart',
   '/api/auth/bootstrap/password', '/api/auth/bootstrap/totp',
   '/api/auth/bootstrap/passkey/options', '/api/auth/bootstrap/passkey/verify',
@@ -87,6 +89,7 @@ export interface AuthConfig {
   masterKey: Buffer;
   db: ReturnType<typeof openDatabase>["db"];
   store: AuthStore;
+  googleTransport?: GoogleTransport;
 }
 
 declare module "fastify" {

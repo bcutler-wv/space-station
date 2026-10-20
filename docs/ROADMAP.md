@@ -26,9 +26,12 @@ Each M1 substep gets separate implementation, checks, Astra review and acceptanc
 
 1. **First Orbit, privacy and navigation.** Confirm configured HTTPS origin, save one Orbit and explicit global/Orbit defaults and exclusions before any connector or sync; implement URL routing and decide live transport. Preserve the sample shell separately. Local checks and CI setup persistence/security gates apply.
 2. **Google OAuth.** User-supplied app credentials, bound state and PKCE, secure callback continuation, exact redirect, and setup-completion gate. No content sync until a backfill window is chosen.
+
 3. **Isolated MIME and Gmail sync/live updates.** Bounded parser, initial and incremental sync, idempotent cursors, policy gates, polling or Pub/Sub pull, and the selected SSE stream.
 4. **Mail reading and safe display.** Threads, labels, subject search, safe HTML with remote-image proxy and keyboard navigation.
 5. **Compose, actions and integrated acceptance.** Draft, reply and send with unknown-outcome handling, restart and reliability tests, Compose integration and Playwright gates. Split further as needed for bounded review.
+
+M1.1 was accepted with local checks and Ubuntu CI runtime gates on 2026-10-19 (commit `9d8a482`, run `39354841946`). M1.2a backend and fixture work is in implementation review; the Google setup UI and browser flow are a separate bounded M1.2b handoff. M1.2 remains incomplete until both pass.
 
 - Decide client routing and live-update transport before implementing Mail deep links and live sync events.
 - Data model for accounts, Orbits, threads, items, people, labels, attachments.

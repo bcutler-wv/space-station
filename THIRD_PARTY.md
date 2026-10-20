@@ -107,3 +107,14 @@ Checked pinned npm metadata, installed license text, and upstream documentation/
 ## Adopted in M1.1
 
 Checked the current TanStack Router quickstart, upstream repository and release, and installed license text on 2026-10-19. The pinned package is `@tanstack/react-router` 1.170.41, MIT, from https://github.com/TanStack/router; its installed LICENSE SHA-256 prefix is `a405ee70c632`. It provides URL navigation and deep links. The router brings in `isbot` 5.2.2 from https://github.com/omrilotan/isbot. Its installed LICENSE is the Unlicense public-domain dedication; the license gate permits this exact package/version, rather than allowing the license family broadly. No upstream source code was copied.
+
+## Adopted in M1.2a
+
+On 2026-10-19, checked the current package releases, installed TypeScript APIs, package manifests, and official upstream source/documentation. The exact versions below are pinned in `pnpm-lock.yaml`. Both declare Apache-2.0; the auth package includes a LICENSE file, while the Gmail API package omits one from its tarball but its upstream repository carries Apache-2.0. No provider source was copied. `google-auth-library-nodejs` is archived because its source moved into the Google Node repositories; the npm package remains published and documented.
+
+| Package/version | Upstream repository | License evidence | Use |
+|---|---|---|---|
+| google-auth-library 11.3.1 | https://github.com/googleapis/google-cloud-node/tree/main/core/packages/google-auth-library-nodejs | Apache-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | OAuth2Client web flow, official PKCE S256, token exchange |
+| @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail `users.getProfile` account identity |
+
+The Google SDK dependency tree includes `url-template` 2.0.8 from https://github.com/bramstein/url-template. Its npm manifest says `BSD` without a precise SPDX identifier; the installed LICENSE has the three-clause BSD text (SHA-256 prefix `70723b90e3f2`). The license gate allows only this exact package/version as a reviewed exception.

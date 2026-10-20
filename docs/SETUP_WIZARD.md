@@ -19,8 +19,8 @@ Every provider step has numbered instructions, a screenshot or short clip per st
 
 ### Google
 1. Create a Google Cloud project.
-2. Enable the Gmail API and Google Calendar API (and Pub/Sub, optional, for push).
-3. Configure the consent screen: Internal for Workspace. For personal Gmail: External, then publish to production. Explain the 7-day token expiry in Testing mode and the one-time "unverified app" warning.
+2. Enable the Gmail API. Calendar and Pub/Sub setup belong to later connector steps.
+3. Configure the consent screen audience for the intended account. Explain that External Testing refresh grants generally expire after seven days, that Internal and personal-use verification exceptions may apply, and that publishing or verification requirements depend on Google's current policy. Link the official guidance.
 4. Create an OAuth client (web application) with the redirect URI shown.
 5. Paste the client ID and secret, then sign in with Google.
 

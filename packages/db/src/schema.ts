@@ -109,3 +109,63 @@ export const exclusionRules = pgTable('exclusion_rules', {
   check('exclusion_rules_effect', sql`${table.effect} in ('no_ai', 'no_index', 'no_ai_and_no_index')`),
   uniqueIndex('exclusion_rules_unique').on(sql`coalesce(${table.orbitId}, '')`, table.kind, table.value, table.effect),
 ]);
+
+export const oauthApps = pgTable('oauth_apps', {
+  id: text('id').primaryKey(),
+  provider: text('provider').notNull(),
+  ownerId: text('owner_id').notNull().references(() => users.id),
+  clientId: text('client_id').notNull(),
+  encryptedClientSecret: text('encrypted_client_secret').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [check('oauth_apps_provider', sql`${table.provider} in ('google')`)]);
+
+export const accounts = pgTable('accounts', {
+  id: text('id').primaryKey(),
+  provider: text('provider').notNull(),
+  appId: text('app_id').notNull().references(() => oauthApps.id),
+  orbitId: text('orbit_id').notNull().references(() => orbits.id),
+  email: text('email').notNull(),
+  encryptedRefreshToken: text('encrypted_refresh_token').notNull(),
+  encryptedAccessToken: text('encrypted_access_token').notNull(),
+  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+  grantedScopes: text('granted_scopes').array().notNull(),
+  backfill: text('backfill'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('accounts_provider_email_unique').on(table.provider, sql`lower(${table.email})`),
+  check('accounts_provider', sql`${table.provider} in ('google')`),
+  check('accounts_backfill_choice', sql`${table.backfill} is null or ${table.backfill} in ('30_days', '1_year', 'all')`),
+]);
+
+export const oauthAttempts = pgTable('oauth_attempts', {
+  id: text('id').primaryKey(),
+  provider: text('provider').notNull(),
+  appId: text('app_id').notNull().references(() => oauthApps.id),
+  stateHash: text('state_hash').notNull(),
+  sessionHash: text('session_hash').notNull(),
+  authGeneration: integer('auth_generation').notNull(),
+  encryptedVerifier: text('encrypted_verifier').notNull(),
+  encryptedCode: text('encrypted_code'),
+  status: text('status').notNull().default('started'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('oauth_attempt_state_unique').on(table.stateHash),
+  check('oauth_attempt_provider', sql`${table.provider} in ('google')`),
+  check('oauth_attempt_status', sql`${table.status} in ('started', 'returned', 'claimed', 'completed', 'failed')`),
+]);
+
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey(),
+  actorId: text('actor_id').notNull().references(() => users.id),
+  action: text('action').notNull(),
+  targetId: text('target_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check('audit_log_action', sql`${table.action} in ('connect_account')`),
+]);
