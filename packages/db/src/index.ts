@@ -2,3 +2,4 @@ export { settings, users, bootstrapTokens, authCredentials, recoveryCodes, sessi
 export { loadRuntimeConfig, databaseUrl, type RuntimeConfig } from './config.js';
 export { migrateDatabase } from './migrate.js';
 export { openDatabase } from './connection.js';
+export { PrivateBlobStore } from './private-blob-store.js';

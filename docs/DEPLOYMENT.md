@@ -33,6 +33,8 @@ Compose binds the app to `127.0.0.1` by default. A reverse proxy on another host
 
 `migrate` is a one-shot service. It takes an advisory lock, enables pgvector, applies generated Drizzle migrations, and prepares pg-boss. App and worker start only after it succeeds. On updates, rebuild and run `migrate` before starting the app and worker, as in the commands above. Run `docker compose up -d --force-recreate migrate` explicitly if a migration must be retried without an image change. A failed migration blocks app and worker startup.
 
+`blob-init` is a separate one-shot service that creates the `private_blobs` named volume directory as `root:APP_GID` with mode `2770`. It receives only `APP_GID` and no database or encryption secrets. The app runs as `APP_UID:APP_GID`; the worker remains UID 1000 and joins `APP_GID` as a supplementary group. Both can read and write private files, including when the host uses `APP_UID=1001` and `APP_GID=1001`. The MIME parser cannot mount the volume. Back up this named volume with the database and master key. Do not change ownership or permissions broadly on the host.
+
 The worker health check requires a live pg-boss heartbeat from this container with the probe consumer registered, then verifies that the consumer completes a fresh probe within ten seconds. A stopped or stalled consumer becomes unhealthy. Completed probe jobs are retained for one hour. CI also queues a probe while the worker is stopped and verifies that the worker completes it after restart.
 
 ## Reverse proxy

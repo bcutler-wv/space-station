@@ -48,6 +48,7 @@ M0.4 requires an exact configured HTTPS `APP_ORIGIN` for state-changing requests
 - Losing the master key means re-connecting every account. The docs and the wizard say this plainly.
 - Secrets are never logged. Logs redact tokens, addresses in query strings, and message bodies.
 - Mail bodies, attachments, metadata, and indexes are sensitive even though application-level encryption covers credentials only. Limit volume permissions and encrypt backups/storage where the host supports it; test restore without printing private content.
+- The private blob store accepts at most 16 MiB per file, uses generated keys only, rejects symlinks at its configured root and on reads, and publishes by exclusive hard link after syncing a private temporary file. The configured root's ancestors must be administrator-owned and trusted; the Compose mount satisfies this. It does not expose paths to the browser. This bound does not raise the parser's lower MIME and decoded-attachment limits. The volume is writable only by the app group; the parser has no mount. Containers sharing this group are trusted with blob contents.
 
 ## Privacy precedence and retention
 

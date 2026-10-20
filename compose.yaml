@@ -27,9 +27,21 @@ services:
       APP_TRUSTED_PROXY_IP: ${APP_TRUSTED_PROXY_IP:-}
       APP_HOST: 0.0.0.0
       DB_HOST: postgres
+      PRIVATE_BLOB_DIR: /var/lib/station/blobs
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  blob-init:
+    build: .
+    user: "0:0"
+    entrypoint: ["sh", "-eu", "-c"]
+    command: ["case \"$$BLOB_GID\" in *[!0-9]*|'') exit 1;; esac; install -d -m 2770 -o 0 -g \"$$BLOB_GID\" /var/lib/station/blobs; chown 0:\"$$BLOB_GID\" /var/lib/station/blobs; chmod 2770 /var/lib/station/blobs"]
+    environment:
+      BLOB_GID: ${APP_GID:-1000}
+    volumes:
+      - private_blobs:/var/lib/station/blobs
     restart: "no"
 
   app:
@@ -38,10 +50,13 @@ services:
     environment: *runtime_env
     volumes:
       - ./.cache/tls:/run/tls:ro
+      - private_blobs:/var/lib/station/blobs
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      blob-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "const s=process.env.APP_TLS_CERT_PATH?'https':'http';require(s).get(s+'://127.0.0.1:8080/ready',{rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
@@ -54,11 +69,17 @@ services:
     build: .
     command: ["node", "apps/worker/dist/main.js"]
     environment: *runtime_env
+    group_add:
+      - "${APP_GID:-1000}"
+    volumes:
+      - private_blobs:/var/lib/station/blobs
     networks:
       - default
       - mail_parser
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      blob-init:
         condition: service_completed_successfully
       mime-parser:
         condition: service_healthy
@@ -98,3 +119,4 @@ networks:
 
 volumes:
   postgres_data:
+  private_blobs:

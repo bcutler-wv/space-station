@@ -37,6 +37,7 @@ Settle evaluated choices before implementing the feature that uses them. M0.3 re
 ```
 
 - **app** serves the built web client and the API. Stateless.
+- **app** and **worker** share the `private_blobs` named volume for future sanitized HTML bodies and attachments. `mime-parser` has no access to it. The `blob-init` one-shot service only provisions its directory and receives no runtime secrets.
 - **worker** runs sync, MIME parsing, indexing, embedding, rules, and AI extraction from the job queue. It can run as several processes. MIME parsing runs in a separate process/container with hard memory, CPU, input-size, and wall-clock limits. Node worker-thread `resourceLimits` do not cap external buffers.
 - **mime-parser** is an internal-only service shared with the worker. It receives raw RFC822 bytes at a fixed address, spawns one killable child per request, and returns a bounded schema. Its service container has cgroup memory/CPU and PID limits, an unprivileged read-only filesystem, and no runtime secrets or persistent mounts. It has no published port and no outbound provider network. The worker may use the parser only after privacy gating.
   The same child now sanitizes decoded HTML with DOMPurify and jsdom before returning it. It returns policy-versioned HTML and inert image placeholders plus separately bounded image metadata. It never returns raw HTML. The reader must re-sanitize with the shared policy before display; image proxying and rendering remain later work.

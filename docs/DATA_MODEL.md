@@ -63,6 +63,7 @@ Identity resolution matches by email address automatically. Anything else is mer
 | `outbound_operations` | id, draft_id, account_id, kind, idempotency_key, state (pending, in_flight, succeeded, failed, outcome_unknown), provider_request_id, provider_result_id, attempt_count, last_error, user_action_at, completed_at. Unique idempotency key. |
 
 HTML bodies are stored as files, not in the database, and are always sanitized again at render time.
+The private file store uses random immutable keys (`b_` followed by 64 lowercase hex characters) for `body_html_path` and `storage_path`; filenames and provider IDs never become paths. Future sync must write the file before committing its database reference and delete newly written, unreferenced files after a failed transaction. A crash can leave an unreferenced published file or a hidden temporary file. No age-only cleanup runs while writers may be active. Once references exist, an orphan collector must compare against database references and coordinate with in-flight writes before deleting anything. Blob deletion after a committed item deletion is a separate retryable step.
 
 ## Calendar
 
