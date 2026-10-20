@@ -51,6 +51,9 @@ jobs:
       - run: docker compose exec -T postgres createdb -U station station_google_test
       - run: docker compose run --rm -T -e DB_NAME=station_google_test migrate
       - run: docker compose run --rm -T --no-deps -e DB_NAME=station_google_test app node tests/integration/google-db.mjs
+      - run: docker compose exec -T postgres createdb -U station station_mail_page_test
+      - run: docker compose run --rm -T -e DB_NAME=station_mail_page_test migrate
+      - run: docker compose run --rm -T --no-deps -e DB_NAME=station_mail_page_test app node tests/integration/mail-page-db.mjs
       - run: docker compose exec -T postgres createdb -U station station_google_browser_test
       - run: docker compose run --rm -T -e DB_NAME=station_google_browser_test migrate
       - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_google_browser_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/google-browser-token

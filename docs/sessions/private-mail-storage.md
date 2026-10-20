@@ -9,3 +9,5 @@ Astra review reproduced concurrent deletion failures and a trailing-slash bypass
 The storage contract now explicitly defers crash-orphan deletion until database references and coordination with in-flight writers exist. No age-only cleanup can remove an active write. Root ancestors are trusted administrator paths; containers sharing the volume group are trusted with its contents. Keep the configured group stable until an ownership migration is planned.
 
 Prior credential refresh, reconnect and parser capacity work passed all gates in Ubuntu run `39476144537` on `357bb4f`. Gmail sync and reading remain pending.
+
+Ubuntu CI run `39477808140` on commit `8f33cb5` passed all gates, including shared volume permissions across app UID 1001 and worker UID 1000, restart persistence, parser isolation and existing authentication/Google browser regressions. The storage foundation is runtime-accepted.

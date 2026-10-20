@@ -7,6 +7,9 @@ import {
   boolean,
   check,
   uniqueIndex,
+  unique,
+  foreignKey,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from 'drizzle-orm';
 
@@ -172,3 +175,127 @@ export const auditLog = pgTable('audit_log', {
 }, (table) => [
   check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account')`),
 ]);
+
+// Mail keys include the account and provider collection at every relationship boundary.
+export const syncStates = pgTable('sync_state', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  resource: text('resource').notNull(), collectionId: text('collection_id').notNull(),
+  cursor: jsonb('cursor'), generation: integer('generation').notNull().default(0),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  status: text('status').notNull().default('idle'), lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+  lastError: text('last_error'), sequence: integer('sequence').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('sync_state_account_collection_unique').on(t.accountId, t.resource, t.collectionId),
+  unique('sync_state_id_account_unique').on(t.id, t.accountId),
+  check('sync_state_resource_mail', sql`${t.resource} = 'mail'`)]);
+
+export const syncPages = pgTable('sync_pages', {
+  id: text('id').primaryKey(), stateId: text('state_id').notNull().references(() => syncStates.id),
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  pageId: text('page_id').notNull(), pageDigest: text('page_digest').notNull(), sequence: integer('sequence').notNull(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('sync_pages_replay_unique').on(t.stateId, t.pageId),
+  foreignKey({ columns: [t.stateId, t.accountId], foreignColumns: [syncStates.id, syncStates.accountId] })]);
+
+export const people = pgTable('people', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  displayName: text('display_name').notNull(), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [unique('people_id_account_unique').on(t.id, t.accountId)]);
+
+export const identities = pgTable('identities', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  personId: text('person_id').notNull(), provider: text('provider').notNull(), kind: text('kind').notNull(),
+  normalizedValue: text('normalized_value').notNull(), verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [foreignKey({ columns: [t.personId, t.accountId], foreignColumns: [people.id, people.accountId] }),
+  uniqueIndex('identities_namespace_unique').on(t.accountId, t.provider, t.kind, t.normalizedValue),
+  unique('identities_id_account_unique').on(t.id, t.accountId),
+  check('identities_email_only', sql`${t.kind} = 'email'`)]);
+
+export const threads = pgTable('threads', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  collectionId: text('collection_id').notNull(), externalId: text('external_id').notNull(),
+  subject: text('subject'), lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('threads_source_unique').on(t.accountId, t.collectionId, t.externalId),
+  unique('threads_id_scope_unique').on(t.id, t.accountId, t.collectionId)]);
+
+export const items = pgTable('items', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  collectionId: text('collection_id').notNull(), threadId: text('thread_id').notNull(),
+  externalId: text('external_id').notNull(), providerRevision: text('provider_revision'),
+  appliedSequence: integer('applied_sequence').notNull(), direction: text('direction').notNull(),
+  directionProvenance: text('direction_provenance').notNull(), fromPersonId: text('from_person_id'),
+  senderIdentitiesComplete: boolean('sender_identities_complete').notNull().default(false),
+  sentAt: timestamp('sent_at', { withTimezone: true }), receivedAt: timestamp('received_at', { withTimezone: true }),
+  internalAt: timestamp('internal_at', { withTimezone: true }), subject: text('subject'), snippet: text('snippet'),
+  bodyText: text('body_text'), bodyHtmlPath: text('body_html_path'), htmlPolicyVersion: integer('html_policy_version'),
+  imageMetadata: jsonb('image_metadata'), flags: jsonb('flags').notNull().default({}),
+  parseStatus: text('parse_status').notNull(), parseFailureCode: text('parse_failure_code'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('items_source_unique').on(t.accountId, t.collectionId, t.externalId),
+  unique('items_id_account_unique').on(t.id, t.accountId),
+  foreignKey({ columns: [t.threadId, t.accountId, t.collectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
+  foreignKey({ columns: [t.fromPersonId, t.accountId], foreignColumns: [people.id, people.accountId] }),
+  foreignKey({ columns: [t.bodyHtmlPath, t.accountId], foreignColumns: [blobIntents.key, blobIntents.accountId] }),
+  check('items_direction', sql`${t.direction} in ('in', 'out')`),
+  check('items_direction_provenance', sql`${t.directionProvenance} in ('incoming', 'provider_sent_account')`),
+  check('items_parse_status', sql`${t.parseStatus} in ('supported', 'unsupported', 'deleted')`),
+  check('items_parse_failure_code', sql`${t.parseFailureCode} is null or ${t.parseFailureCode} in ('input_too_large', 'limit_exceeded', 'malformed')`)]);
+
+export const itemRecipients = pgTable('item_recipients', {
+  itemId: text('item_id').notNull(), accountId: text('account_id').notNull(),
+  identityId: text('identity_id').notNull(), role: text('role').notNull(),
+}, (t) => [primaryKey({ columns: [t.itemId, t.identityId, t.role] }),
+  foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
+  foreignKey({ columns: [t.identityId, t.accountId], foreignColumns: [identities.id, identities.accountId] }),
+  check('item_recipients_role', sql`${t.role} in ('sender', 'reply_to', 'to', 'cc', 'bcc')`)]);
+
+export const labels = pgTable('labels', {
+  id: text('id').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  providerRef: text('provider_ref').notNull(), name: text('name').notNull(), color: text('color'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('labels_provider_unique').on(t.accountId, t.providerRef),
+  unique('labels_id_account_unique').on(t.id, t.accountId)]);
+
+export const itemLabels = pgTable('item_labels', {
+  itemId: text('item_id').notNull(), accountId: text('account_id').notNull(),
+  labelId: text('label_id').notNull(), source: text('source').notNull(),
+}, (t) => [primaryKey({ columns: [t.itemId, t.labelId, t.source] }),
+  foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
+  foreignKey({ columns: [t.labelId, t.accountId], foreignColumns: [labels.id, labels.accountId] }),
+  check('item_labels_source', sql`${t.source} in ('provider', 'rule', 'ai', 'user')`)]);
+
+export const itemOrbits = pgTable('item_orbits', {
+  itemId: text('item_id').notNull().references(() => items.id),
+  orbitId: text('orbit_id').notNull().references(() => orbits.id), reason: text('reason').notNull(),
+}, (t) => [primaryKey({ columns: [t.itemId, t.orbitId, t.reason] }),
+  check('item_orbits_reason', sql`${t.reason} in ('account', 'rule', 'person', 'org')`)]);
+
+export const blobIntents = pgTable('blob_intents', {
+  key: text('key').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id),
+  stateId: text('state_id').notNull().references(() => syncStates.id),
+  pageId: text('page_id').notNull(), leaseGeneration: integer('lease_generation').notNull(),
+  credentialGeneration: integer('credential_generation').notNull(), expectedSequence: integer('expected_sequence').notNull(),
+  state: text('state').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  committedAt: timestamp('committed_at', { withTimezone: true }),
+}, (t) => [check('blob_intents_state', sql`${t.state} in ('pending', 'referenced', 'delete_pending')`),
+  foreignKey({ columns: [t.stateId, t.accountId], foreignColumns: [syncStates.id, syncStates.accountId] }),
+  unique('blob_intents_key_account_unique').on(t.key, t.accountId)]);
+
+export const attachments = pgTable('attachments', {
+  id: text('id').primaryKey(), itemId: text('item_id').notNull(), accountId: text('account_id').notNull(),
+  ordinal: integer('ordinal').notNull(), filename: text('filename'), mimeType: text('mime_type').notNull(),
+  disposition: text('disposition'), contentId: text('content_id'), related: boolean('related').notNull().default(false),
+  size: integer('size').notNull(), storagePath: text('storage_path').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('attachments_item_ordinal_unique').on(t.itemId, t.ordinal),
+  foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
+  foreignKey({ columns: [t.storagePath, t.accountId], foreignColumns: [blobIntents.key, blobIntents.accountId] })]);

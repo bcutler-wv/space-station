@@ -26,6 +26,25 @@ describe('PrivateBlobStore', () => {
     await expect(store.read(key)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('accepts only generated reserved keys and never replaces a publication', async () => {
+    const store = new PrivateBlobStore(root);
+    const key = PrivateBlobStore.generateKey();
+    await store.writeReserved(key, Buffer.from('first'));
+    await expect(store.writeReserved(key, Buffer.from('second'))).rejects.toMatchObject({ code: 'EEXIST' });
+    expect((await store.read(key)).toString()).toBe('first');
+    await expect(store.writeReserved('../unsafe', Buffer.from('x'))).rejects.toThrow('Invalid blob key');
+    await store.deleteTemporary(key);
+  });
+  it('removes only the crashed temporary file for one reserved key', async () => {
+    const store = new PrivateBlobStore(root);
+    const crashed = PrivateBlobStore.generateKey();
+    const other = PrivateBlobStore.generateKey();
+    await writeFile(path.join(root, `.tmp-${crashed}`), 'partial');
+    await writeFile(path.join(root, `.tmp-${other}`), 'other partial');
+    await store.deleteTemporary(crashed);
+    expect(await readdir(root)).toEqual([`.tmp-${other}`]);
+  });
+
   it('rejects traversal and symlink targets', async () => {
     const store = new PrivateBlobStore(root);
     for (const key of ['../outside', '/etc/passwd', 'b_ABC', `b_${'a'.repeat(64)}/other`]) {

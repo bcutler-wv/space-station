@@ -3,7 +3,10 @@ import type { ExclusionRule, PrivacyDefaults } from './setup.js';
 export interface PrivacyItem {
   account: string;
   sender: string;
+  senderIdentities?: readonly string[];
+  unresolvedSenders?: boolean;
   labels: readonly string[];
+  unresolvedLabels?: boolean;
   orbitIds: readonly string[];
 }
 export interface ScopedPrivacyRule extends ExclusionRule {
@@ -14,7 +17,7 @@ function matches(rule: ScopedPrivacyRule, item: PrivacyItem): boolean {
   if (rule.scope === 'orbit' && (!rule.orbitId || !item.orbitIds.includes(rule.orbitId))) return false;
   const value = rule.value.trim().toLowerCase();
   if (rule.kind === 'account') return item.account.toLowerCase() === value;
-  if (rule.kind === 'sender') return item.sender.toLowerCase() === value;
+  if (rule.kind === 'sender') return [item.sender, ...(item.senderIdentities ?? [])].some((sender) => sender.toLowerCase() === value);
   return item.labels.some((label) => label.toLowerCase() === value);
 }
 
@@ -24,8 +27,8 @@ export function evaluatePrivacy(
   orbitDefaults: ReadonlyMap<string, PrivacyDefaults>,
   rules: readonly ScopedPrivacyRule[],
 ) {
-  let canIndex = item.orbitIds.length > 0 && globalDefaults.index === 'allow';
-  let canUseAi = item.orbitIds.length > 0 && globalDefaults.ai === 'allow';
+  let canIndex = item.orbitIds.length > 0 && !item.unresolvedLabels && !item.unresolvedSenders && globalDefaults.index === 'allow';
+  let canUseAi = item.orbitIds.length > 0 && !item.unresolvedLabels && !item.unresolvedSenders && globalDefaults.ai === 'allow';
   for (const orbitId of item.orbitIds) {
     const defaults = orbitDefaults.get(orbitId);
     // Missing policy is restrictive, including while setup is incomplete.

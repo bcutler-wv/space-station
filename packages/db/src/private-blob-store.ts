@@ -30,11 +30,21 @@ export class PrivateBlobStore {
     return path.join(this.root, key);
   }
 
+  static generateKey(): string { return `b_${randomBytes(32).toString('hex')}`; }
+
   async write(bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+    const key = PrivateBlobStore.generateKey();
+    await this.writeReserved(key, bytes, signal);
+    return key;
+  }
+
+  // The caller must first commit a blob_intents row, then hold its row lock
+  // through this write. That makes crash cleanup safe against active writers.
+  async writeReserved(key: string, bytes: Uint8Array, signal?: AbortSignal): Promise<void> {
     if (!(bytes instanceof Uint8Array) || bytes.byteLength > this.maxBytes) throw new Error('Blob exceeds byte limit');
+    this.file(key);
     const directory = await this.directory();
-    const key = `b_${randomBytes(32).toString('hex')}`;
-    const temporary = path.join(this.root, `.tmp-${randomBytes(32).toString('hex')}`);
+    const temporary = path.join(this.root, `.tmp-${key}`);
     let created = false;
     try {
       signal?.throwIfAborted();
@@ -56,7 +66,7 @@ export class PrivateBlobStore {
       // Hard link publication is atomic and fails if an immutable key already exists.
       await link(temporary, this.file(key));
       await directory.sync();
-      return key;
+      return;
     } finally {
       try {
         if (created) await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
@@ -66,6 +76,23 @@ export class PrivateBlobStore {
         await directory.close();
       }
     }
+  }
+
+  async deleteTemporary(key: string): Promise<void> {
+    this.file(key);
+    const directory = await this.directory();
+    try {
+      const filename = path.join(this.root, `.tmp-${key}`);
+      const info = await lstat(filename).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (info) {
+        if (!info.isFile() || info.isSymbolicLink()) throw new Error('Temporary blob is not a regular file');
+        await unlink(filename);
+      }
+      await directory.sync();
+    } finally { await directory.close(); }
   }
 
   async read(key: string): Promise<Buffer> {

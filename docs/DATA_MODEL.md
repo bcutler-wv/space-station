@@ -1,6 +1,6 @@
 # Data model
 
-PostgreSQL with Drizzle. This lists the tables and the fields that matter. Future mutable domain tables use `created_at` and `updated_at`. M0.4 authentication records instead carry purpose-specific timestamps: owner and credentials have `created_at`; bootstrap tokens and challenges have `expires_at` and `consumed_at`; recovery codes have `used_at`; sessions have `created_at`, `last_seen_at`, and `revoked_at`. These timestamps record security events and expiry without an ambiguous blanket `updated_at`. M1.2a adds Google authorization records; the connection UI and content sync are not implemented yet.
+PostgreSQL with Drizzle. This lists the tables and the fields that matter. Future mutable domain tables use `created_at` and `updated_at`. M0.4 authentication records instead carry purpose-specific timestamps: owner and credentials have `created_at`; bootstrap tokens and challenges have `expires_at` and `consumed_at`; recovery codes have `used_at`; sessions have `created_at`, `last_seen_at`, and `revoked_at`. These timestamps record security events and expiry without an ambiguous blanket `updated_at`. M1.2a adds Google authorization records. M1.3 persistence adds normalized mail tables and a worker page transaction; provider sync and reading are separate tasks.
 
 ## Identity and settings
 
@@ -23,7 +23,8 @@ PostgreSQL with Drizzle. This lists the tables and the fields that matter. Futur
 | `accounts` | id, provider (`google`), app_id, orbit_id, normalized email, encrypted_refresh_token, encrypted_access_token, access_token_expires_at, granted_scopes (text[]), nullable backfill (`30_days`, `1_year`, `all`), revoked_at, credential_generation, credential_lease_until, created_at, updated_at. Unique by provider and case-insensitive email. A confirmed reconnection replaces encrypted credentials on the same row, increments the generation, and preserves the Orbit and backfill choice. `revoked_at` records a permanent refresh or scope failure that needs reconnection. Future provider/kind, display, status and Slack fields remain planned. |
 | `oauth_apps` | M1.2a: id, provider (`google`), owner_id, client_id, encrypted_client_secret, exact redirect_uri, created_at, updated_at. Future Microsoft/Slack providers and client-secret expiry fields remain planned. |
 | `oauth_attempts` | id, provider (`google`), app_id, unique SHA-256 state_hash, initiating session_hash, auth_generation, encrypted_verifier, nullable encrypted_code, nullable reconnect_account_id, status (`started`, `returned`, `claimed`, `completed`, `failed`), expires_at, created_at, updated_at. The ten-minute callback/confirmation window is single-use. A reconnect target is fixed before redirect and cannot be changed at confirmation. Three active attempts per owner session are allowed. Terminal failures clear temporary ciphertext; periodic/start cleanup deletes expired attempts and app rows without a linked account. |
-| `sync_state` | account_id, resource and provider collection ID, cursor (jsonb), generation, status, last_success_at, last_error. Unique per source collection. |
+| `sync_state` | id, account_id, resource, collection_id, cursor, generation, lease_until, sequence, status, last_success_at, last_error. Unique per source collection. |
+| `sync_pages` | state_id, account_id, stable page_id, content digest, sequence, applied_at. Unique by state/page ID for replay. |
 | `sync_runs` | id, sync_state_id, started_at, finished_at, status, retry_count, error_class, cursor_before, cursor_after |
 | `routing_rules` | id, orbit_id, match (jsonb: person, org, domain, label, keyword) |
 | `exclusion_rules` | M1.1: id, nullable orbit_id (null means global), kind (account, sender, label), normalized exact value, effect (no_ai, no_index, no_ai_and_no_index), created_at, updated_at. |
@@ -40,8 +41,8 @@ Global exclusions and every matching Orbit's AI/index policy compose by **most r
 
 | Table | Key fields |
 |---|---|
-| `people` | id, display_name, org_id, primary_orbit_id, notes |
-| `identities` | id, person_id, provider, kind (email, slack_user, teams_user), normalized_value, account_id or workspace/tenant ID, verified_at. Unique within the provider namespace and account/workspace/tenant; the same opaque ID may exist elsewhere. |
+| `people` | M1.3: id, account_id, display_name, timestamps. Organization and manual merging follow in M3. |
+| `identities` | M1.3: id, account_id, person_id, provider, kind (`email`), normalized_value, verified_at. Unique within provider/account. Different accounts never merge automatically. |
 | `orgs` | id, name, domains (text[]), primary_orbit_id |
 | `aliases` | entity_kind, entity_id, alias. "the sand supplier" points at an org. |
 
@@ -51,19 +52,22 @@ Identity resolution matches by email address automatically. Anything else is mer
 
 | Table | Key fields |
 |---|---|
-| `threads` | id, account_id, provider_collection_id, external_id, kind (email, slack_thread, teams_chat, channel), subject, last_activity_at. Unique by account, collection, external ID. |
-| `items` | id, account_id, provider_collection_id, thread_id, external_id, provider_revision, kind (email, chat), direction (in, out), from_person_id, sent_at, subject, snippet, body_text, body_html_path, is_bulk, flags (jsonb: read, starred, archived), extraction_status, deleted_at. Unique by account, collection, external ID. |
-| `item_recipients` | item_id, person_id, role (to, cc, bcc, mention) |
+| `threads` | M1.3: id, account_id, collection_id, external_id, subject, last_activity_at. Unique by account, collection, external ID. Other kinds follow their connector milestones. |
+| `items` | M1.3: id, account_id, collection_id, thread_id, external_id, opaque text provider_revision, applied_sequence, direction/provenance, from_person_id, untrusted header sent_at, provider internal_at, received_at, subject, snippet, body_text, body_html_path, HTML policy version and image metadata, sender-identity completeness, flags, parse status/failure code, deleted_at. Unique by account, collection, external ID. Bulk and extraction follow later. |
+| `item_recipients` | M1.3: item_id, account_id, identity_id, role (sender, reply_to, to, cc, bcc). Every parsed sender identity is retained. Composite foreign keys enforce the same account. |
 | `item_orbits` | item_id, orbit_id, reason (account, rule, person, org) |
 | `labels` | id, account_id, name, color, provider_ref |
 | `item_labels` | item_id, label_id, source (provider, rule, ai, user) |
-| `attachments` | id, item_id, filename, mime_type, size, storage_path, extracted_text, ocr_used |
+| `attachments` | M1.3: id, item_id, account_id, ordinal, safe display filename, mime_type, disposition, content_id, related flag, size, storage_path. Extraction and OCR follow later. |
+| `blob_intents` | M1.3: generated key, account and page owner/fence, pending/referenced/delete_pending state, timestamps. Durable ownership exists before immutable publication. |
 | `item_chunks` | item_id, chunk_index, text, embedding (vector) |
 | `drafts` | id, account_id, thread_id, provider_draft_id, to/cc/bcc, subject, body, attachment_refs, revision, state (editing, queued, sent, discarded), updated_at |
 | `outbound_operations` | id, draft_id, account_id, kind, idempotency_key, state (pending, in_flight, succeeded, failed, outcome_unknown), provider_request_id, provider_result_id, attempt_count, last_error, user_action_at, completed_at. Unique idempotency key. |
 
 HTML bodies are stored as files, not in the database, and are always sanitized again at render time.
-The private file store uses random immutable keys (`b_` followed by 64 lowercase hex characters) for `body_html_path` and `storage_path`; filenames and provider IDs never become paths. Future sync must write the file before committing its database reference and delete newly written, unreferenced files after a failed transaction. A crash can leave an unreferenced published file or a hidden temporary file. No age-only cleanup runs while writers may be active. Once references exist, an orphan collector must compare against database references and coordinate with in-flight writes before deleting anything. Blob deletion after a committed item deletion is a separate retryable step.
+The private file store uses random immutable keys (`b_` followed by 64 lowercase hex characters) for `body_html_path` and `storage_path`; filenames and provider IDs never become paths. M1.3 page application commits each blob intent before writing, holds its row lock while publishing, then locks and checks the intent and file inside the page transaction before referencing it. Temporary names include the intent key. The bounded collector skips pending intents while their owning lease and fences remain live, locks stale intents, checks item and attachment references, then deletes the published and temporary files. Tombstones remove read eligibility and references in the page transaction; physical deletion is retryable later. Collector scheduling belongs to the later sync runner task.
+
+The page application caps an entire prepared page at 24 MiB and 100,000 structural nodes before schema cloning, hashing, database access, or staging. Cursor JSON is limited to 16 KiB, 256 nodes, and depth eight; each item has at most 32 flags. A page ID binds the cursor and source changes through a digest. Random HTML image reference IDs are canonicalized by image order while the safe image destinations and attachment bytes remain bound. `received_at` records local observation time and is excluded from replay identity; `internal_at` is stable provider metadata and participates. An unresolved label name clears the shared label resolution and denies indexing and AI until a later resolved update. Crashed temporary files use one deterministic name per intent key, so cleanup addresses that file directly without a directory scan.
 
 ## Calendar
 

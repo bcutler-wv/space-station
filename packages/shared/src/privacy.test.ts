@@ -23,4 +23,9 @@ describe('privacy policy', () => {
     expect(evaluateAttachmentPrivacy(result)).toEqual(result);
     expect(evaluatePrivacy({ ...item, sender: 'not-sender@example.com', account: 'other@example.com', labels: ['Insensitives'] }, allow, new Map([['work', allow], ['shared', allow]]), rules)).toEqual({ canIndex: true, canUseAi: true, canEmbed: true });
   });
+  it('considers every sender identity and denies unresolved label names', () => {
+    const rules: ScopedPrivacyRule[] = [{ scope: 'global', orbitId: null, kind: 'sender', value: 'other@example.com', effect: 'no_ai' }];
+    expect(evaluatePrivacy({ ...item, senderIdentities: ['other@example.com'] }, allow, new Map([['work', allow], ['shared', allow]]), rules).canUseAi).toBe(false);
+    expect(evaluatePrivacy({ ...item, unresolvedLabels: true }, allow, new Map([['work', allow], ['shared', allow]]), []).canIndex).toBe(false);
+  });
 });
