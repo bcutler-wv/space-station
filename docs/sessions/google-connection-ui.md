@@ -9,3 +9,5 @@ Local lint, types, 27 unit tests, build, color and license gates pass. The full 
 The fixture runs a separate server entrypoint with the real application, database and authentication and a code-injected Google SDK transport. Production has no provider endpoint override or test authentication bypass. Browser interception supplies a fake Google consent document; no live Google account is used.
 
 Contract clarifications: M3 adds maintained per-step console screenshots/clips to the full wizard. Quantified backfill estimates wait for a provider-backed estimate; the current UI states that wider windows need more time and storage. M1.3 adds refresh/reconnect and ingestion after the saved choice.
+
+CI run `39359509019` passed scaffold, Compose startup, and database security fixtures, then stopped because the browser fixture matched both an input and its Copy button. Exact label matching fixes the redirect and scope selectors; preview assertions exercise both values. Sol local checks and Astra review passed. The HTTPS gate is being rerun.

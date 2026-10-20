@@ -25,6 +25,8 @@ test('direct Google route shows persisted theme, copy fallback, validation and c
   await expect(page.getByRole('heading', { name: 'Connect Google mail' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByText('Orbit: Example work. Gmail mail access is authorized.')).toBeVisible();
+  await expect(page.getByLabel('Authorized redirect URI', { exact: true })).toHaveValue(`${origin}/api/google/callback`);
+  await expect(page.getByLabel('Gmail scope', { exact: true })).toHaveValue('https://www.googleapis.com/auth/gmail.modify');
   await page.getByRole('button', { name: 'Copy Authorized redirect URI' }).click();
   await expect(page.getByText('Value selected. Copy it with your keyboard.')).toBeVisible();
   await page.getByLabel('Web client ID').fill('bad-id');

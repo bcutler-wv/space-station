@@ -40,9 +40,9 @@ try {
   await page.getByRole('link', { name: 'Connect Google mail' }).click();
   await page.getByRole('heading', { name: 'Connect Google mail' }).waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
-  const redirect = await page.getByLabel('Authorized redirect URI').inputValue();
+  const redirect = await page.getByLabel('Authorized redirect URI', { exact: true }).inputValue();
   assert.equal(redirect, `${origin}/api/google/callback`);
-  assert.equal(await page.getByLabel('Gmail scope').inputValue(), 'https://www.googleapis.com/auth/gmail.modify');
+  assert.equal(await page.getByLabel('Gmail scope', { exact: true }).inputValue(), 'https://www.googleapis.com/auth/gmail.modify');
   await capture(page, 'guided-light');
   let returnUrl = '';
   await page.route('https://accounts.google.com/**', async (route) => {
