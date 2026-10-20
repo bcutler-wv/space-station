@@ -1,4 +1,6 @@
 export { PRODUCT_NAME } from "./constants.js";
+export { id, historyId, token, profile, labelPage, messagePage, metadata, minimalMessage, rawMessage, historyPage } from './gmail-read.js';
+export type { GmailProfile, GmailLabelPage, GmailMessagePage, GmailHistoryPage, GmailMessageMetadata } from './gmail-read.js';
 export { MAIL_LIMITS, rawMailSchema, parsedMailSchema, parseErrorCodeSchema, parseResultSchema, type ParseResult } from './mail-parser.js';
 export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
 export { googleStartSchema, googleReconnectStartSchema, googleCallbackSchema, googleBackfillSchema, googleAccountSchema, googleStatusSchema, googleStartResponseSchema, googleOkSchema } from './google.js';

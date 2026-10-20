@@ -97,12 +97,17 @@ export async function refreshGoogleGrant(input: RefreshInput): Promise<{
 export class GoogleCredentialService {
   constructor(private readonly db: Database, private readonly masterKey: Buffer, private readonly transport?: GoogleTransport) {}
 
-  async get(accountId: string): Promise<{ accessToken: string; expiresAt: Date | null }> {
+  async get(accountId: string, rejected?: { generation: number; accessToken: string }): Promise<{ accessToken: string; expiresAt: Date | null; generation: number }> {
     const [account] = await this.db.select().from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.provider, 'google')));
     if (!account) throw new GoogleCredentialError('not_found');
     if (account.revokedAt) throw new GoogleCredentialError('needs_reconnect');
-    if (account.accessTokenExpiresAt && account.accessTokenExpiresAt.getTime() > Date.now() + 60_000)
-      return { accessToken: await this.readAccess(account.encryptedAccessToken, accountId, account.credentialGeneration), expiresAt: account.accessTokenExpiresAt };
+    if (rejected && account.credentialGeneration < rejected.generation)
+      throw new GoogleCredentialError('busy', 1000);
+    if (account.accessTokenExpiresAt && account.accessTokenExpiresAt.getTime() > Date.now() + 60_000) {
+      const accessToken = await this.readAccess(account.encryptedAccessToken, accountId, account.credentialGeneration);
+      if (!rejected || accessToken !== rejected.accessToken)
+        return { accessToken, expiresAt: account.accessTokenExpiresAt, generation: account.credentialGeneration };
+    }
 
     // A reconnect increments the generation and clears this finite lease. No provider
     // request holds a database transaction, and an older response cannot persist.
@@ -113,8 +118,11 @@ export class GoogleCredentialService {
     if (!lease) {
       const [current] = await this.db.select().from(accounts).where(eq(accounts.id, accountId));
       if (current?.revokedAt) throw new GoogleCredentialError('needs_reconnect');
-      if (current?.accessTokenExpiresAt && current.accessTokenExpiresAt.getTime() > Date.now() + 60_000)
-        return { accessToken: await this.readAccess(current.encryptedAccessToken, accountId, current.credentialGeneration), expiresAt: current.accessTokenExpiresAt };
+      if (current && current.accessTokenExpiresAt && current.accessTokenExpiresAt.getTime() > Date.now() + 60_000) {
+        const accessToken = await this.readAccess(current.encryptedAccessToken, accountId, current.credentialGeneration);
+        if (!rejected || accessToken !== rejected.accessToken)
+          return { accessToken, expiresAt: current.accessTokenExpiresAt, generation: current.credentialGeneration };
+      }
       throw new GoogleCredentialError('busy', 1000);
     }
     try {
@@ -136,7 +144,7 @@ export class GoogleCredentialService {
       }).where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, lease.generation), isNull(accounts.revokedAt)))
         .returning({ id: accounts.id });
       if (!saved) throw new GoogleCredentialError('busy', 1000);
-      return { accessToken: fresh.accessToken, expiresAt: fresh.expiresAt };
+      return { accessToken: fresh.accessToken, expiresAt: fresh.expiresAt, generation: lease.generation };
     } catch (error) {
       if (error instanceof GoogleCredentialError && error.code === 'needs_reconnect')
         return this.markNeedsReconnect(accountId, lease.generation);

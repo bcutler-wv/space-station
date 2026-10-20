@@ -88,20 +88,20 @@ Outbound sends and provider changes start from an authenticated user action and 
 
 ## Connector interface
 
-Every source implements the same interface in `packages/connectors`:
+Connector operations are explicit and bounded. The M1 Gmail read adapter returns one validated provider page per call so a durable runner can own the cursor, lease, and transaction:
 
 ```ts
-interface Connector {
-  kind: "gmail" | "graph" | "imap" | "caldav" | "slack" | "teams";
-  initialSync(account: Account, since: Date): AsyncIterable<RawItem>;
-  incrementalSync(account: Account, state: SyncState): Promise<SyncResult>;
-  watch?(account: Account, onChange: () => void): Promise<Unsubscribe>;
-  send?(account: Account, draft: OutgoingMessage): Promise<SentRef>;
-  applyChange?(account: Account, change: ItemChange): Promise<void>;   // labels, read state, archive
+interface GmailReadPages {
+  getProfile(accountId: string): Promise<GmailProfile>; // history anchor
+  listLabels(accountId: string): Promise<GmailLabelPage>;
+  listMessageIds(accountId: string, input: ListInput): Promise<GmailMessagePage>;
+  getMessageRaw(accountId: string, messageId: string): Promise<GmailRawMessage>;
+  getMessageMinimal(accountId: string, messageId: string): Promise<GmailMessageMetadata>;
+  listHistory(accountId: string, input: HistoryInput): Promise<GmailHistoryPage>;
 }
 ```
 
-Sending and changes are only ever called from a user action in the API. The AI layer has no path to these methods.
+The runner will persist each page and continuation cursor atomically. Sending and changes require separate APIs called only from a user action; the AI layer has no path to them. Other providers should use the same bounded-page and durable-cursor rule without assuming Gmail's page fields.
 
 ## Live updates
 

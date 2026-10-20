@@ -177,12 +177,18 @@ importers:
       '@station/db':
         specifier: workspace:*
         version: link:../db
+      '@station/shared':
+        specifier: workspace:*
+        version: link:../shared
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.1)
       google-auth-library:
         specifier: 11.3.1
         version: 11.3.1
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
 
   packages/db:
     dependencies:

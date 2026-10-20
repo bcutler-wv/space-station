@@ -218,6 +218,37 @@ try {
   assert.equal((await credentials.get(account.id)).accessToken, 'fixture-refresh_rotate-access');
   let [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
   assert.equal(openSecret(refreshed.encryptedRefreshToken, key, `accounts/${account.id}/refresh`), 'fixture-rotated-refresh');
+  const rejected = await credentials.get(account.id);
+  const tokenCallsBeforeRejection = calls.length;
+  providerMode = 'refresh_rejected_access';
+  const replacement = await credentials.get(account.id, rejected);
+  assert.equal(replacement.generation, rejected.generation + 1, 'rejected cached access forces one fenced refresh');
+  assert.equal(calls.length, tokenCallsBeforeRejection + 1);
+  assert.equal((await credentials.get(account.id, rejected)).generation, replacement.generation,
+    'concurrent caller reuses newer generation without another refresh');
+  assert.equal(calls.length, tokenCallsBeforeRejection + 1);
+  const rejectedDuringRefresh = await credentials.get(account.id);
+  holdToken = true;
+  providerMode = 'refresh_hold';
+  const rejectedRefreshEntered = new Promise((resolve) => { tokenEntered = resolve; });
+  const heldRejected = credentials.get(account.id, rejectedDuringRefresh);
+  await rejectedRefreshEntered;
+  await assert.rejects(credentials.get(account.id, rejectedDuringRefresh), (error) => error instanceof GoogleCredentialError && error.code === 'busy',
+    'in-flight lease generation must not publish rejected access token');
+  holdToken = false;
+  providerMode = 'refresh_transient';
+  releaseToken();
+  await assert.rejects(heldRejected, (error) => error instanceof GoogleCredentialError && error.code === 'transient');
+  providerMode = 'ok';
+  const afterFailedRefresh = await credentials.get(account.id, rejectedDuringRefresh);
+  assert.notEqual(afterFailedRefresh.accessToken, rejectedDuringRefresh.accessToken, 'cleared lease cannot reuse rejected token');
+  const beforeCrashedLease = await credentials.get(account.id);
+  await database.db.update(accounts).set({ credentialGeneration: beforeCrashedLease.generation + 1,
+    credentialLeaseUntil: new Date(Date.now() - 1000) }).where(eq(accounts.id, account.id));
+  providerMode = 'refresh_after_crash';
+  const afterCrashedLease = await credentials.get(account.id, beforeCrashedLease);
+  assert.notEqual(afterCrashedLease.accessToken, beforeCrashedLease.accessToken, 'expired claimed lease cannot reuse rejected token');
+  providerMode = 'ok';
   await forceExpiry();
   providerMode = 'refresh_no_rotation';
   await credentials.get(account.id);
@@ -238,6 +269,18 @@ try {
   profileEmail = 'wrong@example.com';
   assert.equal((await reconnect()).statusCode, 409, 'reconnect rejects a different mailbox');
   profileEmail = 'owner@example.com';
+  const rejectedBeforeReconnect = await credentials.get(account.id);
+  holdToken = true;
+  providerMode = 'refresh_hold';
+  const rejectedEntered = new Promise((resolve) => { tokenEntered = resolve; });
+  const heldRejectedRefresh = credentials.get(account.id, rejectedBeforeReconnect);
+  await rejectedEntered;
+  holdToken = false;
+  providerMode = 'ok';
+  assert.equal((await reconnect()).statusCode, 200);
+  releaseToken();
+  await assert.rejects(heldRejectedRefresh, (error) => error instanceof GoogleCredentialError && error.code === 'busy',
+    'rejected-token refresh cannot overwrite reconnect');
   await forceExpiry();
   providerMode = 'refresh_hold';
   holdToken = true;
@@ -257,7 +300,7 @@ try {
   assert.equal(refreshed.backfill, '30_days');
   assert.equal(refreshed.orbitId, account.orbitId);
   assert.equal(refreshed.revokedAt, null);
-  assert.equal((await database.db.select().from(auditLog)).filter((row) => row.action === 'reconnect_account').length, 1);
+  assert.equal((await database.db.select().from(auditLog)).filter((row) => row.action === 'reconnect_account').length, 2);
   assert.equal((await send('GET', '/api/google/status')).body.includes('fixture-rotated-refresh'), false, 'metadata response has no credentials');
   await forceExpiry();
   providerMode = 'refresh_scope';

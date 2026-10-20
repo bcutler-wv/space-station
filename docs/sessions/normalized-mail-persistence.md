@@ -9,3 +9,5 @@ Astra review required fixes to generated foreign-key ordering, replay identity a
 Full local checks pass with 45 tests. Astra independently ran 15 focused tests and applied all generated SQL to a disposable PostgreSQL 15 standalone database. That diagnostic does not replace the required PostgreSQL 16/Compose gate, which is pending Ubuntu CI.
 
 The provider adapter must supply authenticated Sent provenance, stable page identities and ordered pages. The later runner must schedule orphan cleanup. Indexing, AI, source actions and reading remain outside this step.
+
+Ubuntu CI run `39480965786` on commit `21c2997` passed every gate, including PostgreSQL 16 migration/page transaction/concurrency/crash fixtures and browser regressions. Normalized mail persistence is runtime-accepted; Gmail sync and reading remain pending.
