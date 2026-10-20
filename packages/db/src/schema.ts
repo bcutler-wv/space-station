@@ -133,6 +133,8 @@ export const accounts = pgTable('accounts', {
   grantedScopes: text('granted_scopes').array().notNull(),
   backfill: text('backfill'),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  credentialGeneration: integer('credential_generation').notNull().default(0),
+  credentialLeaseUntil: timestamp('credential_lease_until', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -150,6 +152,7 @@ export const oauthAttempts = pgTable('oauth_attempts', {
   authGeneration: integer('auth_generation').notNull(),
   encryptedVerifier: text('encrypted_verifier').notNull(),
   encryptedCode: text('encrypted_code'),
+  reconnectAccountId: text('reconnect_account_id').references(() => accounts.id),
   status: text('status').notNull().default('started'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -167,5 +170,5 @@ export const auditLog = pgTable('audit_log', {
   targetId: text('target_id').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  check('audit_log_action', sql`${table.action} in ('connect_account')`),
+  check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account')`),
 ]);

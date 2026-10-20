@@ -113,7 +113,7 @@ On 2026-10-19, checked the current package releases, installed TypeScript APIs, 
 
 | Package/version | Upstream repository | License evidence | Use |
 |---|---|---|---|
-| google-auth-library 11.3.1 | https://github.com/googleapis/google-cloud-node/tree/main/core/packages/google-auth-library-nodejs | Apache-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | OAuth2Client web flow, official PKCE S256, token exchange |
+| google-auth-library 11.3.1 | https://github.com/googleapis/google-cloud-node/tree/main/core/packages/google-auth-library-nodejs | Apache-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | OAuth2Client web flow, official PKCE S256, token exchange and refresh. Refresh event and returned-token behavior checked against current upstream and installed source on 2026-10-20. |
 | @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail `users.getProfile` account identity |
 
 The Google SDK dependency tree includes `url-template` 2.0.8 from https://github.com/bramstein/url-template. Its npm manifest says `BSD` without a precise SPDX identifier; the installed LICENSE has the three-clause BSD text (SHA-256 prefix `70723b90e3f2`). The license gate allows only this exact package/version as a reviewed exception.

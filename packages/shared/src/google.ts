@@ -4,6 +4,7 @@ export const googleStartSchema = z.object({
   clientId: z.string().trim().regex(/^[0-9]+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/).max(512),
   clientSecret: z.string().min(8).max(2048),
 }).strict();
+export const googleReconnectStartSchema = googleStartSchema.extend({ accountId: z.uuid() });
 export const googleCallbackSchema = z.object({
   state: z.string().min(30).max(200),
   code: z.string().min(1).max(4096).optional(),

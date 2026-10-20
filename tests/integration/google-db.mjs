@@ -10,6 +10,7 @@ import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, accounts, auditLog, oauthApps, oauthAttempts } from '../../packages/db/dist/index.js';
 import { databaseSetupStore } from '../../apps/server/dist/setup-store.js';
+import { GoogleCredentialService, GoogleCredentialError, openSecret } from '../../packages/connectors/dist/index.js';
 
 const config = loadRuntimeConfig(process.env);
 const database = openDatabase(databaseUrl(config));
@@ -27,6 +28,15 @@ const transport = { interceptors: { request: { add() {} }, response: { add() {} 
   if (options.url?.includes('/token')) {
     if (holdToken) { tokenEntered(); await new Promise((resolve) => { releaseToken = resolve; }); }
     if (providerMode === 'token_error') throw new Error('raw provider payload fixture-secret fixture-code');
+    if (options.data?.get('grant_type') === 'refresh_token') {
+      if (providerMode === 'refresh_invalid') throw { response: { data: { error: 'invalid_grant', error_description: 'fixture-private' }, status: 400 } };
+      if (providerMode === 'refresh_invalid_client') throw { response: { data: { error: 'invalid_client', error_description: 'fixture-private' }, status: 401 } };
+      if (providerMode === 'refresh_transient') throw { response: { data: { error: 'temporarily_unavailable' }, status: 503, headers: { 'retry-after': '0' } } };
+      return { data: { access_token: `fixture-${providerMode}-access`,
+        ...(providerMode === 'refresh_rotate' ? { refresh_token: 'fixture-rotated-refresh' } : {}),
+        ...(providerMode === 'refresh_scope' ? { scope: 'https://www.googleapis.com/auth/gmail.readonly' } : {}),
+        expires_in: 3600, token_type: 'Bearer' } };
+    }
     return { data: { access_token: 'fixture-access',
       ...(providerMode === 'missing_refresh' ? {} : { refresh_token: 'fixture-refresh' }),
       scope: providerMode === 'missing_scope' ? 'https://www.googleapis.com/auth/gmail.readonly' : 'https://www.googleapis.com/auth/gmail.modify',
@@ -201,6 +211,115 @@ try {
   assert.equal(calls.length - callsBeforeLink, 2, 'backfill selection makes no provider call');
   const [saved] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
   assert.equal(saved.backfill, '30_days');
+  const credentials = new GoogleCredentialService(database.db, key, transport);
+  const forceExpiry = async () => database.db.update(accounts).set({ accessTokenExpiresAt: new Date(Date.now() - 1000) }).where(eq(accounts.id, account.id));
+  await forceExpiry();
+  providerMode = 'refresh_rotate';
+  assert.equal((await credentials.get(account.id)).accessToken, 'fixture-refresh_rotate-access');
+  let [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(openSecret(refreshed.encryptedRefreshToken, key, `accounts/${account.id}/refresh`), 'fixture-rotated-refresh');
+  await forceExpiry();
+  providerMode = 'refresh_no_rotation';
+  await credentials.get(account.id);
+  [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(openSecret(refreshed.encryptedRefreshToken, key, `accounts/${account.id}/refresh`), 'fixture-rotated-refresh');
+  await forceExpiry();
+  providerMode = 'refresh_transient';
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'transient');
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].revokedAt, null);
+  providerMode = 'ok';
+  const reconnectPayload = { accountId: account.id, clientId: '123456-fixture.apps.googleusercontent.com', clientSecret: 'fixture-client-secret' };
+  const reconnect = async () => {
+    const started = await send('POST', '/api/google/reconnect/start', reconnectPayload, true, csrf);
+    assert.equal(started.statusCode, 200, started.body);
+    await callback(new URL(started.json().authorizationUrl).searchParams.get('state'));
+    return send('POST', '/api/google/confirm', {}, true, csrf);
+  };
+  profileEmail = 'wrong@example.com';
+  assert.equal((await reconnect()).statusCode, 409, 'reconnect rejects a different mailbox');
+  profileEmail = 'owner@example.com';
+  await forceExpiry();
+  providerMode = 'refresh_hold';
+  holdToken = true;
+  const refreshEntered = new Promise((resolve) => { tokenEntered = resolve; });
+  const heldRefresh = credentials.get(account.id);
+  await refreshEntered;
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'busy', 'second refresh observes the lease');
+  // The OAuth exchange uses the same fixture transport, so release the held refresh
+  // only after reconnect has acquired its provider response.
+  holdToken = false;
+  providerMode = 'ok';
+  assert.equal((await reconnect()).statusCode, 200);
+  releaseToken();
+  await assert.rejects(heldRefresh, (error) => error instanceof GoogleCredentialError && error.code === 'busy');
+  [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(refreshed.id, account.id);
+  assert.equal(refreshed.backfill, '30_days');
+  assert.equal(refreshed.orbitId, account.orbitId);
+  assert.equal(refreshed.revokedAt, null);
+  assert.equal((await database.db.select().from(auditLog)).filter((row) => row.action === 'reconnect_account').length, 1);
+  assert.equal((await send('GET', '/api/google/status')).body.includes('fixture-rotated-refresh'), false, 'metadata response has no credentials');
+  await forceExpiry();
+  providerMode = 'refresh_scope';
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+  assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
+  providerMode = 'ok';
+  assert.equal((await reconnect()).statusCode, 200, 'same account can recover from lost scope');
+  await forceExpiry();
+  providerMode = 'refresh_invalid';
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+  assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
+  providerMode = 'ok';
+  assert.equal((await reconnect()).statusCode, 200, 'same account can recover from invalid_grant');
+  const holdPermanentAfterReconnect = async (mode) => {
+    await forceExpiry();
+    providerMode = 'ok';
+    holdToken = true;
+    const entered = new Promise((resolve) => { tokenEntered = resolve; });
+    const stale = credentials.get(account.id);
+    await entered;
+    holdToken = false;
+    assert.equal((await reconnect()).statusCode, 200);
+    const [afterReconnect] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+    providerMode = mode;
+    releaseToken();
+    await assert.rejects(stale, (error) => error instanceof GoogleCredentialError && error.code === 'busy', `${mode} from an old generation is retryable`);
+    const [afterStale] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+    assert.equal(afterStale.credentialGeneration, afterReconnect.credentialGeneration);
+    assert.equal(afterStale.encryptedRefreshToken, afterReconnect.encryptedRefreshToken);
+    assert.equal(afterStale.encryptedAccessToken, afterReconnect.encryptedAccessToken);
+    assert.equal(afterStale.revokedAt, null);
+    providerMode = 'ok';
+  };
+  await holdPermanentAfterReconnect('refresh_invalid');
+  await holdPermanentAfterReconnect('refresh_scope');
+  await forceExpiry();
+  providerMode = 'refresh_invalid_client';
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+  assert.equal((await reconnect()).statusCode, 200, 'incorrect client secret can be replaced');
+  providerMode = 'ok';
+  const expectCorruptCredentialRecovery = async (field, table) => {
+    if (table === 'account') await database.db.update(accounts).set({ [field]: 'corrupt',
+      accessTokenExpiresAt: new Date(Date.now() + (field === 'encryptedAccessToken' ? 3_600_000 : -1000)) }).where(eq(accounts.id, account.id));
+    else {
+      const [linked] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+      await database.db.update(oauthApps).set({ encryptedClientSecret: 'corrupt' }).where(eq(oauthApps.id, linked.appId));
+      await forceExpiry();
+    }
+    const callsBefore = calls.length;
+    await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+    assert.equal(calls.length, callsBefore, 'unreadable local credentials never reach Google');
+    assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
+    assert.equal((await reconnect()).statusCode, 200, 'reconnect replaces unreadable credentials');
+  };
+  await expectCorruptCredentialRecovery('encryptedAccessToken', 'account');
+  await expectCorruptCredentialRecovery('encryptedRefreshToken', 'account');
+  await expectCorruptCredentialRecovery('encryptedClientSecret', 'app');
+  await forceExpiry();
+  const [beforeRestart] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  await database.db.update(accounts).set({ credentialLeaseUntil: new Date(Date.now() - 1000) }).where(eq(accounts.id, account.id));
+  assert.equal((await new GoogleCredentialService(database.db, key, transport).get(account.id)).accessToken, 'fixture-ok-access', 'expired lease is recovered by a new service instance');
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].credentialGeneration, beforeRestart.credentialGeneration + 1);
   profileEmail = 'second@example.com';
   csrf = (await status()).csrfToken;
   const second = await send('POST', '/api/google/start', { clientId: '123456-fixture.apps.googleusercontent.com', clientSecret: 'fixture-client-secret' }, true, csrf);
