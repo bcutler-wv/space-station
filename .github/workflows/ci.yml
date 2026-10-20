@@ -19,6 +19,8 @@ jobs:
       - run: pnpm audit --audit-level high
       - run: pnpm check
       - run: node tests/integration/mail-parser.mjs
+      - run: node tests/integration/mail-sanitize.mjs
+      - run: node tests/integration/node-version.mjs
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
 

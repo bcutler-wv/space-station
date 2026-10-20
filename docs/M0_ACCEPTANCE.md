@@ -1,6 +1,6 @@
 # M0 acceptance
 
-The current deliverable is a private, authenticated development shell with sample data. It does not connect real mail, calendar, or chat accounts. The fresh-clone command is `bash scripts/start-dev.sh` on a disposable Linux host with Node.js 22.12+, OpenSSL, Docker Compose, and a running Docker daemon. Owner setup is a separate explicit step in [DEPLOYMENT.md](DEPLOYMENT.md).
+The current deliverable is a private, authenticated development shell with sample data. It does not connect real mail, calendar, or chat accounts. The fresh-clone command is `bash scripts/start-dev.sh` on a disposable Linux host with Node.js 22.23.2 or newer in the Node 22 line, OpenSSL, Docker Compose, and a running Docker daemon. Owner setup is a separate explicit step in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 M0.1 through M0.4 passed Astra review and GitHub Actions. Run `39344188832` passed both jobs: lint, typecheck, unit and fixture tests, build, license and CSS color gates, shell browser tests in light and dark modes, fresh Compose build and restart, real-PostgreSQL authentication races, virtual-passkey and password/recovery browser flows, and the combined 12-test runtime end-to-end suite. The shell browser tests use sample data; no provider integration is claimed.
 

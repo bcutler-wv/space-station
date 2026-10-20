@@ -4,7 +4,7 @@ OAuth callbacks can carry a short-lived authorization code and state in the quer
 
 ## Requirements
 
-- For the current development shell: a disposable Linux host or VM with Node.js 22.12 or newer, OpenSSL, Docker with the Compose plugin, and access to its running daemon.
+- For the current development shell: a disposable Linux host or VM with Node.js 22.23.2 or newer in the Node 22 line, OpenSSL, Docker with the Compose plugin, and access to its running daemon.
 - For future account sync: about 4 GB of RAM for a single user with a few accounts, more for very large mailboxes. The embedding model and Tika are planned for later milestones.
 - For future account sync: disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
 - For a deployment beyond localhost: a hostname with HTTPS, served by your own reverse proxy.

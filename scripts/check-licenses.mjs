@@ -12,6 +12,8 @@ const reviewedExceptions = new Set([
   'Unlicense:isbot@5.2.2',
   'BSD:url-template@2.0.8',
   'MIT-0:postal-mime@4.0.11',
+  'MIT-0:@csstools/color-helpers@6.1.2',
+  'MIT-0:@csstools/css-syntax-patches-for-csstree@1.1.15',
 ]);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;

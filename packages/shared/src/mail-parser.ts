@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAIL_HTML_LIMITS, MAIL_HTML_POLICY_VERSION } from './mail-html-policy.js';
 
 export const MAIL_LIMITS = {
   rawBytes: 12_582_912,
@@ -28,8 +29,15 @@ export const parsedMailSchema = z.object({
   cc: z.array(address).max(MAIL_LIMITS.recipients),
   bcc: z.array(address).max(MAIL_LIMITS.recipients),
   text: bounded(MAIL_LIMITS.bodyBytes).nullable(),
-  // HTML is hostile until a later reviewed DOMPurify ingest and display boundary.
-  untrustedHtml: bounded(MAIL_LIMITS.bodyBytes).nullable(),
+  sanitizedHtml: z.object({
+    policyVersion: z.literal(MAIL_HTML_POLICY_VERSION),
+    html: bounded(MAIL_HTML_LIMITS.outputBytes),
+    images: z.array(z.object({
+      refId: z.string().regex(/^[a-f0-9]{32}$/),
+      kind: z.enum(['remote', 'cid']),
+      source: bounded(MAIL_HTML_LIMITS.urlLength),
+    }).strict()).max(MAIL_HTML_LIMITS.images),
+  }).strict().nullable(),
   attachments: z.array(z.object({
     filename: bounded(1_024).nullable(), mimeType: bounded(256),
     disposition: bounded(256).nullable(), contentId: bounded(1_024).nullable(),

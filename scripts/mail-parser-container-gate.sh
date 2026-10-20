@@ -49,13 +49,26 @@ assert.equal(result.ok, true);
 assert.equal(result.mail.subject, 'fixture');
 const concurrent = await Promise.all([parseMail(message), parseMail(message)]);
 assert.ok(concurrent.every((item) => item.ok));
+const html = Buffer.from('From: fixture@example.com\r\nContent-Type: text/html; charset=utf-8\r\n\r\n' +
+  '<p>Safe <a href="https://example.com/read">link</a></p><script>bad()</script>' +
+  '<img src="https://example.com/pixel" onload="bad()" alt="Chart">');
+const sanitized = await parseMail(html);
+assert.equal(sanitized.ok, true, JSON.stringify(sanitized.ok ? {} : sanitized));
+assert.equal(sanitized.mail.sanitizedHtml.policyVersion, 1);
+assert.doesNotMatch(sanitized.mail.sanitizedHtml.html, /<script|<img|src=|onload=/i);
+assert.equal(sanitized.mail.sanitizedHtml.images[0].source, 'https://example.com/pixel');
+assert.equal((await parseMail(message)).ok, true);
 const bytes = Buffer.alloc(8_000_000, 7);
 const base64 = bytes.toString('base64');
-const nearLimit = Buffer.from('From: fixture@example.com\r\nSubject: near limit\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="fixture.bin"\r\nContent-Transfer-Encoding: base64\r\n\r\n' + base64);
+const nearHtml = '<table><tr><td>Mail content</td></tr></table>'.repeat(200) + '<img src="https://example.com/near-pixel">';
+const nearLimit = Buffer.from('From: fixture@example.com\r\nSubject: near limit\r\nContent-Type: multipart/mixed; boundary="near"\r\n\r\n' +
+  '--near\r\nContent-Type: text/html; charset=utf-8\r\n\r\n' + nearHtml + '\r\n' +
+  '--near\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="fixture.bin"\r\nContent-Transfer-Encoding: base64\r\n\r\n' + base64 + '\r\n--near--');
 const largeResults = await Promise.all([parseMail(nearLimit), parseMail(nearLimit)]);
 for (const item of largeResults) {
   assert.equal(item.ok, true, JSON.stringify(item.ok ? {} : item));
   assert.equal(item.mail.attachments[0].contentBase64, base64);
+  assert.equal(item.mail.sanitizedHtml.images[0].source, 'https://example.com/near-pixel');
 }
 assert.equal((await parseMail(Buffer.alloc(12_582_913))).code, 'input_too_large');
 assert.equal((await parseMail(message)).ok, true);

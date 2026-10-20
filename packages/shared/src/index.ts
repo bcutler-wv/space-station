@@ -1,5 +1,6 @@
 export { PRODUCT_NAME } from "./constants.js";
 export { MAIL_LIMITS, rawMailSchema, parsedMailSchema, parseErrorCodeSchema, parseResultSchema, type ParseResult } from './mail-parser.js';
+export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
 export { googleStartSchema, googleCallbackSchema, googleBackfillSchema, googleAccountSchema, googleStatusSchema, googleStartResponseSchema, googleOkSchema } from './google.js';
 export { privacyChoiceSchema, privacyDefaultsSchema, exclusionRuleSchema, setupSubmitSchema, setupStatusSchema, setupOriginSchema, type SetupSubmit, type SetupStatus, type ExclusionRule, type PrivacyDefaults } from './setup.js';
 export { evaluatePrivacy, evaluateAttachmentPrivacy, type ScopedPrivacyRule, type PrivacyItem } from './privacy.js';

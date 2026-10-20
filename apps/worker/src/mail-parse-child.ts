@@ -9,7 +9,7 @@ function oneAddress(value: Address | undefined): { name: string; address: string
   return addresses(value ? [value] : [])[0] ?? null;
 }
 
-function normalize(email: Email): ParseResult {
+async function normalize(email: Email): Promise<ParseResult> {
   const senderIdentities = email.headers
     .filter((header) => header.key === 'from' || header.key === 'sender')
     .flatMap((header) => addresses(addressParser(header.value)));
@@ -33,11 +33,14 @@ function normalize(email: Email): ParseResult {
     };
   });
   if (Buffer.byteLength(email.text ?? '') + Buffer.byteLength(email.html ?? '') > MAIL_LIMITS.bodyBytes) throw new Error('limit');
+  const sanitizedHtml = email.html === undefined
+    ? null : (await import('./mail-html-sanitize.js')).sanitizeMailHtml(email.html);
   const mail = parsedMailSchema.safeParse({
     subject: email.subject ?? null, messageId: email.messageId ?? null,
     inReplyTo: email.inReplyTo ?? null, references: email.references ?? null,
     date: email.date ?? null, from: oneAddress(email.from), senderIdentities, ...lists,
-    text: email.text ?? null, untrustedHtml: email.html ?? null, attachments,
+    text: email.text ?? null, sanitizedHtml,
+    attachments,
   });
   if (!mail.success) throw new Error('limit');
   return { ok: true, mail: mail.data };
@@ -62,7 +65,7 @@ async function main(): Promise<void> {
       maxNestingDepth: MAIL_LIMITS.depth, maxRfc822NestingDepth: MAIL_LIMITS.rfc822Depth,
       maxForwardedAddresses: MAIL_LIMITS.recipients,
     });
-    result = normalize(email);
+    result = await normalize(email);
   } catch (error) {
     // PostalMime limit errors carry numeric caps; never expose its raw-message text.
     const message = error instanceof Error ? error.message : '';

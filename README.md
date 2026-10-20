@@ -33,7 +33,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 
 ## Running it
 
-On a disposable Linux host with Node.js 22.12+, OpenSSL, and Docker Compose, clone the repository and run `bash scripts/start-dev.sh` from its root. The command creates private development settings and a localhost TLS certificate, migrates PostgreSQL, then starts the app and worker. Generate a short-lived owner setup token with the separate local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell contains sample data; Google authorization and backfill choice follow first-Orbit privacy setup.
+On a disposable Linux host with Node.js 22.23.2 or newer in the Node 22 line, OpenSSL, and Docker Compose, clone the repository and run `bash scripts/start-dev.sh` from its root. The command creates private development settings and a localhost TLS certificate, migrates PostgreSQL, then starts the app and worker. Generate a short-lived owner setup token with the separate local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell contains sample data; Google authorization and backfill choice follow first-Orbit privacy setup.
 
 Provider permissions and data-use terms can change. Verify current official documentation when enabling each connector, especially Slack indexed mode. The default Slack mode is live and stores no long-term content.
 
