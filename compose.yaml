@@ -48,16 +48,23 @@ services:
     build: .
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment: *runtime_env
+    env_file:
+      - ./.cache/go-camo.env
     volumes:
       - ./.cache/tls:/run/tls:ro
       - private_blobs:/var/lib/station/blobs
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
+    networks:
+      - default
+      - camo_egress
     depends_on:
       migrate:
         condition: service_completed_successfully
       blob-init:
         condition: service_completed_successfully
+      go-camo:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "const s=process.env.APP_TLS_CERT_PATH?'https':'http';require(s).get(s+'://127.0.0.1:8080/ready',{rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 5s
@@ -113,9 +120,35 @@ services:
       retries: 3
     restart: unless-stopped
 
+  go-camo:
+    image: ghcr.io/cactus/go-camo:v2.7.7@sha256:5a62e8af42cee15fd47b486d4e4df3ecfed3c7fc0e9e4c625f3816ba17c65677
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    env_file:
+      - ./.cache/go-camo.env
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: ""
+    command: ["--listen=0.0.0.0:8080", "--max-size=4096", "--timeout=4s", "--max-redirects=0", "--no-debug-vars"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - camo_egress
+    restart: unless-stopped
+
 networks:
   mail_parser:
     internal: true
+  camo_egress:
 
 volumes:
   postgres_data:

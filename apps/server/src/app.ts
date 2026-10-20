@@ -7,9 +7,10 @@ import { databaseSetupStore } from './setup-store.js';
 import { registerGoogle } from './google.js';
 import { registerSync } from './sync.js';
 import { registerMailReader } from './mail-reader.js';
+import { registerMailImages, type MailImageProxyConfig } from './mail-images.js';
 import type { PrivateBlobStore } from '@station/db';
 
-export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }, mailBlobStore?: PrivateBlobStore) {
+export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }, mailBlobStore?: PrivateBlobStore, mailImageProxy?: MailImageProxyConfig) {
   const app = Fastify({
     ...(transport?.key && transport.cert ? { https: { key: transport.key, cert: transport.cert } } : {}),
     ...(transport?.trustedProxyIp ? { trustProxy: (address: string) => address === transport.trustedProxyIp } : {}),
@@ -26,6 +27,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     registerGoogle(instance, auth, databaseSetupStore(auth.db));
     await registerSync(instance, auth);
     registerMailReader(instance, auth, mailBlobStore);
+    if (mailBlobStore && mailImageProxy) registerMailImages(instance, auth, mailBlobStore, mailImageProxy);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));
   app.get('/ready', async (_request, reply) => {

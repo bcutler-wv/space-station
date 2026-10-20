@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { MAIL_LIMITS } from './mail-parser.js';
 
 export const readerIdSchema = z.string().uuid();
+export const readerImageRefSchema = z.string().regex(/^[a-f0-9]{32}$/);
 export const conversationQuerySchema = z.object({
   accountId: readerIdSchema.optional(), orbitId: readerIdSchema.optional(),
   labelId: readerIdSchema.optional(), subject: z.string().trim().min(1).max(128).optional(),
@@ -36,5 +37,11 @@ export const labelListSchema = z.object({ labels: z.array(z.object({ id: readerI
 export const readerBodySchema = z.object({ itemId: readerIdSchema,
   status: z.enum(['available', 'unsupported', 'unavailable']), text: z.string().max(MAIL_LIMITS.bodyBytes).nullable(),
   html: z.string().max(1048576).nullable(), htmlPolicyVersion: z.literal(1).nullable(),
-  imageRefs: z.array(z.string().regex(/^[a-f0-9]{32}$/)).max(64),
+  imageRefs: z.array(readerImageRefSchema).max(64),
 }).strict();
+export const imageConsentSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), enabled: z.boolean() }).strict();
+export const imageFetchSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), refId: readerImageRefSchema }).strict();
+export const senderImagePreferenceSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), enabled: z.boolean() }).strict();
+export const imageConsentResponseSchema = z.object({ messageEnabled: z.boolean(), senderEnabled: z.boolean(), senderAddress: z.string().max(254).nullable() }).strict();
+export const imageChoiceResponseSchema = z.object({ enabled: z.boolean() }).strict();
+export const senderImagePreferenceResponseSchema = z.object({ enabled: z.boolean(), senderAddress: z.string().max(254) }).strict();

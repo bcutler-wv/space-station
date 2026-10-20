@@ -12,7 +12,8 @@ import { eq, isNull, sql } from 'drizzle-orm';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
 import { accounts, attachments, blobIntents, databaseUrl, itemLabels, itemOrbits, items, labels,
-  loadRuntimeConfig, oauthApps, openDatabase, orbits, PrivateBlobStore, sessions, syncStates, threads } from '../../packages/db/dist/index.js';
+  loadRuntimeConfig, oauthApps, openDatabase, orbits, PrivateBlobStore, sessions, syncStates, threads, people, identities,
+  mailImageConsent } from '../../packages/db/dist/index.js';
 
 const config = loadRuntimeConfig(process.env);
 const handle = openDatabase(databaseUrl(config));
@@ -26,7 +27,7 @@ const origin = 'https://example.com';
 const store = authStore(db);
 const app = buildApp(async () => {}, undefined,
   { db, origin, masterKey: Buffer.from(config.STATION_MASTER_KEY, 'base64'), store },
-  { trustedProxyIp: '127.0.0.1' }, blobs);
+  { trustedProxyIp: '127.0.0.1' }, blobs, { signingKey: process.env.GOCAMO_HMAC, origin: 'http://go-camo:8080' });
 let cookie = '';
 const get = async (url, opts = {}) => {
   const response = await app.inject({ method: 'GET', url, remoteAddress: '127.0.0.1', headers: {
@@ -50,6 +51,7 @@ let firstItem;
 try {
   await app.ready();
   assert.equal((await get('/api/mail/conversations?accountId=' + id())).statusCode, 401);
+  assert.equal((await get(`/api/mail/items/${id()}/images/consent?accountId=${id()}`)).statusCode, 401);
   const bootstrap = randomBytes(32).toString('base64url');
   await store.issueBootstrap(digest(bootstrap), new Date(Date.now() + 60_000));
   let csrf = (await get('/api/auth/status')).json().csrfToken;
@@ -166,6 +168,157 @@ try {
   assert.equal(body.statusCode, 200, body.body);
   assert.deepEqual(body.json().imageRefs, ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
   assert.ok(!body.body.includes('https://remote.example.com/image'));
+  csrf = (await get('/api/auth/status')).json().csrfToken;
+  const imageBase = `/api/mail/items/${firstItem}/images`;
+  const imageRequest = { accountId: accountA, refId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().messageEnabled, false);
+  assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403, 'Remote images are blocked by default');
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountB, enabled: true }, csrf)).statusCode, 404);
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, orbitId: orbitB, enabled: true }, csrf)).statusCode, 404);
+  assert.equal((await post(`/api/mail/items/${tombstone}/images/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 404);
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: true }, 'bad-token')).statusCode, 403);
+  const wrongOrigin = await app.inject({ method: 'POST', url: `${imageBase}/fetch`, payload: imageRequest,
+    headers: { origin: 'https://other.example.com', 'x-csrf-token': csrf, cookie } });
+  assert.equal(wrongOrigin.statusCode, 403);
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().messageEnabled, true);
+  await db.update(items).set({ providerRevision: 'new-message-revision' }).where(eq(items.id, firstItem));
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().messageEnabled, false,
+    'A changed provider revision invalidates one-message consent');
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+  assert.equal((await post(`${imageBase}/fetch`, { ...imageRequest, refId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }, csrf)).statusCode, 404);
+  assert.equal((await post(`${imageBase}/fetch`, { ...imageRequest, accountId: accountB }, csrf)).statusCode, 404);
+  assert.equal((await post(`${imageBase}/fetch`, { ...imageRequest, orbitId: orbitB }, csrf)).statusCode, 404);
+  assert.equal((await post(`${imageBase}/sender-preference`, { accountId: accountA, enabled: true }, csrf)).statusCode, 409,
+    'A message without a single claimed From identity cannot create a sender preference');
+  const personA = id();
+  const personB = id();
+  await db.insert(people).values({ id: personA, accountId: accountA, displayName: 'Example sender' });
+  await db.insert(people).values({ id: personB, accountId: accountB, displayName: 'Example sender' });
+  await db.insert(identities).values([
+    { id: id(), accountId: accountA, personId: personA, provider: 'google', kind: 'email', normalizedValue: 'sender@example.com' },
+    { id: id(), accountId: accountB, personId: personB, provider: 'google', kind: 'email', normalizedValue: 'sender@example.com' },
+  ]);
+  await db.update(items).set({ fromPersonId: personA, senderIdentitiesComplete: true }).where(eq(items.id, firstItem));
+  const stateB = id();
+  await db.insert(syncStates).values({ id: stateB, accountId: accountB, resource: 'mail', collectionId: 'primary', cursor: {} });
+  const otherHtmlKey = await blobs.write(Buffer.from('<span data-station-image-ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">[Image blocked]</span>'));
+  await db.insert(blobIntents).values({ key: otherHtmlKey, accountId: accountB, stateId: stateB, pageId: 'sender-fixture',
+    leaseGeneration: 0, credentialGeneration: 0, expectedSequence: 0, state: 'referenced' });
+  const senderSource = process.env.CAMO_FIXTURE_URL ?? 'http://127.0.0.1/private';
+  await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: senderSource }] }).where(eq(items.id, firstItem));
+  await db.update(items).set({ fromPersonId: personB, senderIdentitiesComplete: true, bodyHtmlPath: otherHtmlKey,
+    htmlPolicyVersion: 1, imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: senderSource }] }).where(eq(items.id, otherItem));
+  assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: false }, csrf)).statusCode, 200);
+  assert.equal((await post(`${imageBase}/sender-preference`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().senderEnabled, true);
+  assert.equal((await get(`/api/mail/items/${otherItem}/images/consent?accountId=${accountB}`)).json().senderEnabled, false);
+  const senderFetchA = await post(`${imageBase}/fetch`, imageRequest, csrf);
+  assert.equal(senderFetchA.statusCode, process.env.CAMO_FIXTURE_URL ? 200 : 503,
+    'A preference authorizes a fetch independently of item consent');
+  assert.equal((await post(`/api/mail/items/${otherItem}/images/fetch`, { accountId: accountB, refId: imageRequest.refId }, csrf)).statusCode, 403,
+    'An identical claimed sender in another account remains blocked');
+  assert.equal((await post(`${imageBase}/sender-preference`, { accountId: accountA, enabled: false }, csrf)).statusCode, 200);
+  assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403,
+    'Revoking the sender preference blocks the original account again');
+  await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: 'https://remote.example.com/image' }] }).where(eq(items.id, firstItem));
+  const probeHostileImage = async (source) => {
+    const hostileItem = id();
+    await db.insert(items).values({ id: hostileItem, accountId: accountA, collectionId: 'primary', threadId: threadA,
+      externalId: `hostile-${hostileItem}`, appliedSequence: 1, direction: 'in', directionProvenance: 'incoming',
+      flags: {}, parseStatus: 'supported', bodyHtmlPath: htmlKey, htmlPolicyVersion: 1,
+      imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source }] });
+    await db.insert(itemOrbits).values({ itemId: hostileItem, orbitId: orbitA, reason: 'account' });
+    const endpoint = `/api/mail/items/${hostileItem}/images`;
+    try {
+      assert.equal((await post(`${endpoint}/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+      return await post(`${endpoint}/fetch`, imageRequest, csrf);
+    } finally {
+      await db.update(items).set({ deletedAt: new Date(), parseStatus: 'deleted' }).where(eq(items.id, hostileItem));
+    }
+  };
+  await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: 'http://127.0.0.1/private' }] }).where(eq(items.id, firstItem));
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().messageEnabled, false, 'Updated source revokes item consent');
+  assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403);
+  assert.equal((await probeHostileImage('http://127.0.0.1/private')).statusCode, 503, 'Private IPs are not signed');
+  assert.equal((await probeHostileImage('https://remote.example.com:8443/image')).statusCode, 503, 'Nonstandard ports are not signed');
+  await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: 'https://remote.example.com/image' }] }).where(eq(items.id, firstItem));
+  if (process.env.CAMO_FIXTURE_URL) {
+    await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: process.env.CAMO_FIXTURE_URL }] }).where(eq(items.id, firstItem));
+    assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403, 'Changing image source requires fresh consent');
+    assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+    const proxied = await post(`${imageBase}/fetch`, imageRequest, csrf);
+    assert.equal(proxied.statusCode, 200, proxied.body.slice(0, 200));
+    assert.equal(proxied.headers['content-type'], 'image/png');
+    assert.equal(proxied.headers['x-content-type-options'], 'nosniff');
+    assert.equal(proxied.headers['cache-control'], 'private, no-store');
+    assert.equal(proxied.rawPayload.subarray(1, 4).toString('ascii'), 'PNG');
+    await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote',
+      source: new URL('/avif', process.env.CAMO_FIXTURE_URL).href }] }).where(eq(items.id, firstItem));
+    assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
+    const avif = await post(`${imageBase}/fetch`, imageRequest, csrf);
+    assert.equal(avif.statusCode, 200, avif.body.slice(0, 120));
+    assert.equal(avif.headers['content-type'], 'image/png');
+    assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: false }, csrf)).statusCode, 200);
+    assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403, 'Revocation applies before another fetch');
+    for (const path of ['/bad', '/bomb', '/large', '/slow']) {
+      const failed = await probeHostileImage(new URL(path, process.env.CAMO_FIXTURE_URL).href);
+      assert.equal(failed.statusCode, 503, `${path}: ${failed.body.slice(0, 120)}`);
+      assert.ok(!failed.body.includes('raster.example.com'));
+    }
+    await db.update(items).set({ imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: 'https://remote.example.com/image' }] }).where(eq(items.id, firstItem));
+  }
+  const blockedImageRequest = async (holdLock, requestAction) => {
+    let release;
+    let enteredResolve;
+    let enteredReject;
+    const entered = new Promise((resolve, reject) => { enteredResolve = resolve; enteredReject = reject; });
+    const holder = other.db.transaction(async (tx) => {
+      await holdLock(tx);
+      enteredResolve();
+      await new Promise((resolve) => { release = resolve; });
+    });
+    void holder.catch(enteredReject);
+    await entered;
+    try {
+      const response = await Promise.race([
+        requestAction(),
+        delay(2_500).then(() => { throw new Error('Image database request outlived its lock deadline'); }),
+      ]);
+      assert.equal(response.statusCode, 500, response.body);
+      const activity = await db.execute(sql`select
+        count(*) filter (where wait_event_type = 'Lock')::integer waiting,
+        count(*) filter (where state = 'idle in transaction')::integer open_transactions
+        from pg_stat_activity where datname = current_database()`);
+      assert.equal(activity.rows[0].waiting, 0, 'Timed-out image request released its database client');
+      assert.equal(activity.rows[0].open_transactions, 1, 'Only the deliberate lock holder retains a transaction');
+    } finally { release(); await holder; }
+  };
+  await blockedImageRequest((tx) => tx.execute(sql`lock table items in access exclusive mode`),
+    () => get(`${imageBase}/consent?accountId=${accountA}`));
+  await blockedImageRequest((tx) => tx.select().from(mailImageConsent).where(eq(mailImageConsent.itemId, firstItem)).for('update'),
+    () => post(`${imageBase}/consent`, { accountId: accountA, enabled: false }, csrf));
+  const cidRef = 'cccccccccccccccccccccccccccccccc';
+  const cidHtml = await blobs.write(Buffer.from(`<span data-station-image-ref="${cidRef}">[Image blocked]</span>`));
+  const cidPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWNgZGL+DwABFAEG9O6t0QAAAABJRU5ErkJggg==', 'base64');
+  const cidKey = await blobs.write(cidPng);
+  await db.insert(blobIntents).values([cidHtml, cidKey].map((storageKey) => ({ key: storageKey, accountId: accountA,
+    stateId: state, pageId: 'cid-fixture', leaseGeneration: 0, credentialGeneration: 0, expectedSequence: 0, state: 'referenced' })));
+  await db.update(items).set({ bodyHtmlPath: cidHtml, htmlPolicyVersion: 1,
+    imageMetadata: [{ refId: cidRef, kind: 'cid', source: 'inline@example.com' }] }).where(eq(items.id, secondItem));
+  const cidAttachment = id();
+  await db.insert(attachments).values({ id: cidAttachment, itemId: secondItem, accountId: accountA, ordinal: 0,
+    filename: 'inline.png', mimeType: 'image/png', contentId: '<inline@example.com>', related: true,
+    size: cidPng.length, storagePath: cidKey });
+  const cidFetch = { accountId: accountA, refId: cidRef };
+  const cidEndpoint = `/api/mail/items/${secondItem}/images/fetch`;
+  const inline = await post(cidEndpoint, cidFetch, csrf);
+  assert.equal(inline.statusCode, 200, inline.body.slice(0, 120));
+  assert.equal(inline.headers['content-type'], 'image/png');
+  assert.equal((await post(cidEndpoint, { ...cidFetch, accountId: accountB }, csrf)).statusCode, 404);
+  await db.update(attachments).set({ contentId: '<different@example.com>' }).where(eq(attachments.id, cidAttachment));
+  assert.equal((await post(cidEndpoint, cidFetch, csrf)).statusCode, 404, 'CID must match a related same-item attachment');
+  await db.update(attachments).set({ contentId: '<inline@example.com>' }).where(eq(attachments.id, cidAttachment));
   await db.update(items).set({ htmlPolicyVersion: 2 }).where(eq(items.id, firstItem));
   assert.equal((await get(`/api/mail/items/${firstItem}/body?accountId=${accountA}`)).json().status, 'unavailable');
   await db.update(items).set({ htmlPolicyVersion: 1 }).where(eq(items.id, firstItem));

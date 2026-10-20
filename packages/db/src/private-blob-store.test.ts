@@ -18,6 +18,8 @@ describe('PrivateBlobStore', () => {
     const key = await store.write(Buffer.from('hello'));
     expect(key).toMatch(/^b_[0-9a-f]{64}$/);
     expect((await store.read(key)).toString()).toBe('hello');
+    await expect(store.read(key, 4)).rejects.toThrow('bounded regular file');
+    expect((await store.read(key, 5)).toString()).toBe('hello');
     expect((await lstat(path.join(root, key))).mode & 0o777).toBe(0o640);
     await expect(store.write(Buffer.alloc(11))).rejects.toThrow('byte limit');
     expect(await readdir(root)).toEqual([key]);

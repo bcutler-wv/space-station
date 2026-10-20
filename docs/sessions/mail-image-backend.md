@@ -1,0 +1,9 @@
+# Mail image backend
+
+Version 0.21.0 adds authenticated stored-reference image fetching, per-item remote consent and account-scoped claimed-sender preferences. CID images may load by default only from a unique related same-item attachment. Remote consent binds the current provider revision and source snapshot. A claimed sender address is not verified identity. No source URL or internal proxy signature enters browser responses.
+
+The pinned go-camo service rejects private destinations at dial time and follows no redirects. Station permits HTTP/HTTPS standard ports only, bounds input to 4 MiB and raster pixels to four million, and returns normalized PNG up to 2 MiB. Four active jobs and a 32 MiB per-message minute budget bound work. Failed input processing charges its full 6 MiB reservation; successful small loads charge at least 32 KiB. Native processing has a three-second libvips timeout, not an absolute route deadline. Database stages use three-second statement and 750-millisecond lock limits and end before file, network or native work.
+
+Astra reviewed the implementation and corrections, including exact metadata/HTML reference equality, AVIF detection, per-read blob caps, and independent hostile-source fixture messages. Local checks passed 67 tests. The actual PostgreSQL 15 HTTP fixture passed, including held read/write locks and released clients before unlock. Astra independently checked image and blob tests and decoded the AVIF fixture. Disposable database servers were stopped.
+
+The Ubuntu Compose gate remains pending. Its internal disposable network hosts the apparently public test address locally; the fixture has no other network, readiness is checked, and counters verify successful raster fetches without redirected targets. No Docker gate ran on agent-dev and no production deployment occurred. Safe browser rendering and mail navigation remain separate tasks.

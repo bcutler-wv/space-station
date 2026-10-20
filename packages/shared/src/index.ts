@@ -5,7 +5,9 @@ export { MAIL_LIMITS, rawMailSchema, parsedMailSchema, parseErrorCodeSchema, par
 export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
 export { readerIdSchema, conversationQuerySchema, threadQuerySchema, itemQuerySchema, labelQuerySchema,
   readerAttachmentSchema, readerMessageSchema, readerConversationSchema, conversationPageSchema,
-  messagePageSchema, labelListSchema, readerBodySchema } from './mail-reader.js';
+  messagePageSchema, labelListSchema, readerBodySchema, readerImageRefSchema, imageConsentSchema,
+  imageFetchSchema, senderImagePreferenceSchema, imageConsentResponseSchema, imageChoiceResponseSchema,
+  senderImagePreferenceResponseSchema } from './mail-reader.js';
 export { googleStartSchema, googleReconnectStartSchema, googleCallbackSchema, googleBackfillSchema, googleAccountSchema, googleStatusSchema, googleStartResponseSchema, googleOkSchema } from './google.js';
 export { privacyChoiceSchema, privacyDefaultsSchema, exclusionRuleSchema, setupSubmitSchema, setupStatusSchema, setupOriginSchema, type SetupSubmit, type SetupStatus, type ExclusionRule, type PrivacyDefaults } from './setup.js';
 export { evaluatePrivacy, evaluateAttachmentPrivacy, type ScopedPrivacyRule, type PrivacyItem } from './privacy.js';

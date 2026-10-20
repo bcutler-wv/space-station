@@ -11,3 +11,5 @@ Reader GETs are ordinary authenticated user activity and renew idle expiry. Sync
 The backend performs no provider request, read-state update, index operation or AI policy check. Owner source reading remains available under no-index and no-AI rules. The browser mail view, proxy and provider actions remain separate M1 work.
 
 Version 0.20.0 is Astra-reviewed. Review corrected Unicode filename truncation and added deadlines to every reader database stage. Local lint, typecheck, 61 unit tests, build, color/license gates and the actual PostgreSQL 15 HTTP fixture passed. Astra independently checked Unicode boundaries, 750-millisecond lock cancellation, three-second statement cancellation, read-only enforcement and connection recovery. Disposable databases were stopped. The PostgreSQL 16 Compose fixture and full Ubuntu CI remain pending.
+
+Integration acceptance: full Ubuntu CI [run 39511814998](https://github.com/bcutler-wv/space-station/actions/runs/39511814998) passed at commit `948a4aa` (version 0.20.1), including PostgreSQL 16 Compose fixtures and browser gates. This supersedes the pending acceptance statements above. No production deployment occurred.

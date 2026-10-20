@@ -27,6 +27,15 @@ try {
 }
 
 await mkdir('.cache/tls', { recursive: true, mode: 0o700 });
+await mkdir('.cache', { recursive: true, mode: 0o700 });
+try {
+  const secret = await open('.cache/go-camo.env', 'wx', 0o600);
+  try { await secret.writeFile(`GOCAMO_HMAC=${randomBytes(32).toString('base64url')}\n`); }
+  finally { await secret.close(); }
+  console.info('Created a dedicated private mail-image signing secret.');
+} catch (error) {
+  if (error?.code !== 'EEXIST') throw error;
+}
 await chmod('.cache/tls', 0o700);
 let keyExists = true;
 let certExists = true;

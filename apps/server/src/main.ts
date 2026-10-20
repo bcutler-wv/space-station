@@ -17,7 +17,9 @@ const app = buildApp(async () => { await database.db.select().from(settings).lim
 }, {
   ...(config.APP_TLS_KEY_PATH ? { key: readFileSync(config.APP_TLS_KEY_PATH), cert: readFileSync(config.APP_TLS_CERT_PATH) } : {}),
   ...(config.APP_TRUSTED_PROXY_IP ? { trustedProxyIp: config.APP_TRUSTED_PROXY_IP } : {}),
-}, new PrivateBlobStore(process.env.PRIVATE_BLOB_DIR ?? '/var/lib/station/blobs'));
+}, new PrivateBlobStore(process.env.PRIVATE_BLOB_DIR ?? '/var/lib/station/blobs'), {
+  signingKey: process.env.GOCAMO_HMAC ?? '', origin: 'http://go-camo:8080',
+});
 app.addHook('onClose', database.close);
 await registerWebStatic(app, config.APP_ORIGIN);
 try {

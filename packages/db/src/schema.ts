@@ -317,3 +317,16 @@ export const attachments = pgTable('attachments', {
 }, (t) => [uniqueIndex('attachments_item_ordinal_unique').on(t.itemId, t.ordinal),
   foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
   foreignKey({ columns: [t.storagePath, t.accountId], foreignColumns: [blobIntents.key, blobIntents.accountId] })]);
+
+export const mailImageConsent = pgTable('mail_image_consent', {
+  itemId: text('item_id').primaryKey(), accountId: text('account_id').notNull(),
+  sourceDigest: text('source_digest').notNull(),
+  enabled: boolean('enabled').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] })]);
+
+export const mailSenderImagePreferences = pgTable('mail_sender_image_preferences', {
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  senderAddress: text('sender_address').notNull(), enabled: boolean('enabled').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.accountId, t.senderAddress] })]);

@@ -2,7 +2,7 @@
 
 Station is a self-hosted mission control for your work. It brings your email, calendars, Slack, and Teams into one place, groups them into **Orbits** (one per company, client, or area of life), and uses an AI model you choose to sort what comes in, track what you owe people, and answer questions across everything.
 
-> **Status:** pre-alpha. The authenticated, themed shell uses sample data. After owner login, the first Orbit and privacy choices can be saved at `/setup`. A Google mailbox can be authorized with your own web client and a backfill window saved. The worker implements resumable Gmail ingestion and polling, validated by the Ubuntu integration gate. The Google setup screen shows live import, retry and repair status. A private mail-reader API is implemented; it is Astra-reviewed and its Ubuntu gate is pending. The mail view and safe display are still pending.
+> **Status:** pre-alpha. The authenticated, themed shell uses sample data. After owner login, the first Orbit and privacy choices can be saved at `/setup`. A Google mailbox can be authorized with your own web client and a backfill window saved. The worker implements resumable Gmail ingestion and polling, validated by the Ubuntu integration gate. The Google setup screen shows live import, retry and repair status. The private mail-reader API and live progress UI are Astra-reviewed and validated by the full Ubuntu CI gate. The mail view and safe display are still pending.
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 

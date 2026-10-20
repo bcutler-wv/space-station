@@ -95,22 +95,23 @@ export class PrivateBlobStore {
     } finally { await directory.close(); }
   }
 
-  async read(key: string): Promise<Buffer> {
+  async read(key: string, maxBytes = this.maxBytes): Promise<Buffer> {
+    if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > this.maxBytes) throw new Error('Invalid blob read limit');
     const filename = this.file(key);
     const directory = await this.directory();
     try {
       const file = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const info = await file.stat();
-        if (!info.isFile() || info.size > this.maxBytes) throw new Error('Blob is not a bounded regular file');
-        const data = Buffer.allocUnsafe(this.maxBytes + 1);
+        if (!info.isFile() || info.size > maxBytes) throw new Error('Blob is not a bounded regular file');
+        const data = Buffer.allocUnsafe(maxBytes + 1);
         let offset = 0;
         while (offset < data.byteLength) {
           const { bytesRead } = await file.read(data, offset, data.byteLength - offset, offset);
           if (bytesRead === 0) break;
           offset += bytesRead;
         }
-        if (offset > this.maxBytes) throw new Error('Blob exceeds byte limit');
+        if (offset > maxBytes) throw new Error('Blob exceeds byte limit');
         return data.subarray(0, offset);
       } finally {
         await file.close();

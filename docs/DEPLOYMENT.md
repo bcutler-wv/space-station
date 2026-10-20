@@ -80,3 +80,6 @@ docker compose up -d --force-recreate --wait app worker
 Migrations run in the controlled `migrate` service before app and worker startup.
 
 Backups contain sensitive message content and metadata even though application-level encryption protects provider credentials only. Restrict access and encrypt backup storage. Use disposable data for automated restore checks in CI; do not use the production host for build tests.
+# Mail image proxy secret
+
+`scripts/init-env.mjs` creates `.cache/go-camo.env` with a dedicated random signing key. It leaves an existing file unchanged on restart. Back up this private file alongside the deployment secrets; loss rotates the proxy key and makes only previously signed transient image URLs unusable. Compose reads the key for the app and go-camo services only. The proxy has no published port and no database or master-key environment. Keep the file mode at 0600.
