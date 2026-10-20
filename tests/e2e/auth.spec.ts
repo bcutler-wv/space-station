@@ -22,7 +22,10 @@ async function context() {
 }
 async function csrf(context: Awaited<ReturnType<typeof request.newContext>>) {
   const response = await context.get("/api/auth/status");
+  expect(response.status(), "CSRF bootstrap status").toBe(200);
   const data = (await response.json()) as { csrfToken: string };
+  expect(data.csrfToken, "CSRF bootstrap token").toEqual(expect.any(String));
+  expect(data.csrfToken.length, "CSRF bootstrap token length").toBeGreaterThan(0);
   return { Origin: baseURL!, "X-CSRF-Token": data.csrfToken };
 }
 

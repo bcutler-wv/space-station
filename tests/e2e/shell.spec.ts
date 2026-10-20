@@ -1,10 +1,18 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+const csrfByContext = new WeakMap<APIRequestContext, string>();
 async function headers(request: APIRequestContext) {
   const origin = process.env.STATION_E2E_BASE_URL;
   if (!origin) return {};
-  const status = await (await request.get("/api/auth/status")).json();
+  const cached = csrfByContext.get(request);
+  if (cached) return { Origin: origin, "X-CSRF-Token": cached };
+  const response = await request.get("/api/auth/status");
+  expect(response.status(), "CSRF bootstrap status").toBe(200);
+  const status = await response.json();
+  expect(status.csrfToken, "CSRF bootstrap token").toEqual(expect.any(String));
+  expect(status.csrfToken.length, "CSRF bootstrap token length").toBeGreaterThan(0);
+  csrfByContext.set(request, status.csrfToken as string);
   return { Origin: origin, "X-CSRF-Token": status.csrfToken as string };
 }
 

@@ -16,7 +16,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
   });
   app.setErrorHandler((error, _request, reply) => {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number' && error.statusCode < 500 ? error.statusCode : 500;
-    reply.code(status).send({ error: status === 413 ? 'Upload a file under 4 MB.' : 'The request could not be completed.' });
+    reply.code(status).send({ error: status === 413 ? 'Upload a file under 4 MB.' : status === 429 ? 'Too many requests. Wait a minute and try again.' : 'The request could not be completed.' });
   });
   if (appearanceStore && !auth) throw new Error('Authentication is required before registering private routes.');
   if (auth) void app.register(async (instance) => {

@@ -139,9 +139,6 @@ export async function registerAuth(app: FastifyInstance, config: AuthConfig) {
     global: true,
     max: 120,
     timeWindow: "1 minute",
-    errorResponseBuilder: () => ({
-      error: "Too many requests. Wait a minute and try again.",
-    }),
   });
   const strictRate = {
     config: {

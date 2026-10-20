@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import process from "node:process";
 import { randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   authStore,
   digest,
@@ -15,6 +16,7 @@ import {
   authCredentials,
 } from "../../packages/db/dist/index.js";
 import { eq } from "drizzle-orm";
+import { buildApp } from "../../apps/server/dist/app.js";
 
 const config = loadRuntimeConfig(process.env);
 const database = openDatabase(databaseUrl(config));
@@ -231,8 +233,26 @@ try {
   assert.equal(await store.consumePasswordRecovery(currentCode, 6, 3), false, "recovery code is one-time use");
   assert.equal(await store.replacePassword(3, "replacement-fixture-only", [digest(candidate())]), 4);
   assert.equal(await store.consumeRecovery(currentCode, 3), false, "old codes and generation are invalidated");
+  const http = buildApp(undefined, undefined, {
+    origin: config.APP_ORIGIN,
+    masterKey: Buffer.from(config.STATION_MASTER_KEY, 'base64'),
+    db: database.db,
+    store,
+  });
+  try {
+    for (let index = 0; index < 120; index++) {
+      const response = await http.inject({ method: 'GET', url: '/api/auth/status' });
+      assert.equal(response.statusCode, 200);
+    }
+    const limited = await http.inject({ method: 'GET', url: '/api/auth/status' });
+    assert.equal(limited.statusCode, 429);
+    assert.ok(Number(limited.headers['retry-after']) > 0);
+    assert.equal(limited.json().error, 'Too many requests. Wait a minute and try again.');
+  } finally {
+    await http.close();
+  }
   process.stdout.write(
-    "Real PostgreSQL authentication transaction and session checks passed.\n",
+    "Real PostgreSQL authentication transaction, session, and rate-limit checks passed.\n",
   );
 } finally {
   await database.close();
