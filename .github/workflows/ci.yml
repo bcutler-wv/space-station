@@ -23,6 +23,7 @@ jobs:
       - run: node tests/integration/node-version.mjs
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+      - run: pnpm exec playwright test --config playwright.mail-body-dev.config.ts
 
   runtime:
     runs-on: ubuntu-latest

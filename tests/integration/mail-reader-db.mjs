@@ -171,7 +171,11 @@ try {
   csrf = (await get('/api/auth/status')).json().csrfToken;
   const imageBase = `/api/mail/items/${firstItem}/images`;
   const imageRequest = { accountId: accountA, refId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
-  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().messageEnabled, false);
+  const refContract = (await get(`${imageBase}/consent?accountId=${accountA}`)).json();
+  assert.equal(refContract.messageEnabled, false);
+  assert.deepEqual(refContract.refs, [{ refId: imageRequest.refId, kind: 'remote' }],
+    'The authenticated consent response proves ref kind without exposing its source URL');
+  assert.ok(!JSON.stringify(refContract).includes('remote.example.com'));
   assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403, 'Remote images are blocked by default');
   assert.equal((await post(`${imageBase}/consent`, { accountId: accountB, enabled: true }, csrf)).statusCode, 404);
   assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, orbitId: orbitB, enabled: true }, csrf)).statusCode, 404);
@@ -212,7 +216,19 @@ try {
   assert.equal((await post(`${imageBase}/consent`, { accountId: accountA, enabled: false }, csrf)).statusCode, 200);
   assert.equal((await post(`${imageBase}/sender-preference`, { accountId: accountA, enabled: true }, csrf)).statusCode, 200);
   assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().senderEnabled, true);
+  const blockedOverride = (await get(`${imageBase}/consent?accountId=${accountA}`)).json();
+  assert.equal(blockedOverride.messageChoice, false);
+  assert.equal(blockedOverride.effectiveRemoteEnabled, false);
+  assert.equal((await post(`${imageBase}/fetch`, imageRequest, csrf)).statusCode, 403,
+    'Explicit message block overrides the claimed sender preference');
   assert.equal((await get(`/api/mail/items/${otherItem}/images/consent?accountId=${accountB}`)).json().senderEnabled, false);
+  await db.update(items).set({ fromPersonId: personA, senderIdentitiesComplete: true, bodyHtmlPath: htmlKey,
+    htmlPolicyVersion: 1, imageMetadata: [{ refId: imageRequest.refId, kind: 'remote', source: senderSource }] }).where(eq(items.id, secondItem));
+  assert.equal((await get(`/api/mail/items/${secondItem}/images/consent?accountId=${accountA}`)).json().effectiveRemoteEnabled, true,
+    'A block on the first message does not suppress another message from the same claimed sender');
+  await db.update(items).set({ providerRevision: 'new-image-source-revision' }).where(eq(items.id, firstItem));
+  assert.equal((await get(`${imageBase}/consent?accountId=${accountA}`)).json().effectiveRemoteEnabled, true,
+    'A stale message override no longer blocks the sender preference after a source change');
   const senderFetchA = await post(`${imageBase}/fetch`, imageRequest, csrf);
   assert.equal(senderFetchA.statusCode, process.env.CAMO_FIXTURE_URL ? 200 : 503,
     'A preference authorizes a fetch independently of item consent');

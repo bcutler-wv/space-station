@@ -164,6 +164,8 @@ export function registerMailImages(app: FastifyInstance, auth: AuthConfig, blobs
       .where(and(eq(mailSenderImagePreferences.accountId, accountId), eq(mailSenderImagePreferences.senderAddress, address))).limit(1);
     return preference;
   }) : Promise.resolve(undefined);
+  const currentChoice = (choice: Awaited<ReturnType<typeof readChoice>>, digest: string) =>
+    choice?.digest === digest ? choice.enabled : null;
   app.get('/api/mail/items/:itemId/images/consent', async (request, reply) => {
     const itemId = (request.params as { itemId: string }).itemId;
     const query = imageConsentSchema.omit({ enabled: true }).safeParse(request.query);
@@ -173,8 +175,14 @@ export function registerMailImages(app: FastifyInstance, auth: AuthConfig, blobs
     const message = await readChoice(itemId);
     const address = await sender(item);
     const preference = await readPreference(item.accountId, address);
-    return imageConsentResponseSchema.parse({ messageEnabled: Boolean(message?.enabled && message.digest === sourceDigest(item)),
-      senderEnabled: preference?.enabled ?? false, senderAddress: address });
+    const images = item.parseStatus === 'supported' && item.bodyHtmlPath
+      ? item.htmlPolicyVersion === MAIL_HTML_POLICY_VERSION ? metadata(item.imageMetadata) : null : [];
+    if (!images) return reply.code(404).send(unavailable);
+    const choice = currentChoice(message, sourceDigest(item));
+    return imageConsentResponseSchema.parse({ messageEnabled: choice === true, messageChoice: choice,
+      senderEnabled: preference?.enabled ?? false, effectiveRemoteEnabled: choice ?? preference?.enabled ?? false,
+      senderAddress: address,
+      refs: images.map(({ refId, kind }) => ({ refId, kind })) });
   });
   app.post('/api/mail/items/:itemId/images/consent', async (request, reply) => {
     if (!exactOrigin(request.headers)) return reply.code(403).send(invalid);
@@ -219,7 +227,7 @@ export function registerMailImages(app: FastifyInstance, auth: AuthConfig, blobs
       const message = await readChoice(item.id);
       const address = await sender(item);
       const preference = await readPreference(item.accountId, address);
-      if (!(message?.enabled && message.digest === sourceDigest(item)) && !preference?.enabled) return reply.code(403).send(unavailable);
+      if (!(currentChoice(message, sourceDigest(item)) ?? preference?.enabled ?? false)) return reply.code(403).send(unavailable);
     }
     const key = `${item.accountId}:${item.id}`;
     const reservation = imageWork.reserve(key);
@@ -241,7 +249,7 @@ export function registerMailImages(app: FastifyInstance, auth: AuthConfig, blobs
         const choice = await readChoice(item.id);
         const address = await sender(current);
         const preference = await readPreference(current.accountId, address);
-        if (!(choice?.enabled && choice.digest === sourceDigest(current)) && !preference?.enabled)
+        if (!(currentChoice(choice, sourceDigest(current)) ?? preference?.enabled ?? false))
           return reply.code(403).send(unavailable);
       }
       let bytes: Buffer;

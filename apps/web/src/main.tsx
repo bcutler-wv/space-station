@@ -5,7 +5,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useNavigate } from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useLocation, useNavigate } from '@tanstack/react-router';
 import {
   QueryClient,
   QueryClientProvider,
@@ -37,6 +37,7 @@ import "./style.css";
 import { AuthGate, csrfHeaders, logout } from "./auth-screen.js";
 import { SetupScreen } from './setup-screen.js';
 import { GoogleScreen, GoogleContinuationScreen } from './google-screen.js';
+import { MailBody } from './mail-body.js';
 
 const queryClient = new QueryClient();
 function cachedMode(): AppearanceResponse["mode"] {
@@ -1036,7 +1037,13 @@ const orbitRoute = createRoute({ getParentRoute: () => rootRoute, path: '/demo/o
   const { orbitId } = orbitRoute.useParams();
   return <App active={orbits.some((entry) => entry.id === orbitId) ? orbitId as OrbitId : 'mission'} />;
 } });
-const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute]) });
+const mailBodyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail/body/$accountId/$itemId', component: () => {
+  const { accountId, itemId } = mailBodyRoute.useParams();
+  const search = useLocation({ select: (location) => location.searchStr });
+  const orbitId = new URLSearchParams(search).get('orbitId') ?? undefined;
+  return <MailBody accountId={accountId} itemId={itemId} {...(orbitId ? { orbitId } : {})} />;
+} });
+const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute, mailBodyRoute]) });
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

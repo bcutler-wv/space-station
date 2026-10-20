@@ -24,6 +24,9 @@ Station holds a person's entire working life: every email, chat, and calendar ev
 - Proxying hides the client IP, but fetching a unique tracking URL can still reveal that a message was opened. Do not describe the proxy as preventing tracking.
 - Links show their real destination on hover and open with `rel="noopener noreferrer"`.
 - Re-sanitize at render time even though content was sanitized at ingest.
+- The browser reads ref kinds from the authenticated, account/Orbit-scoped image-consent response. It receives only opaque IDs and `remote`/`cid` kinds, never stored source URLs or signed proxy URLs. The browser requires the body and consent ref sets to match exactly before rendering HTML. Its parent fetches at most 64 PNGs, each at most 2 MiB and together at most 32 MiB, and embeds them as data URLs in the opaque-origin frame. Base64 expands that displayed byte ceiling to roughly 43 MiB of source text before DOM copies; consent changes and unmount abort requests and clear the data. Blob URLs from the parent cannot load in that opaque-origin frame.
+- The `station:logout` lifecycle immediately clears private body, consent and image state and aborts pending body, image, font and setting requests. Item and Orbit changes invalidate prior request completions before the new scoped body appears.
+- A current explicit per-message choice takes precedence over a claimed-sender preference. If no choice exists, or the message source digest has changed, the sender preference applies. Thus "Block images in this message" works while a sender preference remains enabled; the UI reports the effective choice.
 
 ## Parsing
 

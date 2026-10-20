@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script>try { const saved = localStorage.getItem('station-theme-mode'); const mode = saved === 'light' || saved === 'dark' ? saved : 'system'; document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode; } catch { document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }</script>
+    <script src="/theme-prepaint.js"></script>
   </head>
   <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
 </html>

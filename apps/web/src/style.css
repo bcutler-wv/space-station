@@ -1141,3 +1141,15 @@ h4 {
 .setup-card li { margin: .8rem 0; }
 .setup-card { overflow-wrap: anywhere; }
 @media (max-width: 480px) { .google-copy button { width: 100%; } }
+
+.mail-body { margin: 24px auto; max-width: 920px; padding: 20px; border-radius: 28px; background: var(--surface-container); color: var(--on-surface); font-family: Rubik, sans-serif; }
+.mail-body-controls { padding: 16px; border-radius: 16px; background: var(--surface-container-high); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.mail-body-controls p { flex-basis: 100%; margin: 0; line-height: 1.5; }
+.mail-body-controls small { color: var(--on-surface-variant); }
+.mail-body button { border: 0; border-radius: 999px; padding: 10px 16px; background: var(--primary-container); color: var(--on-primary-container); font: inherit; cursor: pointer; }
+.mail-body button:disabled { opacity: .55; cursor: wait; }
+.mail-body button:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+.mail-body-frame { width: 100%; height: min(520px, 60vh); margin: 16px 0; border: 0; border-radius: 16px; background: var(--surface-container-lowest); color: var(--on-surface); }
+.mail-body-frame.expanded { height: min(1100px, 80vh); }
+.mail-body-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+@media (max-width: 640px) { .mail-body { margin: 12px; padding: 12px; } .mail-body-frame { height: 55vh; } }

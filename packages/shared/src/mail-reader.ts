@@ -42,6 +42,9 @@ export const readerBodySchema = z.object({ itemId: readerIdSchema,
 export const imageConsentSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), enabled: z.boolean() }).strict();
 export const imageFetchSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), refId: readerImageRefSchema }).strict();
 export const senderImagePreferenceSchema = z.object({ accountId: readerIdSchema, orbitId: readerIdSchema.optional(), enabled: z.boolean() }).strict();
-export const imageConsentResponseSchema = z.object({ messageEnabled: z.boolean(), senderEnabled: z.boolean(), senderAddress: z.string().max(254).nullable() }).strict();
+export const imageConsentResponseSchema = z.object({ messageEnabled: z.boolean(), messageChoice: z.boolean().nullable(),
+  senderEnabled: z.boolean(), effectiveRemoteEnabled: z.boolean(), senderAddress: z.string().max(254).nullable(),
+  refs: z.array(z.object({ refId: readerImageRefSchema, kind: z.enum(['remote', 'cid']) }).strict()).max(64),
+}).strict();
 export const imageChoiceResponseSchema = z.object({ enabled: z.boolean() }).strict();
 export const senderImagePreferenceResponseSchema = z.object({ enabled: z.boolean(), senderAddress: z.string().max(254) }).strict();

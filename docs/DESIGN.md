@@ -35,6 +35,8 @@ No filler. Every panel shows real items the user can act on. No count-only rollu
 
 The M1 mail reader backend exposes bounded conversation and message metadata pages plus a separate item body. The later mail view must re-sanitize stored HTML before constructing a sandboxed iframe, then use the planned image proxy for opaque image references. It must not place remote source URLs in browser data. Automatic SSE-driven reader refetches must use an explicit passive read mode with the same owner authorization or show an update prompt; ordinary reader GETs currently renew the owner's idle session.
 
+The reusable M1 body reader has its own authenticated deep link ahead of full mail navigation. Its scrollable iframe uses the selected theme's resolved color roles and a local Rubik font, with loading, plain-text, unsupported and unavailable states outside the frame. The surrounding controls own remote image consent and bounded expansion.
+
 ## Color system
 
 ### Tokens

@@ -15,6 +15,7 @@
     "@station/theme": "workspace:*",
     "@tanstack/react-query": "5.104.5",
     "@tanstack/react-router": "1.170.41",
+    "dompurify": "3.4.17",
     "material-symbols": "0.48.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"

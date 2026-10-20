@@ -131,7 +131,7 @@ On 2026-10-20, checked the upstream DOMPurify and jsdom repositories, current pa
 
 | Package/version | Upstream repository | License evidence | Use |
 |---|---|---|---|
-| dompurify 3.4.17 | https://github.com/cure53/DOMPurify | Apache-2.0 OR MPL-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | Conservative mail HTML sanitizer in the parser child |
+| dompurify 3.4.17 | https://github.com/cure53/DOMPurify | Apache-2.0 OR MPL-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | Conservative mail HTML sanitizer in the parser child and browser reader |
 | jsdom 30.1.3 | https://github.com/jsdom/jsdom | MIT; installed LICENSE.txt SHA-256 prefix `242d37e7cab2` | DOM for server sanitation without scripts or resource loading |
 | @types/jsdom 27.0.0 | https://github.com/DefinitelyTyped/DefinitelyTyped | MIT; installed LICENSE SHA-256 prefix `c2cfccb812fe` | Strict TypeScript types |
 | @csstools/color-helpers 6.1.2, @csstools/css-syntax-patches-for-csstree 1.1.15 | https://github.com/csstools/postcss-plugins | MIT-0; both installed LICENSE.md SHA-256 prefix `947e32047a16` | jsdom transitives, exact version exceptions in the license gate |
