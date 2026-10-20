@@ -33,7 +33,7 @@ Each M1 substep gets separate implementation, checks, Astra review and acceptanc
 
 M1.1 was accepted with local checks and Ubuntu CI runtime gates on 2026-10-19 (commit `9d8a482`, run `39354841946`). M1.2a backend and fixture work was Astra-reviewed and accepted after Ubuntu CI run `39357352441` passed (commit `e64add3`). M1.2b guided setup and browser continuation were accepted after Ubuntu CI run `39360383613` passed (commit `e13effa`); continuation and connected screens were visually checked in light/dark and desktop/mobile captures. M1.3a isolated MIME parsing was accepted after Ubuntu CI run `39466415976` passed (commit `fcb06c4`). M1.3b ingestion HTML sanitation was accepted after Ubuntu CI run `39471963090` passed its mixed-cgroup parser gate and browser jobs (commit `0bda48b`). The unchanged parser gate later timed out on run `39474165355`; the reviewed one-core capacity correction passed three consecutive mixed workload pairs in Ubuntu CI run `39476144537` (commit `357bb4f`). M1.3c credential refresh and reconnect backend and UI were accepted in that same run, including migration, PostgreSQL concurrency/recovery fixtures and HTTPS browser gates; Gmail sync, reader re-sanitation, image proxying, and mail reading remain pending.
 
-The private file store was accepted after Ubuntu CI run `39477808140` (commit `8f33cb5`). Normalized mail persistence and its generated migration were accepted after Ubuntu CI run `39480965786` (commit `21c2997`), including PostgreSQL page replay, concurrency, crash cleanup and privacy fixtures. No Gmail polling or mail reading is enabled by these foundations.
+The private file store was accepted after Ubuntu CI run `39477808140` (commit `8f33cb5`). Normalized mail persistence and its generated migration were accepted after Ubuntu CI run `39480965786` (commit `21c2997`), including PostgreSQL page replay, concurrency, crash cleanup and privacy fixtures. The bounded Gmail read adapter and rejected-token recovery were accepted after Ubuntu CI run `39483819868` (commit `964edae`). No Gmail polling or mail reading is enabled by these foundations.
 
 - Decide client routing and live-update transport before implementing Mail deep links and live sync events.
 - Data model for accounts, Orbits, threads, items, people, labels, attachments.
@@ -119,3 +119,5 @@ The private file store was accepted after Ubuntu CI run `39477808140` (commit `8
 - Public README screenshots using fake data.
 
 **Done when:** accessibility and security gates pass, backup and restore is exercised on disposable CI data, release docs match the built app, and the v1.0.0 tag is ready for review.
+
+M1.3e durable Gmail ingestion is implemented and Astra-reviewed for version 0.17.0, pending its Ubuntu CI gate. Review corrected job cancellation and the terminal list-page crash boundary. See [the ingestion record](sessions/gmail-sync-runner.md). Progress events and mail reading remain separate pending tasks.

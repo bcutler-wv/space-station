@@ -7,3 +7,5 @@ Astra review found that a refresh lease generation could be mistaken for a publi
 The review also expanded success/error body, byte-boundary, cancellation, authorization-header, redirect, metadata and actual-database race fixtures. Local full checks passed with 59 tests; Astra independently reran 14 SDK fixtures. The final raw-limit correction passed those fixtures, lint and typecheck. Updated credential PostgreSQL fixtures require Ubuntu CI before runtime acceptance.
 
 Architecture decision 0007 replaces the illustrative iterable connector contract with explicit bounded pages. Provider payload schemas live in the shared package, and Gaxios provenance points to its maintained Google monorepo. No scheduler, automatic ingestion, reader or external action is enabled by this step.
+
+Ubuntu CI run `39483819868` on commit `964edae` passed all gates, including the expanded PostgreSQL credential-race fixture, mail persistence and HTTPS browser regressions. The read adapter is runtime-accepted. Automatic sync and the reader remain subsequent steps.

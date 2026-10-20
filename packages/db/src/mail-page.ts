@@ -153,14 +153,16 @@ async function checkFence(db: Database | Transaction, page: MailPage, lock: bool
 
 // A committed intent precedes publication. The row lock spans the file write;
 // the collector takes the same lock and can never delete an active publication.
-async function stageBlob(db: Database, store: PrivateBlobStore, page: MailPage, bytes: Uint8Array): Promise<string> {
+async function stageBlob(db: Database, store: PrivateBlobStore, page: MailPage, bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const key = PrivateBlobStore.generateKey();
   await db.insert(blobIntents).values({ key, accountId: page.accountId, stateId: page.stateId, pageId: page.pageId,
     leaseGeneration: page.expectedLeaseGeneration, credentialGeneration: page.expectedCredentialGeneration, expectedSequence: page.expectedSequence });
   await db.transaction(async (tx) => {
+    signal?.throwIfAborted();
     const [intent] = await tx.select().from(blobIntents).where(eq(blobIntents.key, key)).for('update');
     if (!intent || intent.state !== 'pending' || intent.stateId !== page.stateId || intent.pageId !== page.pageId) throw new Error('Staged blob intent was reclaimed');
-    await store.writeReserved(key, bytes);
+    await store.writeReserved(key, bytes, signal);
   });
   return key;
 }
@@ -177,7 +179,8 @@ async function identityFor(tx: Transaction, accountId: string, provider: string,
   return id;
 }
 
-export async function applyMailPage(db: Database, store: PrivateBlobStore, page: MailPage): Promise<'applied' | 'replayed'> {
+export async function applyMailPage(db: Database, store: PrivateBlobStore, page: MailPage, signal?: AbortSignal): Promise<'applied' | 'replayed'> {
+  signal?.throwIfAborted();
   validPage(page);
   const pageDigest = digestPage(page);
   await checkFence(db, page, false, false);
@@ -189,13 +192,15 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
   await checkFence(db, page, false);
   const staged = new Map<string, { html?: string; attachments: string[] }>();
   for (const change of page.changes) {
+    signal?.throwIfAborted();
     if (change.deleted || !change.parsed?.ok) continue;
     const entry: { html?: string; attachments: string[] } = { attachments: [] };
-    if (change.parsed.mail.sanitizedHtml) entry.html = await stageBlob(db, store, page, Buffer.from(change.parsed.mail.sanitizedHtml.html, 'utf8'));
-    for (const attachment of change.parsed.mail.attachments) entry.attachments.push(await stageBlob(db, store, page, Buffer.from(attachment.contentBase64, 'base64')));
+    if (change.parsed.mail.sanitizedHtml) entry.html = await stageBlob(db, store, page, Buffer.from(change.parsed.mail.sanitizedHtml.html, 'utf8'), signal);
+    for (const attachment of change.parsed.mail.attachments) entry.attachments.push(await stageBlob(db, store, page, Buffer.from(attachment.contentBase64, 'base64'), signal));
     staged.set(change.externalId, entry);
   }
   return db.transaction(async (tx) => {
+      signal?.throwIfAborted();
       await checkFence(tx, page, true, false);
       const [replayed] = await tx.select({ digest: syncPages.pageDigest, sequence: syncPages.sequence }).from(syncPages).where(and(eq(syncPages.stateId, page.stateId), eq(syncPages.pageId, page.pageId)));
       if (replayed) {
@@ -208,6 +213,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
       const [baseOrbit] = await tx.select({ id: orbits.id }).from(orbits).where(eq(orbits.id, account.orbitId));
       if (!baseOrbit) throw new MailPageFenceError();
       for (const change of page.changes) {
+        signal?.throwIfAborted();
         const parsed = change.parsed?.ok ? change.parsed.mail : null;
         const [prior] = await tx.select().from(items).where(and(eq(items.accountId, page.accountId), eq(items.collectionId, page.collectionId), eq(items.externalId, change.externalId)));
         const threadExternalId = change.threadExternalId ?? `tombstone:${change.externalId}`;
@@ -285,8 +291,10 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           await tx.update(blobIntents).set({ state: 'referenced', committedAt: new Date() }).where(eq(blobIntents.key, key));
         }
       }
+      signal?.throwIfAborted();
       await tx.insert(syncPages).values({ id: randomUUID(), stateId: page.stateId, accountId: page.accountId, pageId: page.pageId, pageDigest, sequence: page.expectedSequence + 1 });
       await tx.update(syncStates).set({ cursor: page.cursorAfter, sequence: page.expectedSequence + 1, lastSuccessAt: new Date(), updatedAt: new Date() }).where(eq(syncStates.id, page.stateId));
+      signal?.throwIfAborted();
       return 'applied';
   });
 }
