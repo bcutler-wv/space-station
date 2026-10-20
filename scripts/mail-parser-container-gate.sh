@@ -3,6 +3,20 @@ set -euo pipefail
 
 id="$(docker compose ps -q mime-parser)"
 test -n "$id"
+gate_diagnostics() {
+  local status="$1"
+  trap - EXIT
+  echo "Parser gate resource diagnostics (exit=$status):" >&2
+  docker inspect "$id" --format 'container={{.Id}} restarts={{.RestartCount}} running={{.State.Running}} oom={{.State.OOMKilled}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' >&2 || true
+  docker compose exec -T mime-parser sh -c '
+    for name in cpu.stat memory.peak memory.events pids.current pids.max; do
+      printf "%s:\n" "$name"
+      cat "/sys/fs/cgroup/$name"
+    done
+  ' >&2 || true
+  exit "$status"
+}
+trap 'gate_diagnostics "$?"' EXIT
 restart_before="$(docker inspect "$id" --format '{{.RestartCount}}')"
 oom_before="$(docker compose exec -T mime-parser cat /sys/fs/cgroup/memory.events | awk '$1=="oom_kill" {print $2}')"
 docker compose exec -T mime-parser node -e "require('http').get('http://127.0.0.1:8090/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
@@ -16,7 +30,7 @@ const host = JSON.parse(process.env.INSPECT_JSON);
 assert.equal(host.ReadonlyRootfs, true);
 assert.equal(host.Privileged, false);
 assert.equal(host.Memory, 536870912);
-assert.equal(host.NanoCpus, 500000000);
+assert.equal(host.NanoCpus, 1000000000);
 assert.equal(host.PidsLimit, 64);
 assert.ok(host.CapDrop.includes('ALL'));
 assert.ok(host.SecurityOpt.includes('no-new-privileges:true'));
@@ -31,7 +45,7 @@ const read = (name) => readFileSync(`/sys/fs/cgroup/${name}`, 'utf8').trim();
 assert.ok(Number(read('memory.max')) <= 536870912);
 assert.ok(Number(read('pids.max')) <= 64);
 const [quota, period] = read('cpu.max').split(' ').map(Number);
-assert.ok(quota / period <= 0.5);
+assert.equal(quota / period, 1);
 assert.equal(process.getuid(), 1000);
 for (const key of ['STATION_MASTER_KEY', 'POSTGRES_PASSWORD', 'APP_TLS_KEY_PATH']) assert.equal(process.env[key], undefined);
 const { parseInChild } = await import('./apps/worker/dist/mail-parser-service.js');
@@ -64,16 +78,22 @@ const nearHtml = '<table><tr><td>Mail content</td></tr></table>'.repeat(200) + '
 const nearLimit = Buffer.from('From: fixture@example.com\r\nSubject: near limit\r\nContent-Type: multipart/mixed; boundary="near"\r\n\r\n' +
   '--near\r\nContent-Type: text/html; charset=utf-8\r\n\r\n' + nearHtml + '\r\n' +
   '--near\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="fixture.bin"\r\nContent-Transfer-Encoding: base64\r\n\r\n' + base64 + '\r\n--near--');
-const largeResults = await Promise.all([parseMail(nearLimit), parseMail(nearLimit)]);
-for (const item of largeResults) {
-  assert.equal(item.ok, true, JSON.stringify(item.ok ? {} : item));
-  assert.equal(item.mail.attachments[0].contentBase64, base64);
-  assert.equal(item.mail.sanitizedHtml.images[0].source, 'https://example.com/near-pixel');
+for (let pair = 1; pair <= 3; pair++) {
+  const started = performance.now();
+  const largeResults = await Promise.all([parseMail(nearLimit), parseMail(nearLimit)]);
+  console.log(`Near-cap mixed parse pair ${pair}: ${Math.round(performance.now() - started)} ms; result codes ${largeResults.map((item) => item.ok ? 'ok' : item.code).join(',')}`);
+  for (const item of largeResults) {
+    assert.equal(item.ok, true, JSON.stringify(item.ok ? {} : item));
+    assert.ok(item.mail.attachments[0].contentBase64 === base64, 'near-cap attachment bytes changed');
+    assert.equal(item.mail.sanitizedHtml.images[0].source, 'https://example.com/near-pixel');
+  }
+  assert.equal((await parseMail(message)).ok, true);
 }
 assert.equal((await parseMail(Buffer.alloc(12_582_913))).code, 'input_too_large');
 assert.equal((await parseMail(message)).ok, true);
 NODE
 
+docker compose exec -T mime-parser node -e "require('http').get('http://127.0.0.1:8090/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 test "$(docker inspect "$id" --format '{{.RestartCount}}')" = "$restart_before"
 test "$(docker compose ps -q mime-parser)" = "$id"
 test "$(docker compose exec -T mime-parser cat /sys/fs/cgroup/memory.events | awk '$1=="oom_kill" {print $2}')" = "$oom_before"

@@ -9,3 +9,5 @@ Astra review found and resolved missing parser startup, repeated output copying,
 Google authorization and its guided browser flow are accepted after run `39360383613` on `e13effa`. Root inspected the fake-data CI continuation/light and connected/mobile/dark screenshots. Mail sync remains pending; the next reviewed work adds ingestion sanitation and credential refresh before durable sync.
 
 M1.3b later increased the child deadline to eight seconds, the whole-request limit to 8.5 seconds, and the client timeout to ten seconds. The unchanged two-child near-cap workload timed out at three seconds under the half-core Ubuntu gate in run `39470254199` after jsdom sanitation was added. The larger elapsed-time budget still requires a fresh cgroup gate; the 512 MiB, half-core, and two-child limits remain unchanged.
+
+The eight-second workload passed on Ubuntu run `39471963090` under half a core, then the unchanged workload timed out on a later runner in run `39474165355`. The following capacity correction raises only the parser CPU hard cap to one core and repeats the two-child near-cap pair three times in CI. Its runtime result remains pending.
