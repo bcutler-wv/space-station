@@ -12,7 +12,7 @@ export const MAIL_LIMITS = {
   rfc822Depth: 3,
   recipients: 100,
   attachments: 64,
-  timeoutMs: 3_000,
+  timeoutMs: 8_000,
   concurrency: 2,
 } as const;
 

@@ -3,6 +3,7 @@ import { request } from 'node:http';
 import { spawn } from 'node:child_process';
 import { parseInChild, createMailParserServer } from '../../apps/worker/dist/mail-parser-service.js';
 import { parseMail } from '../../apps/worker/dist/mail-parser-client.js';
+import { MAIL_LIMITS } from '../../packages/shared/dist/index.js';
 
 const raw = Buffer.from([
   'From: =?UTF-8?B?Sm9yZGFu?= <jordan@example.com>',
@@ -92,7 +93,7 @@ try {
   const timeout = new Promise((resolve) => { slow.on('response', resolve); slow.on('error', resolve); });
   slow.write('Subject: slow\r\n');
   const timed = await timeout;
-  assert.ok(Date.now() - slowStart >= 3_000 && Date.now() - slowStart < 5_000);
+  assert.ok(Date.now() - slowStart >= MAIL_LIMITS.timeoutMs + 300 && Date.now() - slowStart < MAIL_LIMITS.timeoutMs + 2_000);
   if ('statusCode' in timed) assert.equal(timed.statusCode, 408);
   const afterTimeout = await fetch(`http://127.0.0.1:${port}/parse`, {
     method: 'POST', headers: { 'Content-Type': 'message/rfc822' }, body: raw,
@@ -102,14 +103,24 @@ try {
 
 const fixtureChildPath = new URL('../fixtures/mail-child.mjs', import.meta.url);
 const makeFixtureChild = () => spawn(process.execPath, [fixtureChildPath.pathname], { stdio: ['pipe', 'pipe', 'ignore'] });
-assert.deepEqual(await parseInChild(Buffer.from('bad'), 3_000, undefined, makeFixtureChild), { ok: false, code: 'malformed' });
+assert.deepEqual(await parseInChild(Buffer.from('bad'), MAIL_LIMITS.timeoutMs, undefined, makeFixtureChild), { ok: false, code: 'malformed' });
 let overflowClosed = false;
-assert.deepEqual(await parseInChild(Buffer.from('overflow'), 3_000, undefined, () => {
+assert.deepEqual(await parseInChild(Buffer.from('overflow'), MAIL_LIMITS.timeoutMs, undefined, () => {
   const child = makeFixtureChild();
   child.on('close', () => { overflowClosed = true; });
   return child;
 }), { ok: false, code: 'limit_exceeded' });
 assert.equal(overflowClosed, true);
+let timedChildClosed = false;
+const childTimeoutStart = Date.now();
+assert.deepEqual(await parseInChild(Buffer.from('hang'), undefined, undefined, () => {
+  const child = makeFixtureChild();
+  child.on('close', () => { timedChildClosed = true; });
+  return child;
+}), { ok: false, code: 'timeout' });
+assert.ok(Date.now() - childTimeoutStart >= MAIL_LIMITS.timeoutMs - 100 && Date.now() - childTimeoutStart < MAIL_LIMITS.timeoutMs + 2_000);
+assert.equal(timedChildClosed, true);
+assert.equal((await parseInChild(raw)).ok, true);
 
 let started = 0;
 let closed = 0;
