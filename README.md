@@ -2,11 +2,11 @@
 
 Station is a self-hosted mission control for your work. It brings your email, calendars, Slack, and Teams into one place, groups them into **Orbits** (one per company, client, or area of life), and uses an AI model you choose to sort what comes in, track what you owe people, and answer questions across everything.
 
-> **Status:** pre-alpha. The build specification is approved as a starting baseline. Nothing here is usable yet.
+> **Status:** pre-alpha. The authenticated, themed shell and its development runtime are built with sample data. Mail, calendars, chat connectors, search, and AI features are planned; no real account can be connected yet.
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 
-## What it does
+## Planned product
 
 - **Mission Control.** A morning briefing, today's meetings from every calendar on one timeline (with cross-account conflicts flagged), a ranked list of what needs you and why, a prep sheet for your next meeting, and a weekly task board.
 - **Orbits.** Group accounts into focused workspaces. A work Orbit might hold a Google Workspace mailbox, a Slack workspace, and a calendar. Each Orbit has its own context, filters, and privacy rules.
@@ -33,9 +33,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 
 ## Running it
 
-Docker Compose on any Linux host. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). A first-run wizard walks you through creating your OAuth apps and connecting each account.
-
-M0.4 protects the sample shell and its settings with owner authentication. With Node 22.12+ and Corepack, run `corepack pnpm install --frozen-lockfile`, then `corepack pnpm check`. On a disposable Docker host, run `node scripts/init-env.mjs`, `docker compose up -d --build postgres migrate`, and `docker compose up -d --build --wait app worker`. Generate a short-lived setup token with the local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell still contains sample data; real account connection begins in M1.
+On a disposable Linux host with Node.js 22.12+, OpenSSL, and Docker Compose, clone the repository and run `bash scripts/start-dev.sh` from its root. The command creates private development settings and a localhost TLS certificate, migrates PostgreSQL, then starts the app and worker. Generate a short-lived owner setup token with the separate local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell contains sample data; account connection begins in M1.
 
 Provider permissions and data-use terms can change. Verify current official documentation when enabling each connector, especially Slack indexed mode. The default Slack mode is live and stores no long-term content.
 
@@ -55,6 +53,7 @@ Provider permissions and data-use terms can change. Verify current official docu
 | [SECURITY](docs/SECURITY.md) | Threat model and controls |
 | [DEPLOYMENT](docs/DEPLOYMENT.md) | Hosting, reverse proxy, backups |
 | [ROADMAP](docs/ROADMAP.md) | Milestones to v1.0.0 |
+| [M0 acceptance](docs/M0_ACCEPTANCE.md) | Foundation gates and scoped deferrals |
 
 ## License
 

@@ -35,7 +35,6 @@ jobs:
           node-version: '22.23.2'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/init-env.mjs
       - run: bash scripts/compose-smoke.sh
       - run: docker compose exec -T postgres createdb -U station station_auth_test
       - run: docker compose run --rm -T -e DB_NAME=station_auth_test migrate

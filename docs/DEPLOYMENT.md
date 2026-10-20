@@ -2,25 +2,28 @@
 
 ## Requirements
 
-- A Linux host or VM with Docker and Docker Compose.
-- About 4 GB of RAM for a single user with a few accounts (the embedding model and Tika are the largest consumers), more for very large mailboxes.
-- Disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
-- A hostname with HTTPS, served by your own reverse proxy.
+- For the current development shell: a disposable Linux host or VM with Node.js 22.12 or newer, OpenSSL, Docker with the Compose plugin, and access to its running daemon.
+- For future account sync: about 4 GB of RAM for a single user with a few accounts, more for very large mailboxes. The embedding model and Tika are planned for later milestones.
+- For future account sync: disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
+- For a deployment beyond localhost: a hostname with HTTPS, served by your own reverse proxy.
 
-## M0.4 development validation
+## Development startup
 
-This milestone is an authenticated theme and shell demo with sample data. On a disposable Linux host with Docker, run:
+The current build is an authenticated theme and shell demo with sample data. After cloning the repository on a disposable Linux host, run this command from the repository root:
 
 ```
-node scripts/init-env.mjs
-docker compose up -d --build postgres migrate
-docker compose up -d --build --wait app worker
+bash scripts/start-dev.sh
+```
+
+The script also works when invoked by absolute path from another directory. It checks the prerequisites, creates the private development environment, builds and starts Postgres and the one-shot migration, then builds and waits for healthy app and worker containers. It does not create an owner. Check readiness and create an owner setup token separately from the repository root:
+
+```
 curl --insecure --fail https://localhost:8080/ready
 mkdir -p -m 700 .cache/bootstrap
 docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/token
 ```
 
-The init script writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. It creates a private seven-day localhost TLS certificate and renews it when less than a day remains. Your browser will ask you to trust that temporary certificate. It sets `APP_ORIGIN=https://localhost:8080` for development. Set `APP_ORIGIN` to the exact HTTPS origin browsers use before serving a real hostname. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`.
+The init step writes a new `.env` with 0600 permissions, does not print secrets, and never overwrites an existing file. It creates a private seven-day localhost TLS certificate and renews it when less than a day remains. Your browser will ask you to trust that temporary certificate. It sets `APP_ORIGIN=https://localhost:8080` for development. Set `APP_ORIGIN` to the exact HTTPS origin browsers use before serving a real hostname. To set values manually, copy the tracked template to the private file with `cp .env.example .env`, run `chmod 600 .env`, then edit `.env`. Keep and back up `.env`; never put secrets in `.env.example`.
 
 The setup command writes a 0600 token file without printing its contents. It expires after 15 minutes. Open `APP_ORIGIN`, paste the token, and choose a passkey or a password of at least 12 characters. Password setup must be completed with a six-digit TOTP code before owner creation commits. Save the ten recovery codes shown once. Delete the local token file after setup with `rm .cache/bootstrap/token`; to create another token before an owner exists, remove the expired file first and rerun the command. The command fails once an owner exists. Appearance settings and wallpaper persist in PostgreSQL and require login.
 

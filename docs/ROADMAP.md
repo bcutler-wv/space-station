@@ -8,7 +8,7 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
-M0.1 through M0.3 are implemented, Astra-reviewed, and green in CI. M0.4 authentication is implemented and Astra-reviewed; its new Compose/PostgreSQL/HTTPS browser gates remain pending CI. M0.5 remains to be built. The sample shell now requires an owner login but is not yet a deployable mail client.
+M0.1 through M0.4 are implemented, Astra-reviewed, and green in CI, including the authentication PostgreSQL and HTTPS browser gates in run `39344188832`. M0.5's single-command fresh-clone startup and acceptance record are implemented and Astra-reviewed; a successful CI run using that command establishes M0 acceptance. See [the acceptance record](M0_ACCEPTANCE.md) and [CI results](https://github.com/bcutler-wv/space-station/actions/workflows/ci.yml). The sample shell requires an owner login but is not yet a mail client.
 
 Each substep ends with Astra review and fixes before the next begins:
 

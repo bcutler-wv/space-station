@@ -4,8 +4,7 @@ set -euo pipefail
 phase='Compose startup'
 trap 'status=$?; echo "Smoke failed during: $phase (exit $status)" >&2; docker compose ps --all >&2 || true; exit "$status"' ERR
 echo "Smoke phase: $phase"
-docker compose up -d --build postgres migrate
-docker compose up -d --build --wait app worker
+bash scripts/start-dev.sh
 
 phase='HTTP and built asset'
 echo "Smoke phase: $phase"
