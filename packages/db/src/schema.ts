@@ -8,6 +8,7 @@ import {
   boolean,
   check,
   uniqueIndex,
+  index,
   unique,
   foreignKey,
   primaryKey,
@@ -253,6 +254,7 @@ export const items = pgTable('items', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('items_source_unique').on(t.accountId, t.collectionId, t.externalId),
+  index('items_reader_account_thread_live_idx').on(t.accountId, t.threadId, t.deletedAt, t.internalAt, t.id),
   unique('items_id_account_unique').on(t.id, t.accountId),
   foreignKey({ columns: [t.threadId, t.accountId, t.collectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
   foreignKey({ columns: [t.fromPersonId, t.accountId], foreignColumns: [people.id, people.accountId] }),
@@ -282,6 +284,7 @@ export const itemLabels = pgTable('item_labels', {
   itemId: text('item_id').notNull(), accountId: text('account_id').notNull(),
   labelId: text('label_id').notNull(), source: text('source').notNull(),
 }, (t) => [primaryKey({ columns: [t.itemId, t.labelId, t.source] }),
+  index('item_labels_reader_label_item_idx').on(t.labelId, t.itemId),
   foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
   foreignKey({ columns: [t.labelId, t.accountId], foreignColumns: [labels.id, labels.accountId] }),
   check('item_labels_source', sql`${t.source} in ('provider', 'rule', 'ai', 'user')`)]);
@@ -290,6 +293,7 @@ export const itemOrbits = pgTable('item_orbits', {
   itemId: text('item_id').notNull().references(() => items.id),
   orbitId: text('orbit_id').notNull().references(() => orbits.id), reason: text('reason').notNull(),
 }, (t) => [primaryKey({ columns: [t.itemId, t.orbitId, t.reason] }),
+  index('item_orbits_reader_orbit_item_idx').on(t.orbitId, t.itemId),
   check('item_orbits_reason', sql`${t.reason} in ('account', 'rule', 'person', 'org')`)]);
 
 export const blobIntents = pgTable('blob_intents', {

@@ -50,6 +50,13 @@
       "when": 1792531388923,
       "tag": "0006_nifty_jamie_braddock",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792535447528,
+      "tag": "0007_worried_lionheart",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { databaseUrl, loadRuntimeConfig, openDatabase, settings } from '@station/db';
+import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, settings } from '@station/db';
 import { readFileSync } from 'node:fs';
 import { buildApp } from './app.js';
 import { registerWebStatic } from './web-static.js';
@@ -17,7 +17,7 @@ const app = buildApp(async () => { await database.db.select().from(settings).lim
 }, {
   ...(config.APP_TLS_KEY_PATH ? { key: readFileSync(config.APP_TLS_KEY_PATH), cert: readFileSync(config.APP_TLS_CERT_PATH) } : {}),
   ...(config.APP_TRUSTED_PROXY_IP ? { trustedProxyIp: config.APP_TRUSTED_PROXY_IP } : {}),
-});
+}, new PrivateBlobStore(process.env.PRIVATE_BLOB_DIR ?? '/var/lib/station/blobs'));
 app.addHook('onClose', database.close);
 await registerWebStatic(app, config.APP_ORIGIN);
 try {
