@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
+import { URLSearchParams } from 'node:url';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { registerWebStatic } from '../../apps/server/dist/web-static.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, settings } from '../../packages/db/dist/index.js';
@@ -13,10 +14,15 @@ if (!config.APP_TLS_KEY_PATH || !config.APP_TLS_CERT_PATH) throw new Error('HTTP
 const database = openDatabase(databaseUrl(config));
 const callbackCookies = [];
 let providerCalls = 0;
+let profileEmail = 'owner@example.com';
 const transport = { interceptors: { request: { add() {} }, response: { add() {} } }, async request(options) {
   providerCalls++;
-  if (options.url?.includes('/token')) return { data: { access_token: 'fixture-access', refresh_token: 'fixture-refresh', scope: 'https://www.googleapis.com/auth/gmail.modify', token_type: 'Bearer', expires_in: 3600 } };
-  if (options.url?.includes('/profile')) return { data: { emailAddress: 'owner@example.com' } };
+  if (options.url?.includes('/token')) {
+    const code = new URLSearchParams(options.data).get('code');
+    profileEmail = code === 'fixture-wrong-code' ? 'other@example.com' : 'owner@example.com';
+    return { data: { access_token: `fixture-access-${code}`, refresh_token: `fixture-refresh-${code}`, scope: 'https://www.googleapis.com/auth/gmail.modify', token_type: 'Bearer', expires_in: 3600 } };
+  }
+  if (options.url?.includes('/profile')) return { data: { emailAddress: profileEmail } };
   throw new Error('Unexpected provider request.');
 } };
 const app = buildApp(async () => { await database.db.select().from(settings).limit(1); }, databaseAppearanceStore(database.db), {

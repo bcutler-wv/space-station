@@ -34,11 +34,11 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
   app.get('/api/google/status', async (request, reply) => {
     if (!(await ready())) return reply.code(409).send({ error: 'Complete the first Orbit setup and confirm this address before connecting Google.' });
     const rows = await db.select().from(accounts).where(eq(accounts.provider, 'google'));
-    const [pending] = await db.select({ id: oauthAttempts.id }).from(oauthAttempts).where(and(
+    const [pending] = await db.select({ id: oauthAttempts.id, reconnectAccountId: oauthAttempts.reconnectAccountId }).from(oauthAttempts).where(and(
       eq(oauthAttempts.provider, 'google'), eq(oauthAttempts.sessionHash, sessionHash(request.session.sessionId)),
       eq(oauthAttempts.authGeneration, request.session.authGeneration!), eq(oauthAttempts.status, 'returned'), gt(oauthAttempts.expiresAt, new Date()),
     )).orderBy(desc(oauthAttempts.createdAt)).limit(1);
-    return googleStatusSchema.parse({ redirectUri, pendingConfirmation: Boolean(pending), accounts: rows.map((row) => ({
+    return googleStatusSchema.parse({ redirectUri, pendingConfirmation: Boolean(pending), pendingReconnectAccountId: pending?.reconnectAccountId ?? null, accounts: rows.map((row) => ({
       id: row.id, email: row.email, orbitId: row.orbitId, grantedScopes: row.grantedScopes,
       backfill: row.backfill, status: row.revokedAt ? 'needs_reconnect' : 'connected',
     })) });

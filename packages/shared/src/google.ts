@@ -22,6 +22,7 @@ export const googleAccountSchema = z.object({
 });
 export const googleStatusSchema = z.object({
   redirectUri: z.url(), pendingConfirmation: z.boolean(),
+  pendingReconnectAccountId: z.uuid().nullable(),
   accounts: z.array(googleAccountSchema),
 });
 export const googleStartResponseSchema = z.object({ authorizationUrl: z.url() });
