@@ -15,6 +15,13 @@
       "when": 1792452220430,
       "tag": "0001_breezy_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792459997942,
+      "tag": "0002_real_namor",
+      "breakpoints": true
     }
   ]
 }

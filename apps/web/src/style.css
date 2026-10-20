@@ -1110,3 +1110,19 @@ h4 {
 .recovery-list code { overflow-wrap: anywhere; padding: 9px; border-radius: 8px; background: var(--surface-container-high); }
 @media (max-width: 420px) { .recovery-list { grid-template-columns: 1fr; } }
 .auth-passkey-recovery { display: grid; gap: 12px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--outline-variant); }
+.sample-setup-link { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 1rem; background: var(--surface-container-high); color: var(--on-surface); }
+.sample-setup-link a, .setup-page a { color: var(--primary); }
+.setup-page { min-height: 100vh; padding: clamp(1rem, 4vw, 3rem); background: var(--surface); color: var(--on-surface); }
+.setup-card { max-width: 760px; margin: auto; padding: clamp(1rem, 4vw, 2.5rem); border-radius: 28px; background: var(--surface-container); }
+.setup-card section { margin: 2rem 0; padding-top: 1rem; border-top: 1px solid var(--outline-variant); }
+.setup-card label { display: block; margin: .75rem 0; }
+.setup-card input:not([type=checkbox]):not([type=radio]), .setup-card textarea, .setup-card select { display: block; width: 100%; box-sizing: border-box; padding: .7rem; margin-top: .25rem; border: 1px solid var(--outline); border-radius: 12px; background: var(--surface-container-low); color: var(--on-surface); font: inherit; }
+.setup-card input[type=checkbox], .setup-card input[type=radio] { margin-right: .5rem; }
+.setup-card fieldset { margin: 1rem 0; border: 1px solid var(--outline-variant); border-radius: 16px; }
+.setup-card fieldset label { display: inline-block; margin-right: 1rem; }
+.setup-card fieldset select { min-width: 12rem; }
+.setup-rule { margin: 1rem 0; padding: 1rem; border-radius: 16px; background: var(--surface-container-high); }
+.orbit-color-choice { padding: .35rem .7rem; border-radius: 1rem; background: var(--orbit-1-container); color: var(--on-orbit-1-container); }
+.orbit-color-choice.orbit-2 { background: var(--orbit-2-container); color: var(--on-orbit-2-container); }
+.orbit-color-choice.orbit-3 { background: var(--orbit-3-container); color: var(--on-orbit-3-container); }
+.orbit-color-choice.orbit-4 { background: var(--orbit-4-container); color: var(--on-orbit-4-container); }

@@ -48,6 +48,7 @@ M0.4 requires an exact configured HTTPS `APP_ORIGIN` for state-changing requests
 ## Privacy precedence and retention
 
 - Before sync starts, the wizard asks for global and first-Orbit indexing/AI exclusions. For each item, combine the account Orbit, routed Orbits, and global rules; the most restrictive applicable effect wins. `no_index` excludes lexical and vector indexes. `no_ai` excludes all model requests, embedding providers, AI-derived summaries, briefings, extraction, proposals, and citations. A local embedding service still follows the configured no-AI rule.
+- M1.1 stores explicit global and first-Orbit defaults plus bounded exact account-email, sender-email, and provider-label-name exclusions. Empty Orbit membership or a missing Orbit policy denies indexing and AI. The versioned setup marker must gate later account connection and sync. There is no synced or derived content to purge in M1.1; later processing must enforce the policy and invalidation rules below.
 - Enforce policy when scheduling work and again when serving search/CAPCOM or constructing provider requests. Attachments and OCR inherit the parent item's policy. Summaries and answers inherit the most restrictive policy of their sources.
 - When policy tightens or routing changes, block access immediately and queue deletion/invalidation for search documents, chunks and embeddings, extraction output, attachment extracted text if prohibited, summaries, briefings, citations, and cached answers. Rebuild only under the new policy. Record the purge job and surface failures until repaired.
 

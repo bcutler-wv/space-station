@@ -9,6 +9,7 @@ const reviewedExceptions = new Set([
   'LGPL-3.0-or-later:@img/sharp-libvips-linux-x64@1.3.4',
   '0BSD:tslib@1.14.1',
   '0BSD:tslib@2.8.1',
+  'Unlicense:isbot@5.2.2',
 ]);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;

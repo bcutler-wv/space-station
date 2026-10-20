@@ -2,7 +2,7 @@
 
 Station is a self-hosted mission control for your work. It brings your email, calendars, Slack, and Teams into one place, groups them into **Orbits** (one per company, client, or area of life), and uses an AI model you choose to sort what comes in, track what you owe people, and answer questions across everything.
 
-> **Status:** pre-alpha. The authenticated, themed shell and its development runtime are built with sample data. Mail, calendars, chat connectors, search, and AI features are planned; no real account can be connected yet.
+> **Status:** pre-alpha. The authenticated, themed shell uses sample data. After owner login, the first Orbit and privacy choices can be saved at `/setup`. Mail, calendars, chat connectors, search, and AI features are planned; no real account can be connected yet.
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 

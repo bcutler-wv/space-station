@@ -5,6 +5,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { createRoot } from "react-dom/client";
+import { createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useNavigate } from '@tanstack/react-router';
 import {
   QueryClient,
   QueryClientProvider,
@@ -34,6 +35,7 @@ import "@fontsource/rubik/latin-600.css";
 import "material-symbols/rounded.css";
 import "./style.css";
 import { AuthGate, csrfHeaders, logout } from "./auth-screen.js";
+import { SetupScreen } from './setup-screen.js';
 
 const queryClient = new QueryClient();
 function cachedMode(): AppearanceResponse["mode"] {
@@ -586,8 +588,8 @@ function OrbitView({
   );
 }
 
-function App() {
-  const [active, setActive] = useState<"mission" | OrbitId>("mission");
+function App({ active }: { active: 'mission' | OrbitId }) {
+  const navigate = useNavigate();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [capcomOpen, setCapcomOpen] = useState(false);
   const [blackout, setBlackout] = useState(false);
@@ -714,7 +716,7 @@ function App() {
           className={`nav-button ${active === "mission" ? "active" : ""}`}
           aria-label="Mission Control"
           aria-current={active === "mission" ? "page" : undefined}
-          onClick={() => setActive("mission")}
+          onClick={() => void navigate({ to: '/' })}
         >
           {icon("space_dashboard")}
         </button>
@@ -726,7 +728,7 @@ function App() {
             aria-label={item.name}
             aria-current={active === item.id ? "page" : undefined}
             title={item.name}
-            onClick={() => setActive(item.id)}
+            onClick={() => void navigate({ to: '/demo/orbits/$orbitId', params: { orbitId: item.id } })}
           >
             <span>{item.letter}</span>
             <small>{item.badge}</small>
@@ -799,6 +801,7 @@ function App() {
         </div>
       </header>
       <main className="interior">
+        <div className="sample-setup-link"><a href="/setup">Set up your first Orbit</a><span>Sample Mission Control</span></div>
         {blackout && (
           <div className="blackout-note">
             Blackout is on for this demo. Notifications are not connected.
@@ -1023,11 +1026,20 @@ function App() {
 }
 
 document.title = PRODUCT_NAME;
+const rootRoute = createRootRoute({ component: () => <Outlet /> });
+const missionRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: () => <App active="mission" /> });
+const setupRoute = createRoute({ getParentRoute: () => rootRoute, path: '/setup', component: SetupScreen });
+const orbitRoute = createRoute({ getParentRoute: () => rootRoute, path: '/demo/orbits/$orbitId', component: () => {
+  const { orbitId } = orbitRoute.useParams();
+  return <App active={orbits.some((entry) => entry.id === orbitId) ? orbitId as OrbitId : 'mission'} />;
+} });
+const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, orbitRoute]) });
+declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthGate>
-        <App />
+        <RouterProvider router={router} />
       </AuthGate>
     </QueryClientProvider>
   </React.StrictMode>,

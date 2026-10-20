@@ -50,6 +50,16 @@ const unauthorized = {
 };
 const newCodes = () =>
   Array.from({ length: 10 }, () => randomBytes(12).toString("base64url"));
+const publicAuthRoutes = new Set([
+  '/api/auth/status', '/api/auth/logout', '/api/auth/bootstrap/restart',
+  '/api/auth/bootstrap/password', '/api/auth/bootstrap/totp',
+  '/api/auth/bootstrap/passkey/options', '/api/auth/bootstrap/passkey/verify',
+  '/api/auth/login/password', '/api/auth/login/recovery',
+  '/api/auth/login/passkey/options', '/api/auth/login/passkey/verify',
+  '/api/auth/recovery/password', '/api/auth/recovery/passkey/options',
+  '/api/auth/recovery/passkey/verify', '/api/auth/reset/password',
+  '/api/auth/reset/totp/options', '/api/auth/reset/totp/confirm',
+]);
 
 function encrypt(value: string, key: Buffer) {
   const iv = randomBytes(12);
@@ -162,7 +172,8 @@ export async function registerAuth(app: FastifyInstance, config: AuthConfig) {
   });
   app.addHook("preHandler", async (request, reply) => {
     if (
-      request.url.startsWith("/api/appearance") &&
+      request.url.startsWith('/api/') &&
+      !publicAuthRoutes.has(request.url.split('?')[0] ?? '') &&
       (request.session.userId !== OWNER_ID ||
         request.session.recoveryMode ||
         !(await currentPrincipal(request)))

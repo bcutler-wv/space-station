@@ -103,3 +103,7 @@ Checked pinned npm metadata, installed license text, and upstream documentation/
 | @simplewebauthn/server 14.0.3, @simplewebauthn/browser 14.0.0 | https://github.com/MasterKale/SimpleWebAuthn | MIT `bd9e3f456964` | WebAuthn registration and assertion verification |
 | @node-rs/argon2 2.2.2 | https://github.com/napi-rs/node-rs | MIT `c748f2e7f93f` | Versioned Argon2id password hashing |
 | otplib 13.5.0 | https://github.com/yeojz/otplib | MIT `e143fd4930d8` | TOTP enrollment, verification, and test fixture generation |
+
+## Adopted in M1.1
+
+Checked the current TanStack Router quickstart, upstream repository and release, and installed license text on 2026-10-19. The pinned package is `@tanstack/react-router` 1.170.41, MIT, from https://github.com/TanStack/router; its installed LICENSE SHA-256 prefix is `a405ee70c632`. It provides URL navigation and deep links. The router brings in `isbot` 5.2.2 from https://github.com/omrilotan/isbot. Its installed LICENSE is the Unlicense public-domain dedication; the license gate permits this exact package/version, rather than allowing the license family broadly. No upstream source code was copied.

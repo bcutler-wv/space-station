@@ -18,10 +18,12 @@ curl --insecure --fail --silent "https://localhost:8080${asset_path}" >/dev/null
 
 phase='database migration'
 echo "Smoke phase: $phase"
+migration_count=$(node -p "require('./packages/db/drizzle/meta/_journal.json').entries.length")
 test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_name='settings'")" = "1"
 test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM pg_extension WHERE extname='vector'")" = "1"
-test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM drizzle.__drizzle_migrations")" = "2"
+test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM drizzle.__drizzle_migrations")" = "$migration_count"
 test "$(curl --insecure --silent --output /dev/null --write-out '%{http_code}' https://localhost:8080/api/appearance)" = "401"
+test "$(curl --insecure --silent --output /dev/null --write-out '%{http_code}' https://localhost:8080/api/setup)" = "401"
 
 phase='private owner setup token'
 echo "Smoke phase: $phase"
@@ -48,6 +50,6 @@ docker compose stop app worker
 docker compose restart postgres
 docker compose up -d --force-recreate migrate
 docker compose up -d --wait app worker
-test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM drizzle.__drizzle_migrations")" = "2"
+test "$(docker compose exec -T postgres psql -U station -d station -Atqc "SELECT count(*) FROM drizzle.__drizzle_migrations")" = "$migration_count"
 test "$(docker compose run --rm -T worker node apps/worker/dist/probe.js status "$job_id" | tail -n 1)" = "completed"
 curl --insecure --fail --silent https://localhost:8080/ready >/dev/null

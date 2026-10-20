@@ -46,8 +46,33 @@ try {
     .getByRole("heading", { name: "Mission Control" })
     .first()
     .waitFor();
+  const authStatus = await (await page.request.get(`${baseURL}/api/auth/status`)).json();
+  const fixtureSetup = { version: 1, confirmedOrigin: baseURL, orbit: { name: 'Example work', colorSlot: 2, context: 'Example work context.' }, globalDefaults: { index: 'allow', ai: 'exclude' }, orbitDefaults: { index: 'exclude', ai: 'allow' }, exclusions: [] };
+  if ((await page.request.post(`${baseURL}/api/setup`, { headers: { Origin: 'https://other.example.com', 'X-CSRF-Token': authStatus.csrfToken }, data: fixtureSetup })).status() !== 403) throw new Error('Wrong-origin setup was allowed.');
+  if ((await page.request.post(`${baseURL}/api/setup`, { headers: { Origin: baseURL }, data: fixtureSetup })).status() !== 403) throw new Error('Setup without CSRF was allowed.');
+  if ((await page.request.put(`${baseURL}/api/setup/origin`, { headers: { Origin: 'https://other.example.com', 'X-CSRF-Token': authStatus.csrfToken }, data: { confirmedOrigin: baseURL } })).status() !== 403) throw new Error('Wrong-origin reconfirmation was allowed.');
+  await page.goto(`${baseURL}/setup`);
+  await page.getByRole('heading', { name: 'Set up your first Orbit' }).waitFor();
+  await page.getByLabel('I confirm this is the address I will use').check();
+  await page.getByLabel('Orbit name').fill('Example work');
+  await page.getByLabel('What is this part of your work?').fill('Example work context.');
+  await page.getByLabel('Color 2').check();
+  await page.getByRole('group', { name: 'Global' }).getByLabel('Search indexing').selectOption('allow');
+  await page.getByRole('group', { name: 'Global' }).getByLabel('AI processing').selectOption('exclude');
+  await page.getByRole('group', { name: 'First Orbit' }).getByLabel('Search indexing').selectOption('exclude');
+  await page.getByRole('group', { name: 'First Orbit' }).getByLabel('AI processing').selectOption('allow');
+  await page.getByRole('button', { name: 'Add exclusion' }).click();
+  await page.getByLabel('Value').fill('private@example.com');
+  await page.getByRole('button', { name: 'Save Orbit and privacy choices' }).click();
+  await page.getByText('Your Orbit and privacy choices are saved.').waitFor();
+  await page.reload();
+  await page.getByText('Your Orbit and privacy choices are saved.').waitFor();
+  const savedSetup = await (await page.request.get(`${baseURL}/api/setup`)).json();
+  if (savedSetup.orbit.name !== 'Example work' || savedSetup.globalDefaults.ai !== 'exclude' || savedSetup.orbitDefaults.index !== 'exclude' || savedSetup.exclusions.length !== 1) throw new Error('Setup choices were not persisted.');
+  await page.getByRole('link', { name: 'View sample Mission Control' }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.getByRole("heading", { name: "Sign in" }).waitFor();
+  if ((await page.request.get(`${baseURL}/api/setup`)).status() !== 401) throw new Error('Anonymous setup access was allowed.');
   await cdp.send("WebAuthn.setUserVerified", {
     authenticatorId,
     isUserVerified: false,

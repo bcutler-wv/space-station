@@ -13,18 +13,21 @@ PostgreSQL with Drizzle. This lists the tables and the fields that matter. Futur
 | `bootstrap_tokens` | token_hash, expires_at, consumed_at. Local CLI issues one short-lived token; owner creation consumes it in the same transaction. |
 | `auth_challenges` | id, challenge_hash, kind, expires_at, consumed_at. WebAuthn challenges expire after five minutes and can be consumed once. |
 | `settings` | key, value (jsonb). Theme mode, seed color, confidence thresholds, AI budgets. M0.3 stores a bounded normalized WebP wallpaper in the `appearance` value; a later private file store may replace the embedded image. |
+| `first_orbit_setup_v1` settings row | Versioned completion marker, first Orbit ID, configured origin confirmation and global indexing/AI defaults. Written in the same transaction as the first Orbit and exclusions. Later account connection and sync require this marker. |
 
 ## Orbits and accounts
 
 | Table | Key fields |
 |---|---|
-| `orbits` | id, name, slug, color_slot, icon, context (text written by the user), shortcut_key, sort_order, ai_policy (jsonb) |
+| `orbits` | M1.1: id, name, unique slug, color_slot, context, privacy_defaults (jsonb), created_at, updated_at. Later Orbit management adds icon, shortcut_key and sort_order. |
 | `accounts` | id, orbit_id, kind (gmail, graph, imap, caldav, slack, teams), address, display_name, auth_kind, credentials (encrypted), status, slack_mode (indexed or live) |
 | `oauth_apps` | id, provider (google, microsoft, slack), client_id, client_secret (encrypted), secret_expires_at |
 | `sync_state` | account_id, resource and provider collection ID, cursor (jsonb), generation, status, last_success_at, last_error. Unique per source collection. |
 | `sync_runs` | id, sync_state_id, started_at, finished_at, status, retry_count, error_class, cursor_before, cursor_after |
 | `routing_rules` | id, orbit_id, match (jsonb: person, org, domain, label, keyword) |
-| `exclusion_rules` | id, scope (global or orbit_id), match (jsonb), effect (no_ai, no_index, no_ai_and_no_index) |
+| `exclusion_rules` | M1.1: id, nullable orbit_id (null means global), kind (account, sender, label), normalized exact value, effect (no_ai, no_index, no_ai_and_no_index), created_at, updated_at. |
+
+M1.1 implements `orbits` with name, unique slug, color slot, context and privacy defaults, and `exclusion_rules` with nullable Orbit FK for global scope, exact match kind/value, effect, timestamps and a uniqueness constraint. Exact account and sender values are full email addresses; labels use their whole provider label name. Matching is case-insensitive after normalization. The account Orbit and every routed Orbit must be present in policy evaluation; an item with no Orbit membership or missing Orbit policy is denied indexing and AI. Account connection and actual content sync arrive in later M1 tasks. No derived data exists yet, so deletion/invalidation jobs are not claimed here.
 
 An account belongs to exactly one Orbit. An item can appear in several Orbits through `item_orbits`, which combines the account's Orbit with routing rules and people or org assignments.
 

@@ -8,7 +8,7 @@ For every bounded implementation task, Astra assigns scope and acceptance criter
 
 ## M0: Foundations
 
-M0.1 through M0.4 are implemented, Astra-reviewed, and green in CI, including the authentication PostgreSQL and HTTPS browser gates in run `39344188832`. M0.5's single-command fresh-clone startup and acceptance record are implemented and Astra-reviewed; a successful CI run using that command establishes M0 acceptance. See [the acceptance record](M0_ACCEPTANCE.md) and [CI results](https://github.com/bcutler-wv/space-station/actions/workflows/ci.yml). The sample shell requires an owner login but is not yet a mail client.
+M0.1 through M0.5 are implemented, Astra-reviewed, and accepted. The single-command fresh-clone startup and all M0 gates passed in GitHub Actions run `39345200185`. See [the acceptance record](M0_ACCEPTANCE.md) and [CI results](https://github.com/bcutler-wv/space-station/actions/workflows/ci.yml). The sample shell requires an owner login but is not yet a mail client.
 
 Each substep ends with Astra review and fixes before the next begins:
 
@@ -21,6 +21,14 @@ Each substep ends with Astra review and fixes before the next begins:
 **Done when:** GitHub Actions brings up a fresh clone with one documented command, authentication protects the shell, the shell matches the reference layout with readable dark/light text, and every M0 gate is green.
 
 ## M1: Gmail and the mail view
+
+Each M1 substep gets separate implementation, checks, Astra review and acceptance before the next begins:
+
+1. **First Orbit, privacy and navigation.** Confirm configured HTTPS origin, save one Orbit and explicit global/Orbit defaults and exclusions before any connector or sync; implement URL routing and decide live transport. Preserve the sample shell separately. Local checks and CI setup persistence/security gates apply.
+2. **Google OAuth.** User-supplied app credentials, bound state and PKCE, secure callback continuation, exact redirect, and setup-completion gate. No content sync until a backfill window is chosen.
+3. **Isolated MIME and Gmail sync/live updates.** Bounded parser, initial and incremental sync, idempotent cursors, policy gates, polling or Pub/Sub pull, and the selected SSE stream.
+4. **Mail reading and safe display.** Threads, labels, subject search, safe HTML with remote-image proxy and keyboard navigation.
+5. **Compose, actions and integrated acceptance.** Draft, reply and send with unknown-outcome handling, restart and reliability tests, Compose integration and Playwright gates. Split further as needed for bounded review.
 
 - Decide client routing and live-update transport before implementing Mail deep links and live sync events.
 - Data model for accounts, Orbits, threads, items, people, labels, attachments.

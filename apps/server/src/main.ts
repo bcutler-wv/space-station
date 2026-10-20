@@ -23,6 +23,12 @@ app.addHook('onClose', database.close);
 await app.register(fastifyStatic, {
   root: fileURLToPath(new URL('../../web/dist/', import.meta.url)),
 });
+app.setNotFoundHandler((request, reply) => {
+  const pathname = new URL(request.url, config.APP_ORIGIN).pathname;
+  if (pathname.startsWith('/api/')) return reply.code(404).send({ error: 'API route not found.' });
+  if (request.method === 'GET' && (pathname === '/' || pathname === '/setup' || /^\/demo\/orbits\/[a-z0-9-]+$/.test(pathname))) return reply.sendFile('index.html');
+  return reply.code(404).send({ error: 'Page not found.' });
+});
 try {
   await app.listen({ host: config.APP_HOST, port: config.APP_PORT });
 } catch {

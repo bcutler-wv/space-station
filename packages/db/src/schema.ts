@@ -5,7 +5,10 @@ import {
   text,
   timestamp,
   boolean,
+  check,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from 'drizzle-orm';
 
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
@@ -78,3 +81,31 @@ export const authChallenges = pgTable("auth_challenges", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   consumedAt: timestamp("consumed_at", { withTimezone: true }),
 });
+
+export const orbits = pgTable('orbits', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull(),
+  colorSlot: integer('color_slot').notNull(),
+  context: text('context').notNull(),
+  privacyDefaults: jsonb('privacy_defaults').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('orbits_slug_unique').on(table.slug),
+  check('orbits_color_slot_range', sql`${table.colorSlot} between 1 and 4`),
+]);
+
+export const exclusionRules = pgTable('exclusion_rules', {
+  id: text('id').primaryKey(),
+  orbitId: text('orbit_id').references(() => orbits.id),
+  kind: text('kind').notNull(),
+  value: text('value').notNull(),
+  effect: text('effect').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check('exclusion_rules_kind', sql`${table.kind} in ('account', 'sender', 'label')`),
+  check('exclusion_rules_effect', sql`${table.effect} in ('no_ai', 'no_index', 'no_ai_and_no_index')`),
+  uniqueIndex('exclusion_rules_unique').on(sql`coalesce(${table.orbitId}, '')`, table.kind, table.value, table.effect),
+]);

@@ -1,4 +1,6 @@
 export { PRODUCT_NAME } from "./constants.js";
+export { privacyChoiceSchema, privacyDefaultsSchema, exclusionRuleSchema, setupSubmitSchema, setupStatusSchema, setupOriginSchema, type SetupSubmit, type SetupStatus, type ExclusionRule, type PrivacyDefaults } from './setup.js';
+export { evaluatePrivacy, evaluateAttachmentPrivacy, type ScopedPrivacyRule, type PrivacyItem } from './privacy.js';
 export { healthResponseSchema, type HealthResponse } from "./health.js";
 export { readinessResponseSchema, type ReadinessResponse } from "./health.js";
 export {

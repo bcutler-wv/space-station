@@ -83,9 +83,11 @@ try {
     (await page.request.get(`${baseURL}/api/appearance`)).status(),
     401,
   );
+  assert.equal((await page.request.get(`${baseURL}/api/setup`)).status(), 401);
   const restrictedStatus = await (
     await page.request.get(`${baseURL}/api/auth/status`)
   ).json();
+  assert.equal((await page.request.post(`${baseURL}/api/setup`, { headers: { Origin: baseURL, 'X-CSRF-Token': restrictedStatus.csrfToken }, data: { version: 1 } })).status(), 401);
   assert.equal(
     (
       await page.request.put(`${baseURL}/api/appearance`, {

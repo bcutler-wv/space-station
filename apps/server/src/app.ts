@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import { healthResponseSchema, readinessResponseSchema } from '@station/shared';
 import { registerAppearance, type AppearanceStore } from './appearance.js';
 import { registerAuth, type AuthConfig } from './auth.js';
+import { registerSetup } from './setup.js';
+import { databaseSetupStore } from './setup-store.js';
 
 export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }) {
   const app = Fastify({
@@ -16,6 +18,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
   if (auth) void app.register(async (instance) => {
     await registerAuth(instance, auth);
     if (appearanceStore) registerAppearance(instance, appearanceStore);
+    registerSetup(instance, databaseSetupStore(auth.db), auth.origin);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));
   app.get('/ready', async (_request, reply) => {

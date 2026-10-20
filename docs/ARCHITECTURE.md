@@ -7,9 +7,9 @@
 | Language | TypeScript everywhere, Node LTS | One language for client, server, and worker. Shared types. |
 | Repo layout | pnpm workspaces monorepo | See layout below |
 | Web client | React + Vite, built as a PWA | Plain CSS with design tokens. No CSS framework. |
-| Client data | TanStack Query | Evaluate TanStack Router at M1 when Mail and deep links add URL semantics. M0.3 uses local React view state. |
+| Client data | TanStack Query and TanStack Router | M1.1 uses URL routes for setup and the sample shell. See decision 0005. |
 | Drag and drop | dnd-kit | Touch and keyboard support |
-| API server | Fastify | REST for requests; decide SSE versus WebSocket before M1 live updates |
+| API server | Fastify | REST for requests; SSE selected for later M1 live updates in decision 0005. |
 | Database | PostgreSQL 16+ with pgvector | Drizzle ORM and Drizzle migrations |
 | Job queue | pg-boss | Postgres-backed, so no Redis container |
 | Validation | zod | Every API payload and every AI output |
