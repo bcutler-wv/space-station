@@ -1,4 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from '@tanstack/react-query';
+import { SyncEvents } from './sync-events.js';
 import {
   startAuthentication,
   startRegistration,
@@ -42,6 +44,7 @@ async function post(path: string, body: unknown) {
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [auth, setAuth] = useState<Status | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,6 +59,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [resetUri, setResetUri] = useState<string | null>(null);
+  const onAuthLost = useCallback(() => {
+    csrfToken = '';
+    void queryClient.cancelQueries();
+    queryClient.clear();
+    setPassword(''); setCode(''); setRecoveryCode(''); setNewPassword(''); setConfirmPassword('');
+    setBootstrapToken(''); setResetUri(null); setRecoveryCodes(null); setError('');
+    setAuth(null);
+    // Confirmed 401 ended the old session. One fresh anonymous status supplies
+    // the CSRF token needed by the sign-in form; stream transport errors never call it.
+    void status().then(setAuth).catch((issue: Error) => setError(issue.message));
+  }, [queryClient]);
   useEffect(() => {
     void status()
       .then(setAuth)
@@ -89,6 +103,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
       setBusy(false);
     }
   }
+  if (!auth && error) return (
+    <main className="auth-page"><section className="auth-card">
+      <h1>Sign-in unavailable</h1>
+      <p role="alert">{error}</p>
+      <button className="button primary" type="button" onClick={() => {
+        setError('');
+        void status().then(setAuth).catch((issue: Error) => setError(issue.message));
+      }}>Retry sign in</button>
+    </section></main>
+  );
   if (recoveryCodes)
     return (
       <main className="auth-page">
@@ -228,7 +252,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         </section>
       </main>
     );
-  if (auth?.authenticated) return <>{children}</>;
+  if (auth?.authenticated) return <><SyncEvents onAuthLost={onAuthLost} />{children}</>;
   return (
     <main className="auth-page">
       <section className="auth-card">
@@ -562,6 +586,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   );
 }
 export async function logout() {
+  window.dispatchEvent(new Event('station:logout'));
   try {
     await post("logout", {});
   } catch {

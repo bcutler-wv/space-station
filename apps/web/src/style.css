@@ -1133,6 +1133,9 @@ h4 {
 .google-copy button { min-height: 2.75rem; padding: .5rem 1rem; border: 1px solid var(--outline); border-radius: 12px; background: var(--surface-container-high); color: var(--on-surface); cursor: pointer; }
 .google-copy span { flex-basis: 100%; color: var(--on-surface-variant); font-size: .88rem; }
 .google-account { padding: 1rem; border-radius: 16px; background: var(--surface-container-high); overflow-wrap: anywhere; }
+.google-sync-status { margin-top: .75rem; padding: .75rem 1rem; border-radius: 16px; background: var(--surface-container-low); }
+.google-sync-status p { margin: .45rem 0; }
+.google-sync-phase { font-weight: 600; color: var(--on-surface); }
 .google-account fieldset label { display: block; margin: .5rem 0; }
 .setup-card ol { padding-left: 1.5rem; }
 .setup-card li { margin: .8rem 0; }

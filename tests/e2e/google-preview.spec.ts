@@ -8,6 +8,234 @@ const setup = { version: 1, configuredOrigin: origin, confirmedOrigin: origin, c
   globalDefaults: { index: 'exclude', ai: 'exclude' }, orbitDefaults: { index: 'exclude', ai: 'exclude' }, exclusions: [] };
 const status = { redirectUri: `${origin}/api/google/callback`, pendingConfirmation: false, pendingReconnectAccountId: null,
   accounts: [{ id: accountId, email: 'owner@example.com', orbitId, grantedScopes: ['https://www.googleapis.com/auth/gmail.modify'], backfill: null, status: 'connected' }] };
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/sync/progress', route => route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: 'waiting', repairCode: null, retryAt: null, processedPages: 0, supportedItems: 0, unsupportedItems: 0, lastSuccessAt: null }] } }));
+});
+
+test('flapping SSE responses back off without repeated auth checks', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: status }));
+  let opens = 0;
+  let authChecks = 0;
+  await page.route('**/api/auth/status', route => { authChecks++; return route.continue(); });
+  await page.route('**/api/sync/events', route => { opens++; return route.fulfill({ contentType: 'text/event-stream', body: 'event: sync-reset\nid: 0\ndata: ""\n\n' }); });
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByRole('heading', { name: 'Connect Google mail' })).toBeVisible();
+  await page.waitForTimeout(5_200);
+  expect(opens).toBeGreaterThanOrEqual(2);
+  expect(opens).toBeLessThanOrEqual(3);
+  expect(authChecks).toBe(1);
+});
+
+test('stored counts and last mail update stay separate from catch-up state', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  await page.route('**/api/sync/progress', route => route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: 'catchup', repairCode: null,
+    retryAt: null, processedPages: 18, supportedItems: 12, unsupportedItems: 2, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } }));
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('12 supported messages stored. 2 unsupported messages.')).toBeVisible();
+  await expect(page.getByText(/Unsupported messages could not be processed/)).toBeVisible();
+  await expect(page.getByText(/Last mail update:/)).toBeVisible();
+  await expect(page.getByText(/ingestion pages processed|% complete/)).toHaveCount(0);
+});
+
+test('an open stream recovers after a transient progress read failure', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    (window as unknown as { syncEvents: string[] }).syncEvents = [];
+    window.EventSource = class extends Native {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
+        for (const name of ['open', 'error', 'sync-reset', 'sync-progress']) this.addEventListener(name, () => {
+          (window as unknown as { syncEvents: string[] }).syncEvents.push(name);
+        });
+      }
+    };
+  });
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  let recovered = false;
+  await page.route('**/api/sync/progress', route => route.fulfill(recovered ? { json: { accounts: [{ accountId, orbitId, phase: 'current', repairCode: null,
+    retryAt: null, processedPages: 2, supportedItems: 3, unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } }
+    : { status: 503, json: { error: 'Fixture unavailable' } }));
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('Sync status is unavailable. Reload to try again.')).toBeVisible();
+  recovered = true;
+  const event = await page.request.post(`${baseURL}/fixture/sync-event`);
+  expect((await event.json()).streams).toBe(1);
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toBeVisible().catch(async (error) => {
+    process.stderr.write(`SSE recovery diagnostic: ${JSON.stringify(await page.evaluate(() => (window as unknown as { syncEvents: string[] }).syncEvents))}\n`);
+    process.stderr.write(`Stream count: ${JSON.stringify(await (await page.request.post(`${baseURL}/fixture/sync-event`)).json())}\n`);
+    throw error;
+  });
+});
+
+test('hide and reconnect discard a delayed pre-hide progress response', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  const progress = (phase: 'current' | 'backfill') => ({ accounts: [{ accountId, orbitId, phase, repairCode: null, retryAt: null,
+    processedPages: phase === 'current' ? 1 : 2, supportedItems: phase === 'current' ? 1 : 2,
+    unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] });
+  let holdNext = false;
+  let changed = false;
+  let staleStarted!: () => void;
+  let releaseStale!: () => void;
+  const started = new Promise<void>(resolve => { staleStarted = resolve; });
+  const released = new Promise<void>(resolve => { releaseStale = resolve; });
+  let requests = 0;
+  await page.route('**/api/sync/progress', async route => {
+    requests++;
+    if (holdNext) {
+      holdNext = false;
+      staleStarted();
+      await released;
+      await route.fulfill({ json: progress('current') }).catch(() => undefined);
+    } else await route.fulfill({ json: progress(changed ? 'backfill' : 'current') });
+  });
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toBeVisible();
+  holdNext = true;
+  await page.request.post(`${baseURL}/fixture/sync-event`);
+  await started;
+  changed = true;
+  await page.evaluate(() => {
+    (window as unknown as { fixtureHidden: boolean }).fixtureHidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => (window as unknown as { fixtureHidden: boolean }).fixtureHidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.evaluate(() => { (window as unknown as { fixtureHidden: boolean }).fixtureHidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+  await expect(page.getByText('Importing the selected backfill window.')).toBeVisible();
+  releaseStale();
+  await page.waitForTimeout(200);
+  await expect(page.getByText('Importing the selected backfill window.')).toBeVisible();
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toHaveCount(0);
+  expect(requests).toBeGreaterThanOrEqual(3);
+});
+
+test('frequent events let a slow healthy progress read finish', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  let slow = false;
+  let slowStarted = 0;
+  let slowCompleted = 0;
+  await page.route('**/api/sync/progress', async route => {
+    if (slow) { slowStarted++; await new Promise(resolve => setTimeout(resolve, 4_000)); }
+    await route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: slow ? 'backfill' : 'current', repairCode: null,
+      retryAt: null, processedPages: 1, supportedItems: 1, unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } }).then(() => { if (slow) slowCompleted++; }).catch(() => undefined);
+  });
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toBeVisible();
+  slow = true;
+  await page.request.post(`${baseURL}/fixture/sync-event`);
+  await expect.poll(() => slowStarted, { timeout: 5_000 }).toBeGreaterThan(0);
+  const interval = setInterval(() => { void page.request.post(`${baseURL}/fixture/sync-event`); }, 700);
+  try {
+    await expect(page.getByText('Importing the selected backfill window.')).toBeVisible({ timeout: 5_500 });
+    expect(slowCompleted).toBeGreaterThan(0);
+  } finally { clearInterval(interval); }
+});
+
+test('logout discards a delayed progress response and closes the stream', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  let holdNext = false;
+  let started!: () => void;
+  let release!: () => void;
+  const pendingStarted = new Promise<void>(resolve => { started = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/sync/progress', async route => {
+    if (holdNext) {
+      holdNext = false; started(); await released;
+      await route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: 'current', repairCode: null, retryAt: null,
+        processedPages: 2, supportedItems: 2, unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } }).catch(() => undefined);
+    } else await route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: 'backfill', repairCode: null, retryAt: null,
+      processedPages: 1, supportedItems: 1, unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } });
+  });
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('Importing the selected backfill window.')).toBeVisible();
+  holdNext = true;
+  await page.request.post(`${baseURL}/fixture/sync-event`);
+  await pendingStarted;
+  await page.evaluate(() => window.dispatchEvent(new Event('station:logout')));
+  release();
+  await page.waitForTimeout(200);
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toHaveCount(0);
+  expect((await (await page.request.post(`${baseURL}/fixture/sync-event`)).json()).streams).toBe(0);
+});
+
+test('a hung progress request times out and a later event recovers', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  await page.route('**/api/appearance', route => route.fulfill({ json: { mode: 'light', seed: 4284763300, showWallpaper: true, hasWallpaper: false } }));
+  await page.route('**/api/setup', route => route.fulfill({ json: setup }));
+  await page.route('**/api/google/status', route => route.fulfill({ json: { ...status, accounts: [{ ...status.accounts[0], backfill: '1_year' }] } }));
+  let hangNext = false;
+  let recovered = false;
+  let started!: () => void;
+  let release!: () => void;
+  const hanging = new Promise<void>(resolve => { started = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/sync/progress', async route => {
+    if (hangNext) {
+      hangNext = false; started(); await released;
+      await route.fulfill({ json: { accounts: [] } }).catch(() => undefined);
+      return;
+    }
+    await route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: recovered ? 'backfill' : 'current', repairCode: null,
+      retryAt: null, processedPages: 1, supportedItems: 1, unsupportedItems: 0, lastSuccessAt: '2026-10-20T12:00:00.000Z' }] } });
+  });
+  await page.goto(`${baseURL}/setup/google`);
+  await expect(page.getByText('Mail is current as of the latest completed catch-up.')).toBeVisible();
+  hangNext = true;
+  await page.request.post(`${baseURL}/fixture/sync-event`);
+  await hanging;
+  await expect(page.getByText('Sync status is unavailable. Reload to try again.')).toBeVisible({ timeout: 7_000 });
+  recovered = true;
+  await page.request.post(`${baseURL}/fixture/sync-event`);
+  await expect(page.getByText('Importing the selected backfill window.')).toBeVisible({ timeout: 5_000 });
+  release();
+});
+
+test('a confirmed passive 401 closes the stream and the sign-in form receives a fresh CSRF token', async ({ page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
+  let signedIn = false;
+  let statusChecks = 0;
+  let streamOpens = 0;
+  let loginCsrf = '';
+  await page.route('**/api/auth/status', route => {
+    statusChecks++;
+    const authenticated = statusChecks === 1 || signedIn;
+    return route.fulfill({ json: { ownerExists: true, authenticated, recoveryAuthenticated: false,
+      recoveryMode: null, pendingTotpUri: null, csrfToken: authenticated ? 'old-csrf' : 'fresh-csrf' } });
+  });
+  await page.route('**/api/sync/events', route => { streamOpens++; return route.fulfill({ status: 401, json: { error: 'Sign in.' } }); });
+  await page.route('**/api/sync/progress', route => route.fulfill({ status: 401, json: { error: 'Sign in.' } }));
+  await page.route('**/api/auth/login/password', route => {
+    loginCsrf = route.request().headers()['x-csrf-token'] ?? '';
+    signedIn = true;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto(`${baseURL}/`);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  expect(statusChecks).toBe(2);
+  expect(streamOpens).toBeLessThanOrEqual(2);
+  await page.getByLabel('Password', { exact: true }).fill('Example-only-password-123!');
+  await page.getByLabel('Authenticator code').fill('123456');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('Good morning, Alex')).toBeVisible();
+  expect(loginCsrf).toBe('fresh-csrf');
+});
 
 test('direct Google route shows persisted theme, copy fallback, validation and clears the secret', async ({ page, baseURL }) => {
   test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'The runtime flow uses the isolated HTTPS Google browser fixture.');
@@ -62,7 +290,7 @@ test('reconnect keeps an explicit target and clears the secret after errors and 
   await page.route('https://accounts.google.com/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Fixture consent</h1>' }));
   await page.goto(`${baseURL}/setup/google`);
   await expect(page.getByText(/Gmail mail access needs renewal/)).toBeVisible();
-  await expect(page.getByText('Backfill choice: 1 year. Mail sync is pending implementation.')).toBeVisible();
+  await expect(page.getByText('Backfill choice: 1 year.')).toBeVisible();
   await page.getByRole('button', { name: 'Reconnect owner@example.com' }).click();
   await expect(page.getByRole('heading', { name: 'Set up a Google web client' })).toBeFocused();
   await expect(page.getByRole('heading', { name: 'Reconnect Google mail' })).toBeVisible();

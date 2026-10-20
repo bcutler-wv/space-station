@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { PRODUCT_NAME, appearanceResponseSchema, setupStatusSchema, googleStartSchema, googleReconnectStartSchema, googleStartResponseSchema, googleStatusSchema, googleOkSchema } from '@station/shared';
+import { PRODUCT_NAME, appearanceResponseSchema, setupStatusSchema, googleStartSchema, googleReconnectStartSchema, googleStartResponseSchema, googleStatusSchema, googleOkSchema, type SyncProgressResponse } from '@station/shared';
 import { applyTheme, DEFAULT_SEED } from '@station/theme';
 import { csrfHeaders } from './auth-screen.js';
+import { loadSyncProgress, syncConnectionKey, syncProgressKey, type SyncConnection } from './sync-events.js';
 
 const scope = 'https://www.googleapis.com/auth/gmail.modify';
 type Status = ReturnType<typeof googleStatusSchema.parse>;
@@ -38,15 +39,36 @@ function CopyValue({ label, value }: { label: string; value: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   return <div className="google-copy"><label>{label}<input ref={inputRef} readOnly value={value} onFocus={(event) => event.currentTarget.select()} /></label><button type="button" onClick={async () => { try { await navigator.clipboard.writeText(value); setCopyState('copied'); } catch { inputRef.current?.focus(); inputRef.current?.select(); setCopyState('manual'); } }} aria-label={`Copy ${label}`}>Copy</button><span role="status">{copyState === 'copied' ? 'Copied' : copyState === 'manual' ? 'Value selected. Copy it with your keyboard.' : ''}</span></div>;
 }
-function AccountCard({ account, orbitName, onSaved, onReconnect }: { account: Account; orbitName: string | undefined; onSaved: () => void; onReconnect: () => void }) {
+type Progress = SyncProgressResponse['accounts'][number];
+function phaseText(progress: Progress) {
+  switch (progress.phase) {
+    case 'waiting': return 'Waiting to start mail sync.';
+    case 'backfill': return 'Importing the selected backfill window.';
+    case 'catchup': return 'Catching up on changes made during the import.';
+    case 'current': return 'Mail is current as of the latest completed catch-up.';
+    case 'retry': return progress.retryAt ? `Sync will retry after ${new Date(progress.retryAt).toLocaleString()}.` : 'Sync is waiting to retry.';
+    case 'repair': return progress.repairCode === 'permission_denied' ? 'Gmail permission was denied. Reconnect and grant Gmail mail access.'
+      : progress.repairCode === 'sync_cursor_invalid' ? 'Sync stopped because its saved position is invalid. Check the server logs to repair it.'
+        : 'Google access expired. Reconnect this account.';
+  }
+}
+function AccountCard({ account, orbitName, progress, connection, progressError, onSaved, onReconnect }: { account: Account; orbitName: string | undefined; progress: Progress | undefined; connection: SyncConnection; progressError: boolean; onSaved: () => void; onReconnect: () => void }) {
   const [window, setWindow] = useState<'30_days' | '1_year' | 'all' | ''>('');
   const save = useMutation({ mutationFn: chooseBackfill, onSuccess: onSaved });
   return <section className="google-account"><h2>{account.email}</h2>
     <p>{account.status === 'needs_reconnect' ? 'This account needs to reconnect.' : 'Google mail access connected.'}</p>
     <p>Orbit: {orbitName ?? 'First Orbit'}. {account.status === 'needs_reconnect' ? 'Gmail mail access needs renewal.' : 'Gmail mail access is authorized.'}</p>
     <button type="button" className="button" onClick={onReconnect}>Reconnect {account.email}</button>
-    {account.backfill ? <p>Backfill choice: {account.backfill === '30_days' ? '30 days' : account.backfill === '1_year' ? '1 year' : 'All mail'}. Mail sync is pending implementation.</p> : <>
-      <p>Choose how far back to import mail. Older windows may take more time and storage; an estimate is not available yet. Mail sync is pending implementation.</p>
+    {account.backfill ? <>
+      <p>Backfill choice: {account.backfill === '30_days' ? '30 days' : account.backfill === '1_year' ? '1 year' : 'All mail'}.</p>
+      <div className="google-sync-status">
+        <p className="google-sync-phase" role="status" aria-live="polite" aria-atomic="true">{progressError ? 'Sync status is unavailable. Reload to try again.' : connection === 'reconnecting' ? 'Live sync updates are interrupted. The last status may be out of date.' : progress ? phaseText(progress) : 'Loading sync status…'}</p>
+        {progress && <><p>{progress.supportedItems.toLocaleString()} supported messages stored. {progress.unsupportedItems.toLocaleString()} unsupported messages.</p>
+          {progress.unsupportedItems > 0 && <p>Unsupported messages could not be processed. They are counted here so they are not silently skipped.</p>}
+          <p>Last mail update: {progress.lastSuccessAt ? new Date(progress.lastSuccessAt).toLocaleString() : 'None yet'}.</p></>}
+      </div>
+    </> : <>
+      <p>Choose how far back to import mail. Older windows may take more time and storage; an estimate is not available yet.</p>
       <fieldset><legend>Backfill window</legend>{([['30_days', '30 days'], ['1_year', '1 year'], ['all', 'All mail']] as const).map(([value, label]) => <label key={value}><input type="radio" name={`backfill-${account.id}`} checked={window === value} onChange={() => setWindow(value)} /> {label}</label>)}</fieldset>
       <button className="button primary" type="button" disabled={!window || save.isPending || account.status === 'needs_reconnect'} onClick={() => { if (window) save.mutate({ accountId: account.id, window }); }}>Save backfill choice</button>
       {save.isError && <p role="alert">{save.error.message}</p>}
@@ -68,6 +90,8 @@ function GoogleLayout({ children }: { children: ReactNode }) {
 export function GoogleScreen() {
   const queryClient = useQueryClient();
   const status = useQuery({ queryKey: ['google-status'], queryFn: loadStatus, retry: false });
+  const sync = useQuery({ queryKey: syncProgressKey, queryFn: loadSyncProgress, retry: false, refetchOnWindowFocus: false });
+  const connection = useQuery({ queryKey: syncConnectionKey, queryFn: async (): Promise<SyncConnection> => 'reconnecting', staleTime: Infinity, initialData: 'reconnecting' as SyncConnection });
   const setup = useQuery({ queryKey: ['setup'], queryFn: async () => {
     const response = await fetch('/api/setup');
     await message(response, 'Orbit setup could not be loaded.');
@@ -129,7 +153,7 @@ export function GoogleScreen() {
     {status.isPending && <p>Loading connection status…</p>}
     {status.isError && <p role="alert">{status.error.message} <Link to="/setup">Check your Orbit and address</Link>.</p>}
     {status.data && <>
-      {status.data.accounts.map((account) => <AccountCard key={account.id} account={account} orbitName={setup.data?.orbit?.id === account.orbitId ? setup.data.orbit.name : undefined} onSaved={() => { void queryClient.invalidateQueries({ queryKey: ['google-status'] }); }} onReconnect={() => { chooseTarget(account.id); document.getElementById('google-client-setup')?.scrollIntoView(); }} />)}
+      {status.data.accounts.map((account) => <AccountCard key={account.id} account={account} orbitName={setup.data?.orbit?.id === account.orbitId ? setup.data.orbit.name : undefined} progress={sync.data?.accounts.find((entry) => entry.accountId === account.id)} connection={connection.data} progressError={sync.isError} onSaved={() => { void queryClient.invalidateQueries({ queryKey: ['google-status'] }); void queryClient.invalidateQueries({ queryKey: syncProgressKey }); }} onReconnect={() => { chooseTarget(account.id); document.getElementById('google-client-setup')?.scrollIntoView(); }} />)}
       <section id="google-client-setup"><h2 ref={setupHeadingRef} tabIndex={-1}>Set up a Google web client</h2>{targetAccountId && !target && <p role="alert">This Google account is no longer connected. Choose an account above or cancel reconnect.</p>}{target && <p role="status">Reconnect <strong>{target.email}</strong>. Choose this exact mailbox at Google. Its account, Orbit, and backfill choice will stay the same.</p>}<p>Use your own Google Cloud project. {PRODUCT_NAME} asks for Gmail mail access only; Calendar permission comes later. Never enter your Google account password here.</p>
         <ol>
           <li>Create or select a project in <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud</a>.</li>

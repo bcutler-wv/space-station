@@ -14,6 +14,18 @@ const clientSecret = 'fixture-client-secret';
 const capture = async (page, label) => { await mkdir('test-results/google-browser', { recursive: true }); await page.screenshot({ path: `test-results/google-browser/${label}.png`, fullPage: true }); };
 try {
   const context = await browser.newContext({ ignoreHTTPSErrors: true, colorScheme: 'light' });
+  await context.addInitScript(() => {
+    const NativeEventSource = globalThis.EventSource;
+    globalThis.__syncEvents = [];
+    globalThis.EventSource = class extends NativeEventSource {
+      constructor(url, init) {
+        super(url, init);
+        for (const name of ['open', 'error', 'sync-reset', 'sync-progress', 'mail-changed']) this.addEventListener(name, (event) => {
+          globalThis.__syncEvents.push({ name, id: event.lastEventId, data: event.data });
+        });
+      }
+    };
+  });
   const page = await context.newPage();
   await page.goto(origin);
   await page.getByRole('heading', { name: 'Create your login' }).waitFor();
@@ -83,9 +95,46 @@ try {
   await page.getByRole('heading', { name: 'owner@example.com' }).waitFor();
   await page.getByLabel('1 year').check();
   await page.getByRole('button', { name: 'Save backfill choice' }).click();
-  await page.getByText('Backfill choice: 1 year. Mail sync is pending implementation.').waitFor();
+  await page.getByText('Backfill choice: 1 year.').waitFor();
   await page.reload();
-  await page.getByText('Backfill choice: 1 year. Mail sync is pending implementation.').waitFor();
+  await page.getByText('Backfill choice: 1 year.').waitFor();
+  const fixtureContext = await browser.newContext({ ignoreHTTPSErrors: true });
+  const fixtureRequest = fixtureContext.request;
+  const idleBefore = (await (await fixtureRequest.get(`${origin}/fixture/observations`)).json()).lastSeenAt;
+  const setProgress = async (phase, extras = {}) => {
+    const response = await fixtureRequest.post(`${origin}/fixture/progress`, { data: { phase, ...extras } });
+    assert.equal(response.status(), 200);
+  };
+  await setProgress('full');
+  await page.getByText('Importing the selected backfill window.').waitFor().catch(async (error) => {
+    process.stderr.write(`Sync UI diagnostic: ${await page.locator('.google-account').innerText()}\n`);
+    process.stderr.write(`Fixture diagnostic: ${JSON.stringify(await (await fixtureRequest.get(`${origin}/fixture/observations`)).json())}\n`);
+    process.stderr.write(`SSE diagnostic: ${JSON.stringify(await page.evaluate(() => globalThis.__syncEvents))}\n`);
+    throw error;
+  });
+  await capture(page, 'backfill-light');
+  await setProgress('history');
+  await page.getByText('Catching up on changes made during the import.').waitFor();
+  await setProgress('ready');
+  await page.getByText('Mail is current as of the latest completed catch-up.').waitFor();
+  await setProgress('ready', { retryAt: Date.now() + 60_000 });
+  await page.getByText(/Sync will retry after/).waitFor();
+  await setProgress('ready', { lastError: 'permission_denied' });
+  await page.getByText(/Gmail permission was denied/).waitFor();
+  await capture(page, 'repair-light');
+  const liveObservation = await (await fixtureRequest.get(`${origin}/fixture/observations`)).json();
+  const delivered = await page.evaluate(() => globalThis.__syncEvents);
+  assert.ok(delivered.some((event) => event.name === 'sync-reset'), 'fresh stream must force a private refetch');
+  assert.ok(delivered.some((event) => event.name === 'sync-progress' && /^[0-9a-f-]{36}$/.test(JSON.parse(event.data))), 'browser must receive a bounded account ID');
+  assert.equal(JSON.stringify(delivered).includes('owner@example.com'), false, 'SSE must carry no mailbox address');
+  assert.equal(JSON.stringify(delivered).includes('fixture-client-secret'), false, 'SSE must carry no client secret');
+  assert.ok(liveObservation.streamOpens <= 5, 'route changes and progress events must share a bounded stream');
+  assert.ok(liveObservation.progressReads < 30, 'progress events must coalesce private reads');
+  assert.equal(liveObservation.lastSeenAt, idleBefore, 'automatic sync events and progress reads must not extend owner activity');
+  await fixtureContext.close();
+  // The rest of this fixture exercises many OAuth requests under the shared
+  // 120/minute limit. Start them in a fresh window after the SSE burst.
+  await page.waitForTimeout(61_000);
   const original = (await (await page.request.get(`${origin}/api/google/status`)).json()).accounts[0];
   assert.equal((await (await page.request.get(`${origin}/fixture/observations`)).json()).providerCalls, 2);
   await page.goto(returnUrl);
@@ -138,11 +187,20 @@ try {
   await page.getByRole('heading', { name: 'Connect Google mail' }).waitFor();
   await page.waitForFunction(() => globalThis.document.documentElement.dataset.theme === 'dark');
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true, 'mobile page must not scroll horizontally');
-  await page.getByRole('button', { name: 'Reconnect owner@example.com' }).click();
+  await page.getByRole('button', { name: 'Reconnect owner@example.com' }).click().catch(async (error) => {
+    process.stderr.write(`Mobile sync UI diagnostic: ${await page.locator('main').innerText()}\n`);
+    throw error;
+  });
   await capture(page, 'reconnect-mobile-dark');
   await page.goto(`${origin}/setup/google/continue`);
   await page.getByText(/No pending Google return was found/).waitFor();
   assert.equal(new URL(page.url()).search, '');
+  await page.goto(origin);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+  await page.waitForTimeout(500);
+  const afterLogout = await (await page.request.get(`${origin}/fixture/observations`)).json();
+  assert.equal(afterLogout.activeStreams, 0, 'logout closes the authenticated stream');
   process.stdout.write('HTTPS Google browser connection, reconnect identity/preservation, Strict-cookie continuation, replay, cancellation, mobile and theme checks passed.\n');
   await context.close();
 } finally { await browser.close(); }
