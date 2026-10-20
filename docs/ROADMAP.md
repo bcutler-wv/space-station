@@ -31,7 +31,7 @@ Each M1 substep gets separate implementation, checks, Astra review and acceptanc
 4. **Mail reading and safe display.** Threads, labels, subject search, safe HTML with remote-image proxy and keyboard navigation.
 5. **Compose, actions and integrated acceptance.** Draft, reply and send with unknown-outcome handling, restart and reliability tests, Compose integration and Playwright gates. Split further as needed for bounded review.
 
-M1.1 was accepted with local checks and Ubuntu CI runtime gates on 2026-10-19 (commit `9d8a482`, run `39354841946`). M1.2a backend and fixture work is in implementation review; the Google setup UI and browser flow are a separate bounded M1.2b handoff. M1.2 remains incomplete until both pass.
+M1.1 was accepted with local checks and Ubuntu CI runtime gates on 2026-10-19 (commit `9d8a482`, run `39354841946`). M1.2a backend and fixture work was Astra-reviewed and accepted after Ubuntu CI run `39357352441` passed (commit `e64add3`). M1.2b guided setup and browser continuation are in implementation review. M1.2 remains incomplete until the UI and browser gates pass.
 
 - Decide client routing and live-update transport before implementing Mail deep links and live sync events.
 - Data model for accounts, Orbits, threads, items, people, labels, attachments.

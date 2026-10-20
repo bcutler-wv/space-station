@@ -2,7 +2,7 @@
 
 Station is a self-hosted mission control for your work. It brings your email, calendars, Slack, and Teams into one place, groups them into **Orbits** (one per company, client, or area of life), and uses an AI model you choose to sort what comes in, track what you owe people, and answer questions across everything.
 
-> **Status:** pre-alpha. The authenticated, themed shell uses sample data. After owner login, the first Orbit and privacy choices can be saved at `/setup`. Mail, calendars, chat connectors, search, and AI features are planned; no real account can be connected yet.
+> **Status:** pre-alpha. The authenticated, themed shell uses sample data. After owner login, the first Orbit and privacy choices can be saved at `/setup`. A Google mailbox can be authorized with your own web client and a backfill window saved; mail sync and reading are pending.
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 
@@ -33,7 +33,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 
 ## Running it
 
-On a disposable Linux host with Node.js 22.12+, OpenSSL, and Docker Compose, clone the repository and run `bash scripts/start-dev.sh` from its root. The command creates private development settings and a localhost TLS certificate, migrates PostgreSQL, then starts the app and worker. Generate a short-lived owner setup token with the separate local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell contains sample data; account connection begins in M1.
+On a disposable Linux host with Node.js 22.12+, OpenSSL, and Docker Compose, clone the repository and run `bash scripts/start-dev.sh` from its root. The command creates private development settings and a localhost TLS certificate, migrates PostgreSQL, then starts the app and worker. Generate a short-lived owner setup token with the separate local command in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), then open the configured origin to create a passkey or a password plus authenticator login. The shell contains sample data; Google authorization and backfill choice follow first-Orbit privacy setup.
 
 Provider permissions and data-use terms can change. Verify current official documentation when enabling each connector, especially Slack indexed mode. The default Slack mode is live and stores no long-term content.
 

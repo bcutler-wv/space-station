@@ -36,6 +36,7 @@ import "material-symbols/rounded.css";
 import "./style.css";
 import { AuthGate, csrfHeaders, logout } from "./auth-screen.js";
 import { SetupScreen } from './setup-screen.js';
+import { GoogleScreen, GoogleContinuationScreen } from './google-screen.js';
 
 const queryClient = new QueryClient();
 function cachedMode(): AppearanceResponse["mode"] {
@@ -1029,11 +1030,13 @@ document.title = PRODUCT_NAME;
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 const missionRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: () => <App active="mission" /> });
 const setupRoute = createRoute({ getParentRoute: () => rootRoute, path: '/setup', component: SetupScreen });
+const googleRoute = createRoute({ getParentRoute: () => rootRoute, path: '/setup/google', component: GoogleScreen });
+const googleContinueRoute = createRoute({ getParentRoute: () => rootRoute, path: '/setup/google/continue', component: GoogleContinuationScreen });
 const orbitRoute = createRoute({ getParentRoute: () => rootRoute, path: '/demo/orbits/$orbitId', component: () => {
   const { orbitId } = orbitRoute.useParams();
   return <App active={orbits.some((entry) => entry.id === orbitId) ? orbitId as OrbitId : 'mission'} />;
 } });
-const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, orbitRoute]) });
+const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute]) });
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

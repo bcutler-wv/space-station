@@ -1126,3 +1126,15 @@ h4 {
 .orbit-color-choice.orbit-2 { background: var(--orbit-2-container); color: var(--on-orbit-2-container); }
 .orbit-color-choice.orbit-3 { background: var(--orbit-3-container); color: var(--on-orbit-3-container); }
 .orbit-color-choice.orbit-4 { background: var(--orbit-4-container); color: var(--on-orbit-4-container); }
+
+.google-copy { display: flex; align-items: end; gap: .65rem; flex-wrap: wrap; margin: 1rem 0; }
+.google-copy label { flex: 1 1 22rem; min-width: 0; margin: 0; }
+.google-copy input { font-family: monospace; }
+.google-copy button { min-height: 2.75rem; padding: .5rem 1rem; border: 1px solid var(--outline); border-radius: 12px; background: var(--surface-container-high); color: var(--on-surface); cursor: pointer; }
+.google-copy span { flex-basis: 100%; color: var(--on-surface-variant); font-size: .88rem; }
+.google-account { padding: 1rem; border-radius: 16px; background: var(--surface-container-high); overflow-wrap: anywhere; }
+.google-account fieldset label { display: block; margin: .5rem 0; }
+.setup-card ol { padding-left: 1.5rem; }
+.setup-card li { margin: .8rem 0; }
+.setup-card { overflow-wrap: anywhere; }
+@media (max-width: 480px) { .google-copy button { width: 100%; } }

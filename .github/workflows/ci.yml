@@ -43,6 +43,11 @@ jobs:
       - run: docker compose exec -T postgres createdb -U station station_google_test
       - run: docker compose run --rm -T -e DB_NAME=station_google_test migrate
       - run: docker compose run --rm -T --no-deps -e DB_NAME=station_google_test app node tests/integration/google-db.mjs
+      - run: docker compose exec -T postgres createdb -U station station_google_browser_test
+      - run: docker compose run --rm -T -e DB_NAME=station_google_browser_test migrate
+      - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_google_browser_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/google-browser-token
+      - run: docker compose run -d --name station-google-browser-app --no-deps -p 127.0.0.1:8083:8080 -e DB_NAME=station_google_browser_test -e APP_ORIGIN=https://localhost:8083 app node tests/support/google-browser-server.mjs
+      - run: curl --insecure --fail --silent --show-error --retry 30 --retry-delay 1 --retry-max-time 60 --retry-all-errors --connect-timeout 2 --max-time 5 https://localhost:8083/ready >/dev/null
       - run: docker compose exec -T postgres createdb -U station station_passkey_test
       - run: docker compose run --rm -T -e DB_NAME=station_passkey_test migrate
       - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -e DB_NAME=station_passkey_test -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/passkey-token
@@ -62,6 +67,16 @@ jobs:
         env:
           STATION_PASSWORD_BASE_URL: https://localhost:8082
           STATION_PASSWORD_BOOTSTRAP_PATH: .cache/bootstrap/password-token
+      - run: node tests/integration/google-browser.mjs
+        env:
+          STATION_GOOGLE_BROWSER_BASE_URL: https://localhost:8083
+          STATION_GOOGLE_BROWSER_BOOTSTRAP_PATH: .cache/bootstrap/google-browser-token
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-browser-screenshots
+          path: test-results/google-browser/*.png
+          if-no-files-found: ignore
       - run: pnpm test:e2e
         env:
           STATION_E2E_BASE_URL: https://localhost:8080
@@ -70,5 +85,7 @@ jobs:
         run: docker rm -f station-passkey-app || true
       - if: always()
         run: docker rm -f station-password-app || true
+      - if: always()
+        run: docker rm -f station-google-browser-app || true
       - if: always()
         run: docker compose down -v --remove-orphans

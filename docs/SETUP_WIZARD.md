@@ -9,13 +9,15 @@ The first run is a guided, graphical flow. A non-developer should be able to fin
 3. **Create your first Orbit.** Name, color, and a sentence or two of context ("What is this part of your work?").
 4. **Set privacy rules.** Choose global and first-Orbit exclusions for indexing and AI by account, sender, label, or matched rule. Explain the most-restrictive policy when an item belongs to several Orbits. This happens before any content sync or processing.
 5. **Dock an account.** Pick a provider, then follow its guided steps (below). Authentication can be tested without starting content sync.
-6. **Choose the backfill window.** 30 days, 1 year, or everything, with an estimate of time and storage. Only now start sync and show live progress.
+6. **Choose the backfill window.** 30 days, 1 year, or everything. Explain that older windows can take more time and storage. Show a quantified estimate only when provider-backed estimation exists; M1.2 records the choice and M1.3 starts sync and shows progress.
 7. **Set up AI (optional, skippable).** Provider, API key with a test call, fast and strong models, monthly spend cap. The test call contains no synced content. Review privacy rules before enabling processing.
 8. **Done.** Land on Mission Control with an "Add another account" prompt.
 
 ## Provider steps
 
-Every provider step has numbered instructions, a screenshot or short clip per step, copy buttons for every value the user must paste into the provider's console (redirect URIs, scopes, app manifests), a link to the provider's current docs, and validation that runs before moving on.
+The full provider guide has numbered instructions, a screenshot or short clip per step, copy buttons for every value the user must paste into the provider's console (redirect URIs, scopes, app manifests), a link to the provider's current docs, and validation that runs before moving on.
+
+M1.2's minimal Google authorization guide uses numbered instructions, current console and documentation links, copy controls, and validated credentials. Maintained screenshots or clips for each console step are part of the fuller M3 provider guide; the Google console changes often, so these assets need a review process before they are shipped.
 
 ### Google
 1. Create a Google Cloud project.
@@ -48,4 +50,4 @@ Every provider step has numbered instructions, a screenshot or short clip per st
 - Validate every pasted value (format, length) before calling a provider.
 - Every error message says what happened and how to fix it.
 - M1 ships a minimal version of steps 1 through 6 for one Google account. M3 expands provider guidance and Orbit management; it does not defer the safety-critical privacy choice until after first sync.
-- M1.1 completes only steps 2 through 4 after M0 owner login. It confirms the configured `APP_ORIGIN`, creates one Orbit, and atomically stores global and Orbit indexing/AI defaults and exact account-email, sender-email, or provider-label-name exclusions. If `APP_ORIGIN` changes later, the owner must confirm the new exact HTTPS origin before account connection proceeds. The sample shell remains available separately. Google connection, backfill and actual content sync follow in later M1 tasks and require the versioned setup completion marker and matching confirmed origin.
+- M1.1 completes only steps 2 through 4 after M0 owner login. It confirms the configured `APP_ORIGIN`, creates one Orbit, and atomically stores global and Orbit indexing/AI defaults and exact account-email, sender-email, or provider-label-name exclusions. If `APP_ORIGIN` changes later, the owner must confirm the new exact HTTPS origin before account connection proceeds. The sample shell remains available separately. M1.2 adds Google authorization and the saved backfill choice through `/setup/google` and a clean `/setup/google/continue` page. M1.3 starts content sync. All require the versioned setup completion marker and matching confirmed origin.
