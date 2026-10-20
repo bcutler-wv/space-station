@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { openDatabase } from './connection.js';
 import { PrivateBlobStore } from './private-blob-store.js';
 import { accounts, attachments, blobIntents, exclusionRules, identities, itemLabels, itemOrbits, itemRecipients, items, labels, orbits, people, settings, syncPages, syncStates, threads } from './schema.js';
+import { appendSyncEvent } from './sync-events.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -294,6 +295,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
       signal?.throwIfAborted();
       await tx.insert(syncPages).values({ id: randomUUID(), stateId: page.stateId, accountId: page.accountId, pageId: page.pageId, pageDigest, sequence: page.expectedSequence + 1 });
       await tx.update(syncStates).set({ cursor: page.cursorAfter, sequence: page.expectedSequence + 1, lastSuccessAt: new Date(), updatedAt: new Date() }).where(eq(syncStates.id, page.stateId));
+      await appendSyncEvent(tx, 'mail-changed', page.accountId);
       signal?.throwIfAborted();
       return 'applied';
   });

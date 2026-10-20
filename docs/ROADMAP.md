@@ -120,4 +120,6 @@ The private file store was accepted after Ubuntu CI run `39477808140` (commit `8
 
 **Done when:** accessibility and security gates pass, backup and restore is exercised on disposable CI data, release docs match the built app, and the v1.0.0 tag is ready for review.
 
-M1.3e durable Gmail ingestion is implemented and Astra-reviewed for version 0.17.0, pending its Ubuntu CI gate. Review corrected job cancellation and the terminal list-page crash boundary. See [the ingestion record](sessions/gmail-sync-runner.md). Progress events and mail reading remain separate pending tasks.
+M1.3e durable Gmail ingestion was accepted for version 0.17.0 after Astra review and Ubuntu CI run `39499651586` (commit `fcca80f`). Review corrected job cancellation and the terminal list-page crash boundary. See [the ingestion record](sessions/gmail-sync-runner.md). Progress events and mail reading remain separate pending tasks.
+
+M1 sync-progress REST and durable SSE backend are implemented and Astra-reviewed for version 0.18.0, pending Ubuntu CI. Replay uses a consistent snapshot and commit-ordered journal; passive reads preserve idle expiry, and stream authorization and database waits are bounded. See [the event backend record](sessions/sync-events-backend.md). Browser progress presentation remains pending.

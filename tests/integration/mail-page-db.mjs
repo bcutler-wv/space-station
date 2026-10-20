@@ -8,13 +8,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout, clearTimeout } from 'node:timers';
 import { eq } from 'drizzle-orm';
 import { sanitizeMailHtml } from '../../apps/worker/dist/mail-html-sanitize.js';
-import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, applyMailPage, collectOrphanBlobs,
+import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, applyMailPage, collectOrphanBlobs, readSyncEvents,
   evaluateStoredMailPrivacy, MailPageFenceError, accounts, attachments,
   itemRecipients, itemLabels, items, identities, blobIntents, syncPages, labels, oauthApps, orbits, settings, syncStates, users, exclusionRules } from '../../packages/db/dist/index.js';
 
 const dbHandle = openDatabase(databaseUrl(loadRuntimeConfig(process.env)));
 const db = dbHandle.db;
-const blobRoot = '/var/lib/station/blobs';
+const blobRoot = process.env.STATION_TEST_BLOB_ROOT ?? '/var/lib/station/blobs';
 const store = new PrivateBlobStore(blobRoot);
 const origin = 'https://example.com';
 const scope = 'https://www.googleapis.com/auth/gmail.modify';
@@ -66,6 +66,8 @@ try {
   const first = page('one', 0, [change('same', { parsed: parsed(fake('one'), { html: true, attachment: true }), providerSent: true,
     labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] })]);
   assert.equal(await applyMailPage(db, store, first), 'applied');
+  const firstEvent = await readSyncEvents(db, 0);
+  assert.deepEqual(firstEvent.rows.map(({ kind, accountId }) => [kind, accountId]), [['mail-changed', accountsByName.one]]);
   assert.equal((await item('one', 'same')).direction, 'out');
   assert.equal((await item('one', 'same')).directionProvenance, 'provider_sent_account');
   assert.equal((await item('one', 'same')).providerRevision, '900719925474099312345');
@@ -76,6 +78,7 @@ try {
   assert.equal((await store.read((await db.select().from(attachments))[0].storagePath)).toString(), 'fixture bytes');
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canIndex, false);
   assert.equal(await applyMailPage(db, store, first), 'replayed');
+  assert.equal((await readSyncEvents(db, 0)).head, firstEvent.head, 'page replay emits no duplicate event');
   await assert.rejects(applyMailPage(db, store, { ...first, cursorAfter: { historyId: 'different' } }), /changed content/);
   assert.equal((await db.select().from(items)).length, 1);
   assert.equal((await db.select().from(attachments)).length, 1);
@@ -95,7 +98,9 @@ try {
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canUseAi, false);
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'sender', value: fake('blocked'), effect: 'no_ai' });
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canUseAi, false);
+  const beforeRollbackEvent = (await readSyncEvents(db, null)).head;
   await assert.rejects(applyMailPage(db, store, page('one', 1, [change('rollback', { orbits: [randomUUID()], parsed: parsed(fake('sender'), { html: true }) })])), isForeignKeyViolation);
+  assert.equal((await readSyncEvents(db, null)).head, beforeRollbackEvent, 'failed page emits no event');
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 1);
   assert.deepEqual((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].cursor, { historyId: '1' });
   assert.equal(await item('one', 'rollback'), undefined);

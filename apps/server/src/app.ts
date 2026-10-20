@@ -5,6 +5,7 @@ import { registerAuth, type AuthConfig } from './auth.js';
 import { registerSetup } from './setup.js';
 import { databaseSetupStore } from './setup-store.js';
 import { registerGoogle } from './google.js';
+import { registerSync } from './sync.js';
 
 export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }) {
   const app = Fastify({
@@ -21,6 +22,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     if (appearanceStore) registerAppearance(instance, appearanceStore);
     registerSetup(instance, databaseSetupStore(auth.db), auth.origin);
     registerGoogle(instance, auth, databaseSetupStore(auth.db));
+    await registerSync(instance, auth);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));
   app.get('/ready', async (_request, reply) => {

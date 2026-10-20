@@ -43,6 +43,13 @@
       "when": 1792522970452,
       "tag": "0005_watery_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792531388923,
+      "tag": "0006_nifty_jamie_braddock",
+      "breakpoints": true
     }
   ]
 }

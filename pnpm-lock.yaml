@@ -59,6 +59,9 @@ importers:
       '@fastify/session':
         specifier: 11.1.5
         version: 11.1.5
+      '@fastify/sse':
+        specifier: 0.6.1
+        version: 0.6.1(fastify@5.12.7)
       '@fastify/static':
         specifier: 10.1.6
         version: 10.1.6
@@ -832,6 +835,12 @@ packages:
 
   '@fastify/session@11.1.5':
     resolution: {integrity: sha512-tsoOTzLSDdnBgHNI/SsyNA+f0LNkDoxODUfGrUticeXy6X37FwAB3SdcRzAGZL7f/upCzfcIVZsuX1QLGS7SDA==}
+
+  '@fastify/sse@0.6.1':
+    resolution: {integrity: sha512-Q1n2JBE1yQTDg9u3/mI2WraMs5vqmDLsI7cfkHJv3OYjRm1ST/zaMtbGK9OcBdHLlkTVMW0XCQMDmxG/nyb0OA==}
+    engines: {node: '>=20.20.2'}
+    peerDependencies:
+      fastify: ^5.x
 
   '@fastify/static@10.1.6':
     resolution: {integrity: sha512-f3x9XisI+y6AIhIfA/+Q3SFsuXeqNNk5HQh5htgHsPxmMLb4pLFskV6eFaLSW3IbI4azrS5np+/tkzXNH99LyQ==}
@@ -3186,6 +3195,12 @@ snapshots:
     dependencies:
       fastify-plugin: 6.0.1
       safe-stable-stringify: 2.5.0
+
+  '@fastify/sse@0.6.1(fastify@5.12.7)':
+    dependencies:
+      '@fastify/error': 4.2.1
+      fastify: 5.12.7
+      fastify-plugin: 6.0.1
 
   '@fastify/static@10.1.6':
     dependencies:

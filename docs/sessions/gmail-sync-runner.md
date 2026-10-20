@@ -9,3 +9,5 @@ Astra requested two corrections before source acceptance: cancellation and elaps
 Local lint, typecheck, all 59 tests, build, color and license gates passed. The fake-provider database fixture passed against disposable PostgreSQL 15.19 with the committed schema; that server was stopped. Astra independently ran nine private-store tests and accepted the corrected source. PostgreSQL 16, Compose runtime, and browser gates remain pending in GitHub Actions. No Docker gate ran on agent-dev and no production deployment occurred.
 
 Operational rules are recorded in decision 0008. UI progress, SSE, mail reading, image proxying, and external actions are not part of this change.
+
+Acceptance: Ubuntu CI run [39499651586](https://github.com/bcutler-wv/space-station/actions/runs/39499651586) passed on commit `fcca80f`, including PostgreSQL 16 Gmail sync fixtures, Compose runtime, credential/persistence gates, and browser flows. Version 0.17.0 ingestion is accepted. The pending-CI statement above records the pre-push review boundary.

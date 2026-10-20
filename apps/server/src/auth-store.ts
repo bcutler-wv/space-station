@@ -6,6 +6,7 @@ import {
   authChallenges,
   authCredentials,
   bootstrapTokens,
+  boundSyncStreamRead,
   recoveryCodes,
   sessions,
   users,
@@ -18,6 +19,33 @@ export const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 const IDLE_MS = 30 * 60_000;
 const ABSOLUTE_MS = 7 * 24 * 60 * 60_000;
+
+export async function validOwnerSession(db: Db, id: string, generation: number): Promise<boolean> {
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    await boundSyncStreamRead(tx);
+    const [row] = await tx.select({ data: sessions.data }).from(sessions).where(and(
+      eq(sessions.tokenHash, digest(id)), isNull(sessions.revokedAt),
+      gt(sessions.lastSeenAt, new Date(now.getTime() - IDLE_MS)),
+      gt(sessions.createdAt, new Date(now.getTime() - ABSOLUTE_MS)),
+      sql`(${sessions.data}->>'userId') = ${OWNER_ID}`,
+      sql`(${sessions.data}->>'authGeneration') = ${String(generation)}`,
+      sql`(${sessions.data}->>'recoveryMode') IS NULL`,
+      sql`EXISTS (SELECT 1 FROM users WHERE id = ${OWNER_ID} AND auth_generation = ${generation})`,
+    )).limit(1);
+    return !!row;
+  }, { accessMode: 'read only' });
+}
+
+export async function touchSession(db: Db, id: string): Promise<void> {
+  const now = new Date();
+  await db.update(sessions).set({ lastSeenAt: now }).where(and(
+    eq(sessions.tokenHash, digest(id)), isNull(sessions.revokedAt),
+    gt(sessions.lastSeenAt, new Date(now.getTime() - IDLE_MS)),
+    gt(sessions.createdAt, new Date(now.getTime() - ABSOLUTE_MS)),
+    sql`(${sessions.data}->>'authGeneration' IS NULL OR EXISTS (SELECT 1 FROM users WHERE id = ${OWNER_ID} AND auth_generation = (${sessions.data}->>'authGeneration')::integer))`,
+  ));
+}
 
 export function postgresSessionStore(db: Db): SessionStore {
   return {
@@ -51,8 +79,7 @@ export function postgresSessionStore(db: Db): SessionStore {
     get(id, callback) {
       const now = new Date();
       void db
-        .update(sessions)
-        .set({ lastSeenAt: now })
+        .select({ data: sessions.data }).from(sessions)
         .where(
           and(
             eq(sessions.tokenHash, digest(id)),
@@ -62,7 +89,6 @@ export function postgresSessionStore(db: Db): SessionStore {
             sql`(${sessions.data}->>'authGeneration' IS NULL OR EXISTS (SELECT 1 FROM users WHERE id = ${OWNER_ID} AND auth_generation = (${sessions.data}->>'authGeneration')::integer))`,
           ),
         )
-        .returning({ data: sessions.data })
         .then(
           ([row]) => callback(null, row ? (row.data as Session) : null),
           callback,

@@ -19,6 +19,7 @@ On 2026-10-19, we checked each pinned package's installed `LICENSE` or `LICENSE.
 | Vite 8.3.4 | https://github.com/vitejs/vite | MIT | `a47172e44a86` | Web build and preview |
 | @vitejs/plugin-react 6.1.2 | https://github.com/vitejs/vite-plugin-react | MIT | `29b68325fe02` | React transform |
 | Fastify 5.12.7 | https://github.com/fastify/fastify | MIT | `23c918638591` | API server and health check |
+| @fastify/sse 0.6.1 | https://github.com/fastify/sse/tree/v0.6.1 | MIT | `ae49e82bc998` | Authenticated sync event stream; tagged release API and license inspected 2026-10-20 |
 | zod 4.6.7 | https://github.com/colinhacks/zod | MIT | `3f1189b28e38` | Shared response and worker cursor schemas |
 | Vitest 5.0.5 | https://github.com/vitest-dev/vitest | MIT | `78fbac9e571c` | Unit test runner |
 | @playwright/test 1.64.1 | https://github.com/microsoft/playwright | Apache-2.0 | `45873d00a0dd` | Browser smoke tests |

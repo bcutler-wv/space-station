@@ -8,6 +8,8 @@ export { privacyChoiceSchema, privacyDefaultsSchema, exclusionRuleSchema, setupS
 export { evaluatePrivacy, evaluateAttachmentPrivacy, type ScopedPrivacyRule, type PrivacyItem } from './privacy.js';
 export { healthResponseSchema, type HealthResponse } from "./health.js";
 export { readinessResponseSchema, type ReadinessResponse } from "./health.js";
+export { syncPhaseSchema, syncRepairCodeSchema, syncProgressAccountSchema, syncProgressResponseSchema,
+  SYNC_EVENT_NAMES, syncEventIdSchema, syncChangeEventSchema, syncResetEventSchema, type SyncProgressResponse } from './sync-progress.js';
 export {
   appearanceModeSchema,
   appearanceUpdateSchema,

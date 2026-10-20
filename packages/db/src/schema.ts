@@ -1,5 +1,6 @@
 import {
   integer,
+  bigint,
   jsonb,
   pgTable,
   text,
@@ -76,6 +77,19 @@ export const sessions = pgTable("sessions", {
     .defaultNow(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });
+
+// The singleton counter row serializes event IDs through transaction commit.
+export const eventClock = pgTable('event_clock', {
+  id: integer('id').primaryKey(),
+  nextId: bigint('next_id', { mode: 'number' }).notNull().default(0),
+}, (t) => [check('event_clock_singleton', sql`${t.id} = 1`)]);
+
+export const syncEvents = pgTable('sync_events', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  kind: text('kind').notNull(),
+  accountId: text('account_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [check('sync_events_kind', sql`${t.kind} in ('sync-progress', 'mail-changed')`)]);
 
 export const authChallenges = pgTable("auth_challenges", {
   id: text("id").primaryKey(),

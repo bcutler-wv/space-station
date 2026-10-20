@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { and, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import { GmailReadAdapter, GmailReadError, type GmailRawMessage, type GmailMessageMetadata, type GmailHistoryPage } from '@station/connectors';
-import { accounts, applyMailPage, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
+import { accounts, appendSyncEvent, applyMailPage, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
   MailPageFenceError, type MailChange } from '@station/db';
 import { privacyDefaultsSchema, type ParseResult } from '@station/shared';
 import { z } from 'zod';
@@ -81,8 +81,11 @@ export class GmailSyncRunner {
     const ids: string[] = [];
     for (const account of rows) {
       if (!eligible(account)) continue;
-      await this.db.insert(syncStates).values({ id: randomUUID(), accountId: account.id, resource: 'mail', collectionId: COLLECTION,
-        cursor: initialCursor(account, this.now()) }).onConflictDoNothing();
+      await this.db.transaction(async (tx) => {
+        const [created] = await tx.insert(syncStates).values({ id: randomUUID(), accountId: account.id, resource: 'mail', collectionId: COLLECTION,
+          cursor: initialCursor(account, this.now()) }).onConflictDoNothing().returning({ id: syncStates.id });
+        if (created) await appendSyncEvent(tx, 'sync-progress', account.id);
+      });
       const [state] = await this.db.select().from(syncStates).where(and(eq(syncStates.accountId, account.id), eq(syncStates.resource, 'mail'), eq(syncStates.collectionId, COLLECTION)));
       if (state && (!state.leaseUntil || state.leaseUntil <= this.now())) {
         const cursor = cursorOf(state, account, this.now());
@@ -108,9 +111,13 @@ export class GmailSyncRunner {
     if (!before) return null;
     const cursor = cursorOf(before, account, this.now());
     if (cursor.retryAt > this.now().getTime() || (before.status === 'blocked' && cursor.blockedGeneration === account.credentialGeneration)) return null;
-    const [state] = await this.db.update(syncStates).set({ generation: sql`${syncStates.generation} + 1`,
-      leaseUntil: new Date(this.now().getTime() + LEASE_MS), status: 'running', updatedAt: this.now() })
-      .where(and(eq(syncStates.id, before.id), or(isNull(syncStates.leaseUntil), lte(syncStates.leaseUntil, this.now())))).returning();
+    const state = await this.db.transaction(async (tx) => {
+      const [updated] = await tx.update(syncStates).set({ generation: sql`${syncStates.generation} + 1`,
+        leaseUntil: new Date(this.now().getTime() + LEASE_MS), status: 'running', updatedAt: this.now() })
+        .where(and(eq(syncStates.id, before.id), or(isNull(syncStates.leaseUntil), lte(syncStates.leaseUntil, this.now())))).returning();
+      if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
+      return updated;
+    });
     return state ? { account, state, cursor: cursorOf(state, account, this.now()) } : null;
   }
 
@@ -118,13 +125,17 @@ export class GmailSyncRunner {
     signal.throwIfAborted();
     if (!await this.marker()) throw new MailPageFenceError();
     signal.throwIfAborted();
-    const [saved] = await this.db.update(syncStates).set({ cursor, leaseUntil: new Date(this.now().getTime() + LEASE_MS), updatedAt: this.now() })
+    const saved = await this.db.transaction(async (tx) => {
+    const [updated] = await tx.update(syncStates).set({ cursor, leaseUntil: new Date(this.now().getTime() + LEASE_MS), updatedAt: this.now() })
       .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation), eq(syncStates.sequence, state.sequence),
         eq(syncStates.status, 'running'), eq(syncStates.cursor, state.cursor), sql`${syncStates.leaseUntil} > now()`,
         sql`exists (select 1 from accounts where id = ${account.id} and credential_generation = ${account.credentialGeneration}
           and revoked_at is null and backfill is not null and ${SCOPE} = any(granted_scopes))`,
         sql`exists (select 1 from settings where key = 'first_orbit_setup_v1' and value ->> 'confirmedOrigin' = ${this.origin})`))
       .returning();
+    if (updated && (state.cursor === null || (state.cursor as Cursor).phase !== cursor.phase)) await appendSyncEvent(tx, 'sync-progress', account.id);
+    return updated;
+    });
     if (!saved) throw new MailPageFenceError();
     return saved;
   }
@@ -138,10 +149,14 @@ export class GmailSyncRunner {
     for (const row of rows) {
       signal.throwIfAborted();
       const name = known.get(row.providerRef) ?? '';
-      if (row.name !== name) await this.db.update(labels).set({ name, updatedAt: this.now() })
-        .where(and(eq(labels.id, row.id), sql`exists (select 1 from sync_state where id = ${state.id} and generation = ${state.generation} and lease_until > now())`,
-          sql`exists (select 1 from accounts where id = ${account.id} and credential_generation = ${account.credentialGeneration} and revoked_at is null)`,
-          sql`exists (select 1 from settings where key = 'first_orbit_setup_v1' and value ->> 'confirmedOrigin' = ${this.origin})`));
+      if (row.name !== name) await this.db.transaction(async (tx) => {
+        const [changed] = await tx.update(labels).set({ name, updatedAt: this.now() })
+          .where(and(eq(labels.id, row.id), sql`exists (select 1 from sync_state where id = ${state.id} and generation = ${state.generation} and lease_until > now())`,
+            sql`exists (select 1 from accounts where id = ${account.id} and credential_generation = ${account.credentialGeneration} and revoked_at is null)`,
+            sql`exists (select 1 from settings where key = 'first_orbit_setup_v1' and value ->> 'confirmedOrigin' = ${this.origin})`))
+          .returning({ id: labels.id });
+        if (changed) await appendSyncEvent(tx, 'mail-changed', account.id);
+      });
     }
     return known;
   }
@@ -338,14 +353,20 @@ export class GmailSyncRunner {
         if (steps % 20 === 19) names = await this.refreshLabels(account, state, reader, signal);
       }
       signal.throwIfAborted();
-      await this.db.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: null,
-        ...(cursor.phase === 'ready' ? { lastSuccessAt: this.now() } : {}), updatedAt: this.now() })
-        .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation)));
+      await this.db.transaction(async (tx) => {
+        const [updated] = await tx.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: null,
+          ...(cursor.phase === 'ready' ? { lastSuccessAt: this.now() } : {}), updatedAt: this.now() })
+          .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation))).returning({ id: syncStates.id });
+        if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
+      });
     } catch (error) {
       if (signal.aborted) {
         // A timed-out or stopped job leaves the last committed offset intact.
-        await this.db.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: 'sync_interrupted', updatedAt: this.now() })
-          .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation), eq(syncStates.status, 'running')));
+        await this.db.transaction(async (tx) => {
+          const [updated] = await tx.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: 'sync_interrupted', updatedAt: this.now() })
+            .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation), eq(syncStates.status, 'running'))).returning({ id: syncStates.id });
+          if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
+        });
         return;
       }
       const [current] = await this.db.select().from(syncStates).where(eq(syncStates.id, state.id));
@@ -353,11 +374,14 @@ export class GmailSyncRunner {
         const currentCursor = cursorSchema.safeParse(current.cursor);
         const failures = currentCursor.success ? currentCursor.data.failures + 1 : 1;
         const permanent = error instanceof GmailReadError && ['needs_reconnect', 'permission_denied'].includes(error.code);
-        await this.db.update(syncStates).set({ status: permanent ? 'blocked' : 'idle', leaseUntil: null, lastError: safeCode(error),
+        await this.db.transaction(async (tx) => {
+        const [updated] = await tx.update(syncStates).set({ status: permanent ? 'blocked' : 'idle', leaseUntil: null, lastError: safeCode(error),
           cursor: currentCursor.success ? { ...currentCursor.data, failures,
             retryAt: permanent ? 0 : retryTime(this.now().getTime(), failures, error),
             blockedGeneration: permanent ? account.credentialGeneration : null } : current.cursor,
-          updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation)));
+          updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation))).returning({ id: syncStates.id });
+        if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
+        });
       }
     }
   }

@@ -6,7 +6,7 @@ import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { eq } from 'drizzle-orm';
 import { GmailReadError } from '../../packages/connectors/dist/index.js';
-import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, items, itemLabels, labels, oauthApps, orbits,
+import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, items, itemLabels, labels, oauthApps, orbits, readSyncEvents,
   settings, syncStates, users, evaluateStoredMailPrivacy, exclusionRules } from '../../packages/db/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
@@ -97,8 +97,13 @@ try {
   const wrongOrigin = new GmailSyncRunner(db, store, reader, 'https://other.example.com', parsed, now);
   assert.deepEqual(await wrongOrigin.discover(), []);
   assert.deepEqual(await runner.discover(), [accountId]);
+  const discovered = await readSyncEvents(db, 0);
+  assert.deepEqual(discovered.rows.map(({ kind, accountId: id }) => [kind, id]), [['sync-progress', accountId]]);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.accountId, noBackfillId))).length, 0);
   await runner.run(accountId);
+  const runEvents = await readSyncEvents(db, discovered.head);
+  assert.ok(runEvents.rows.some((event) => event.kind === 'mail-changed' && event.accountId === accountId));
+  assert.ok(runEvents.rows.some((event) => event.kind === 'sync-progress' && event.accountId === accountId));
   assertPaced();
   assert.equal((await state()).lastError, 'transient');
   assert.equal((await state()).cursor.offset, 1);

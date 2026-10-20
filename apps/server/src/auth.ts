@@ -34,6 +34,7 @@ import {
   digest,
   OWNER_ID,
   postgresSessionStore,
+  touchSession,
   type AuthStore,
 } from "./auth-store.js";
 import type { openDatabase } from "@station/db";
@@ -184,6 +185,10 @@ export async function registerAuth(app: FastifyInstance, config: AuthConfig) {
       return reply
         .code(401)
         .send({ error: "Sign in to access your settings." });
+    // Automatic progress reads and EventSource reconnects are passive. Other
+    // authenticated requests count as user activity, as they did before.
+    if (!request.url.startsWith('/api/sync/') && request.session.sessionId)
+      await touchSession(config.db, request.session.sessionId);
   });
 
   app.get("/api/auth/status", async (request, reply) => {
