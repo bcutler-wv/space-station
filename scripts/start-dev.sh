@@ -27,4 +27,4 @@ fi
 
 node scripts/init-env.mjs
 docker compose up -d --build postgres migrate
-docker compose up -d --build --wait app worker
+docker compose up -d --build --wait app worker mime-parser

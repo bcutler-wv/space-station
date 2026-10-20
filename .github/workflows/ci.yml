@@ -18,6 +18,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
       - run: pnpm check
+      - run: node tests/integration/mail-parser.mjs
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
 
@@ -36,6 +37,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: bash scripts/compose-smoke.sh
+      - run: bash scripts/mail-parser-container-gate.sh
       - run: docker compose exec -T postgres createdb -U station station_auth_test
       - run: docker compose run --rm -T -e DB_NAME=station_auth_test migrate
       - run: docker compose run --rm -T --no-deps -e DB_NAME=station_auth_test app node tests/integration/auth-db.mjs

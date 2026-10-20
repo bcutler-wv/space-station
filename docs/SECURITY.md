@@ -25,6 +25,7 @@ Station holds a person's entire working life: every email, chat, and calendar ev
 ## Parsing
 
 - MIME parsing runs in a separate process/container with cgroup memory and CPU limits, input-size caps, and a wall-clock timeout. Node worker-thread limits alone do not cap external buffers. A malformed message fails alone.
+- M1.3a accepts at most 12 MiB raw MIME, 8 MiB total decoded attachments, 4 MiB combined text/HTML, 16 MiB JSON output, 64 KiB aggregate headers, 128 parts, 16 MIME levels, three nested RFC822 levels, 100 recipients, and 64 attachments. Each parse has a three-second deadline and two concurrent requests per parser service. The raw cap supports roughly 8 MiB of base64 attachments; larger messages are unsupported. Limit failures are classified and must become visible unsupported records during later sync; cursors must not silently skip them. Parsed HTML is explicitly untrusted and cannot be persisted or rendered as trusted content before the reviewed DOMPurify ingest and display work. The reader re-sanitizes at display time.
 - Attachment text extraction runs in the Tika container, never in the app process.
 - Attachments are served with `Content-Disposition: attachment` and a safe content type unless they are images shown inline through the proxy.
 

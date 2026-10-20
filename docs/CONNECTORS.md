@@ -40,7 +40,7 @@ No connector needs a public inbound endpoint. Everything below works with Statio
 
 ## IMAP and SMTP
 
-- **Libraries:** imapflow (IMAP), postal-mime or mailparser (MIME), Nodemailer (SMTP).
+- **Libraries:** imapflow (IMAP), PostalMime through the isolated M1 parser service (MIME), Nodemailer (SMTP).
 - **Auth:** username and password or app password. XOAUTH2 where a provider supports it.
 - **Auto-discovery:** from the email address, check Mozilla's autoconfig database, DNS SRV records, and the domain's own autoconfig file to prefill servers and ports.
 - **Test Connection:** verifies IMAP login, IDLE, CONDSTORE and QRESYNC support, and SMTP auth, and shows which ones are available.

@@ -1,5 +1,15 @@
 {
-  "name": "@station/worker", "version": "0.0.0", "private": true, "type": "module",
-  "scripts": { "start": "node dist/main.js" },
-  "dependencies": { "@station/db": "workspace:*", "pg-boss": "12.38.0" }
+  "name": "@station/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@station/db": "workspace:*",
+    "@station/shared": "workspace:*",
+    "pg-boss": "12.38.0",
+    "postal-mime": "4.0.11"
+  }
 }

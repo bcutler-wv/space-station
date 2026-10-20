@@ -11,6 +11,7 @@ const reviewedExceptions = new Set([
   '0BSD:tslib@2.8.1',
   'Unlicense:isbot@5.2.2',
   'BSD:url-template@2.0.8',
+  'MIT-0:postal-mime@4.0.11',
 ]);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;

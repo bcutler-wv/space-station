@@ -44,7 +44,7 @@ Checked pinned package versions and repository links against npm metadata and op
 | Package | Use | License (verify when adding) |
 |---|---|---|
 | imapflow | IMAP client | MIT |
-| postal-mime or mailparser | MIME parsing | MIT |
+| postal-mime | MIME parsing | MIT-0 |
 | Nodemailer | SMTP | MIT-0 or MIT |
 | googleapis | Gmail and Calendar APIs | Apache-2.0 |
 | @azure/msal-node, @microsoft/microsoft-graph-client | Microsoft Graph | MIT |
@@ -118,3 +118,7 @@ On 2026-10-19, checked the current package releases, installed TypeScript APIs, 
 | @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail `users.getProfile` account identity |
 
 The Google SDK dependency tree includes `url-template` 2.0.8 from https://github.com/bramstein/url-template. Its npm manifest says `BSD` without a precise SPDX identifier; the installed LICENSE has the three-clause BSD text (SHA-256 prefix `70723b90e3f2`). The license gate allows only this exact package/version as a reviewed exception.
+
+## Adopted in M1.3a
+
+On 2026-10-20, checked the published PostalMime 4.0.11 package, its TypeScript options (`maxNestingDepth`, `maxHeadersSize`, `maxPartCount`, `maxRfc822NestingDepth`, `maxForwardedAddresses`), package manifest, and bundled license. Its upstream is https://github.com/postalsys/postal-mime; the license is MIT-0 (bundled `LICENSE.txt` SHA-256 prefix `831ad54932cb`). The exact version is pinned in `pnpm-lock.yaml` and is the only MIT-0 exception in the license gate. No upstream source was copied.

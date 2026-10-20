@@ -54,15 +54,47 @@ services:
     build: .
     command: ["node", "apps/worker/dist/main.js"]
     environment: *runtime_env
+    networks:
+      - default
+      - mail_parser
     depends_on:
       migrate:
         condition: service_completed_successfully
+      mime-parser:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "apps/worker/dist/health.js"]
       interval: 30s
       timeout: 15s
       retries: 3
     restart: unless-stopped
+
+  mime-parser:
+    build: .
+    command: ["node", "apps/worker/dist/mail-parser-service.js"]
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - mail_parser
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8090/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  mail_parser:
+    internal: true
 
 volumes:
   postgres_data:

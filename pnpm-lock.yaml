@@ -144,9 +144,15 @@ importers:
       '@station/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@station/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       pg-boss:
         specifier: 12.38.0
         version: 12.38.0(@opentelemetry/api@1.9.1)
+      postal-mime:
+        specifier: 4.0.11
+        version: 4.0.11
 
   packages/ai: {}
 
@@ -2183,6 +2189,10 @@ packages:
     resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
     engines: {node: '>=20'}
     hasBin: true
+
+  postal-mime@4.0.11:
+    resolution: {integrity: sha512-T0zAqYnuSB8s+zL9WdiGj/2DeWeObEjqrcw2LWq+hgwpCSbLt7xujsFXn6Kgr1wsLl8DJh+v+lG9GQSQfMcUyA==}
+    engines: {node: '>=20'}
 
   postcss@8.5.31:
     resolution: {integrity: sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg==}
@@ -4308,6 +4318,8 @@ snapshots:
   playwright@1.64.1:
     dependencies:
       playwright-core: 1.64.1
+
+  postal-mime@4.0.11: {}
 
   postcss@8.5.31:
     dependencies:
