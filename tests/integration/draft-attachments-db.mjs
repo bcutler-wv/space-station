@@ -19,9 +19,12 @@ const dbUrl = process.env.ATTACHMENT_TEST_DATABASE_URL ?? databaseUrl(loadRuntim
 assert.ok(dbUrl);
 const opened = openDatabase(dbUrl);
 const db = opened.db;
-const localArtifacts = path.join(process.cwd(), '.cache', 'test-results');
-await mkdir(localArtifacts, { recursive: true });
-const root = process.env.ATTACHMENT_TEST_BLOB_ROOT ?? await mkdtemp(path.join(localArtifacts, 'draft-attachments-'));
+let root = process.env.ATTACHMENT_TEST_BLOB_ROOT;
+if (!root) {
+  const localArtifacts = path.join(process.cwd(), '.cache', 'test-results');
+  await mkdir(localArtifacts, { recursive: true });
+  root = await mkdtemp(path.join(localArtifacts, 'draft-attachments-'));
+}
 const blobs = path.join(root, 'blobs');
 await mkdir(blobs, { recursive: true });
 const store = new PrivateBlobStore(blobs);

@@ -151,3 +151,7 @@ Legacy reply metadata repair is implemented and Astra-reviewed for version 0.25.
 The local draft backend was accepted after full Ubuntu run `39522612572` passed at `9203432` (0.24.0), including PostgreSQL 16/Compose and browser gates. The 0.25.0 legacy reply repair is separately awaiting its integration run.
 
 Draft attachment storage is implemented and Astra-reviewed for version 0.26.0, pending Ubuntu integration. Dedicated intents, scoped revision-checked endpoints and worker cleanup cover bounded upload and owned file retention. Review corrected Unicode limits and verified concurrent publication/autosave cleanup. See [the attachment record](sessions/draft-attachments.md). Durable send and reconciliation are next.
+
+Legacy reply metadata repair was accepted after full Ubuntu run `39524137665` passed at `f4aaa3d` (0.25.0), including PostgreSQL 16/Compose and browser gates. Attachment integration is separately pending.
+
+Attachment run `39525762004` failed during fixture directory creation, before attachment assertions. Version 0.26.1 makes repo-local artifact creation conditional when CI supplies a writable volume root; Astra accepted the narrow fix after explicit-root/read-only-cwd and default-root checks. Full integration remains pending.
