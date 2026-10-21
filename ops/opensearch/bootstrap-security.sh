@@ -26,6 +26,9 @@ case "$phase" in
     echo 'Retained private search security found; initialization skipped.'
     ;;
   fresh)
+    # Do this before changing the durable phase or uploading any config. A
+    # partial directory upload would otherwise strand the retained index.
+    bash /run/station-security-config/check-manifest.sh /run/station-security-config
     # An existing security index with a fresh marker is inconsistent. Never
     # overwrite it with bootstrap YAML, even if a previous attempt crashed.
     status="$(probe || true)"
