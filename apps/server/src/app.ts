@@ -7,6 +7,7 @@ import { databaseSetupStore } from './setup-store.js';
 import { registerGoogle } from './google.js';
 import { registerSync } from './sync.js';
 import { registerMailReader } from './mail-reader.js';
+import { registerDrafts } from './drafts.js';
 import { registerMailImages, type MailImageProxyConfig } from './mail-images.js';
 import type { PrivateBlobStore } from '@station/db';
 
@@ -27,6 +28,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     registerGoogle(instance, auth, databaseSetupStore(auth.db));
     await registerSync(instance, auth);
     registerMailReader(instance, auth, mailBlobStore);
+    registerDrafts(instance, auth);
     if (mailBlobStore && mailImageProxy) registerMailImages(instance, auth, mailBlobStore, mailImageProxy);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));

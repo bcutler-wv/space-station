@@ -1,0 +1,9 @@
+# Local draft backend
+
+Version 0.24.0 adds durable local draft create, metadata list, single-draft read, revision-checked update and discard. A stable creation key replays only an identical creation request. Concurrent saves cannot silently overwrite a newer revision. Account and verified Orbit scope remain fixed; routed reply drafts require live parent membership in the selected Orbit. Lists omit bodies and use signed cursors preserving PostgreSQL timestamp precision. Full responses and SQL stages are bounded.
+
+The generated migration persists RFC Message-ID, In-Reply-To and References plus address-count/completeness evidence during mail ingestion. Reply context requires a syntactically valid header chain and complete, unambiguous sender/Reply-To evidence. Astra review reproduced a case where invalid addresses were discarded and a surviving address was falsely treated as unambiguous. The correction retains header counts and completeness before identity filtering and refuses that context. These untrusted destinations still require owner review and validation by the later send path.
+
+Local checks passed 67 unit tests, lint, typecheck, build, colors and licenses. Fresh PostgreSQL 15 draft HTTP, mail-page and Gmail-sync fixtures passed. Astra independently applied the generated migration, ran draft and page fixtures, tested concurrent creation and revision conflicts, and probed duplicate, empty and malformed raw address headers. Disposable databases were stopped. The Ubuntu PostgreSQL 16/Compose gate is wired and remains pending.
+
+This slice does not send mail, create provider drafts, expose a compose UI or accept attachment uploads. Legacy rows without complete stored reply headers remain unavailable until the required bounded metadata-repair follow-up. Draft attachment ownership/upload/cleanup is also required before compose is complete. Both gaps remain open before M1 acceptance. No production deployment occurred.

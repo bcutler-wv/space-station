@@ -141,3 +141,7 @@ The image backend/runtime and gate repair were accepted after full Ubuntu run `3
 The reusable safe body, consent override and preview-isolation repair were accepted after full Ubuntu run `39518772561` passed at `8a3008c` (0.22.1), including production and development browser gates and PostgreSQL 16/Compose integration. Mail navigation remains in source review.
 
 Live mail navigation is implemented and Astra-reviewed for version 0.23.0: scoped account/Orbit conversations, labels, subject search, lazy thread bodies/attachments, pagination, keyboard navigation and manual event refresh. Review corrected invalid URL scope fallback and mobile entry. Full Ubuntu acceptance is pending. See [the navigation record](sessions/mail-navigation.md). Durable local drafts and reply context are next.
+
+Live mail navigation was accepted after full Ubuntu run `39520638316` passed at `8de0232` (0.23.0). Reading, scoped subject search, labels and keyboard/mobile navigation are integrated; local drafts, compose/provider actions and M1 integrated acceptance remain.
+
+The local draft backend is implemented and Astra-reviewed for version 0.24.0, pending Ubuntu integration. It provides creation replay, revision conflicts, bounded metadata listing, durable edits/discard and conservative reply context. Review corrected recipient ambiguity after invalid identity filtering. See [the draft record](sessions/local-draft-backend.md). Legacy reply metadata repair, draft attachment lifecycle, compose and provider actions remain required before M1 acceptance.

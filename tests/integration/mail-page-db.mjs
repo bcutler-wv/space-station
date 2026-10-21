@@ -41,7 +41,8 @@ async function createAccount(name) {
 function parsed(from = fake('sender'), opts = {}) {
   return { ok: true, mail: { subject: 'Fixture subject', messageId: '<fixture@example.com>', inReplyTo: null, references: null,
     date: 'Tue, 20 Oct 2026 12:00:00 GMT', from: { name: 'Sender', address: from },
-    senderIdentities: opts.senders ?? [{ name: 'Other', address: fake('blocked') }], replyTo: [], to: [{ name: 'Owner', address: fake('one') }], cc: [], bcc: [],
+    senderIdentities: opts.senders ?? [{ name: 'Other', address: fake('blocked') }], senderHeaderFieldCount: 1,
+    replyTo: [], replyToHeaderFieldCount: 0, to: [{ name: 'Owner', address: fake('one') }], cc: [], bcc: [],
     text: 'fixture body', sanitizedHtml: opts.html ? { policyVersion: 1, html: '<p>fixture</p>', images: [] } : null,
     attachments: opts.attachment ? [{ filename: '../evil\\name\u0000.txt', mimeType: 'application/octet-stream', disposition: 'inline', contentId: '<cid@example.com>', related: true, contentBase64: Buffer.from('fixture bytes').toString('base64') }] : [] } };
 }
@@ -71,6 +72,9 @@ try {
   assert.equal((await item('one', 'same')).direction, 'out');
   assert.equal((await item('one', 'same')).directionProvenance, 'provider_sent_account');
   assert.equal((await item('one', 'same')).providerRevision, '900719925474099312345');
+  assert.equal((await item('one', 'same')).messageId, '<fixture@example.com>');
+  assert.equal((await item('one', 'same')).inReplyTo, null);
+  assert.equal((await item('one', 'same')).referencesHeader, null);
   assert.equal((await db.select().from(attachments))[0].filename, '.._evil_name_.txt');
   assert.equal((await db.select().from(attachments))[0].contentId, '<cid@example.com>');
   assert.equal((await db.select().from(attachments))[0].disposition, 'inline');
@@ -78,23 +82,34 @@ try {
   assert.equal((await store.read((await db.select().from(attachments))[0].storagePath)).toString(), 'fixture bytes');
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canIndex, false);
   assert.equal(await applyMailPage(db, store, first), 'replayed');
+  const changedHeader = { ...first, changes: first.changes.map((entry) => ({ ...entry,
+    parsed: { ...entry.parsed, mail: { ...entry.parsed.mail, messageId: '<changed@example.com>' } } })) };
+  await assert.rejects(() => applyMailPage(db, store, changedHeader), /changed content or sequence/);
   assert.equal((await readSyncEvents(db, 0)).head, firstEvent.head, 'page replay emits no duplicate event');
   await assert.rejects(applyMailPage(db, store, { ...first, cursorAfter: { historyId: 'different' } }), /changed content/);
   assert.equal((await db.select().from(items)).length, 1);
   assert.equal((await db.select().from(attachments)).length, 1);
   assert.equal((await db.select().from(itemRecipients)).length, 3);
-  await applyMailPage(db, store, page('two', 0, [change('same')]));
+  const ambiguous = parsed(fake('sender'), { senders: [
+    { name: 'Valid', address: fake('sender') }, { name: 'Broken', address: 'bad@@' },
+  ] });
+  ambiguous.mail.replyTo = [{ name: 'Valid', address: fake('reply') }, { name: 'Broken', address: 'bad@@' }];
+  await applyMailPage(db, store, page('two', 0, [change('same', { parsed: ambiguous })]));
   assert.equal((await db.select().from(items)).length, 2);
   assert.notEqual((await item('one', 'same')).id, (await item('two', 'same')).id);
+  assert.equal((await item('two', 'same')).senderIdentitiesComplete, false);
+  assert.equal((await item('two', 'same')).senderHeaderCount, 2);
+  assert.equal((await item('two', 'same')).replyToIdentitiesComplete, false);
+  assert.equal((await item('two', 'same')).replyToHeaderCount, 2);
   const [oneLabel] = await db.select().from(labels).where(eq(labels.accountId, accountsByName.one));
   await assert.rejects(db.insert(itemLabels).values({ itemId: (await item('two', 'same')).id, accountId: accountsByName.two, labelId: oneLabel.id, source: 'provider' }), isForeignKeyViolation);
   const [oneIdentity] = await db.select().from(identities).where(eq(identities.accountId, accountsByName.one));
   await assert.rejects(db.insert(itemRecipients).values({ itemId: (await item('two', 'same')).id, accountId: accountsByName.two, identityId: oneIdentity.id, role: 'to' }), isForeignKeyViolation);
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'label', value: 'inbox', effect: 'no_index' });
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canIndex, false);
-  await applyMailPage(db, store, page('two', 1, [change('same', { parsed: parsed(fake('sender'), { senders: [] }), labels: [{ ref: 'INBOX', name: 'Inbox' }] })]));
+  await applyMailPage(db, store, page('two', 1, [change('same', { parsed: parsed(fake('sender'), { senders: [{ name: 'Sender', address: fake('sender') }] }), labels: [{ ref: 'INBOX', name: 'Inbox' }] })]));
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canUseAi, true);
-  await applyMailPage(db, store, page('two', 2, [change('same', { parsed: parsed(fake('sender'), { senders: [] }), labels: [{ ref: 'INBOX', name: null }] })]));
+  await applyMailPage(db, store, page('two', 2, [change('same', { parsed: parsed(fake('sender'), { senders: [{ name: 'Sender', address: fake('sender') }] }), labels: [{ ref: 'INBOX', name: null }] })]));
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canUseAi, false);
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'sender', value: fake('blocked'), effect: 'no_ai' });
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canUseAi, false);

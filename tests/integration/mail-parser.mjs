@@ -32,6 +32,18 @@ assert.equal(good.mail.sanitizedHtml.policyVersion, 1);
 assert.equal(good.mail.sanitizedHtml.html, '<b>Reply</b>');
 assert.deepEqual(good.mail.sanitizedHtml.images, []);
 assert.deepEqual(good.mail.senderIdentities.map(({ address }) => address), ['jordan@example.com', 'relay@example.com']);
+assert.equal(good.mail.senderHeaderFieldCount, 2);
+assert.equal(good.mail.replyToHeaderFieldCount, 0);
+const ambiguousHeaders = await parseInChild(Buffer.from([
+  'From: Good <good@example.com>, bad@@',
+  'Reply-To: Good <reply@example.com>, bad@@',
+  'Message-ID: <ambiguous@example.com>', '', 'body',
+].join('\r\n')));
+assert.equal(ambiguousHeaders.ok, true);
+assert.deepEqual(ambiguousHeaders.mail.senderIdentities.map(({ address }) => address), ['good@example.com', 'bad@@']);
+assert.deepEqual(ambiguousHeaders.mail.replyTo.map(({ address }) => address), ['reply@example.com', 'bad@@']);
+assert.equal(ambiguousHeaders.mail.senderHeaderFieldCount, 1);
+assert.equal(ambiguousHeaders.mail.replyToHeaderFieldCount, 1);
 assert.equal(good.mail.attachments[0].filename, '../track.png');
 assert.equal(good.mail.attachments[0].contentId, '<inline@example.com>');
 assert.equal(good.mail.attachments[0].contentBase64, 'AQID');

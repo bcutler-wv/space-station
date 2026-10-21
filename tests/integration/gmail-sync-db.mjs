@@ -75,7 +75,8 @@ const reader = {
 };
 const parsed = (raw) => ({ ok: true, mail: { subject: `Subject ${Buffer.from(raw).toString()}`, messageId: null,
   inReplyTo: null, references: null, date: null, from: { name: 'Sender', address: 'sender@example.com' },
-  senderIdentities: [{ name: 'Sender', address: 'sender@example.com' }], replyTo: [], to: [], cc: [], bcc: [],
+  senderIdentities: [{ name: 'Sender', address: 'sender@example.com' }], senderHeaderFieldCount: 1,
+  replyTo: [], replyToHeaderFieldCount: 0, to: [], cc: [], bcc: [],
   text: 'safe body', sanitizedHtml: null, attachments: [] } });
 const runner = new GmailSyncRunner(db, store, reader, origin, parsed, now);
 const state = async () => (await db.select().from(syncStates).where(eq(syncStates.accountId, accountId)))[0];

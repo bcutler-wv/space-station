@@ -234,7 +234,12 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           oldKeys.push(...oldAttachments.map((row) => row.key));
         }
         const sender = parsed?.from ? email(parsed.from.address) : null;
-        const senderIdentitiesComplete = !!parsed && !!parsed.from && [parsed.from, ...parsed.senderIdentities].every((address) => email(address.address) !== null);
+        const senderIdentitiesComplete = !!parsed && !!parsed.from &&
+          parsed.senderIdentities.length >= parsed.senderHeaderFieldCount &&
+          [parsed.from, ...parsed.senderIdentities].every((address) => email(address.address) !== null);
+        const replyToIdentitiesComplete = !!parsed && parsed.replyToHeaderFieldCount <= 1 &&
+          (parsed.replyToHeaderFieldCount === 0 || parsed.replyTo.length > 0) &&
+          parsed.replyTo.every((address) => email(address.address) !== null);
         const direction = !change.deleted && change.providerSent && change.labelRefs.some((label) => label.ref === 'SENT') && sender === email(account.email) ? 'out' : 'in';
         const fromIdentity = parsed?.from ? await identityFor(tx, page.accountId, account.provider, parsed.from) : null;
         const [fromRow] = fromIdentity ? await tx.select({ personId: identities.personId }).from(identities).where(eq(identities.id, fromIdentity)) : [];
@@ -243,7 +248,11 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           externalId: change.externalId, providerRevision: change.providerRevision, appliedSequence: page.expectedSequence + 1,
           direction, directionProvenance: direction === 'out' ? 'provider_sent_account' : 'incoming', fromPersonId: fromRow?.personId ?? null,
           senderIdentitiesComplete,
+          senderHeaderCount: parsed?.senderIdentities.length ?? 0,
+          replyToHeaderCount: parsed?.replyTo.length ?? 0,
+          replyToIdentitiesComplete,
           internalAt: change.internalAt, receivedAt: change.receivedAt, sentAt: parsed?.date && !Number.isNaN(Date.parse(parsed.date)) ? new Date(parsed.date) : null,
+          messageId: parsed?.messageId ?? null, inReplyTo: parsed?.inReplyTo ?? null, referencesHeader: parsed?.references ?? null,
           subject: parsed?.subject ?? null, snippet: change.snippet?.slice(0, 4096) ?? null, bodyText: parsed?.text ?? null,
           bodyHtmlPath: files?.html ?? null, htmlPolicyVersion: parsed?.sanitizedHtml ? MAIL_HTML_POLICY_VERSION : null,
           imageMetadata: parsed?.sanitizedHtml?.images ?? null, flags: change.flags,

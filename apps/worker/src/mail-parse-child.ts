@@ -13,6 +13,8 @@ async function normalize(email: Email): Promise<ParseResult> {
   const senderIdentities = email.headers
     .filter((header) => header.key === 'from' || header.key === 'sender')
     .flatMap((header) => addresses(addressParser(header.value)));
+  const senderHeaderFieldCount = email.headers.filter((header) => header.key === 'from' || header.key === 'sender').length;
+  const replyToHeaderFieldCount = email.headers.filter((header) => header.key === 'reply-to').length;
   const lists = {
     replyTo: addresses(email.replyTo), to: addresses(email.to),
     cc: addresses(email.cc), bcc: addresses(email.bcc),
@@ -38,7 +40,8 @@ async function normalize(email: Email): Promise<ParseResult> {
   const mail = parsedMailSchema.safeParse({
     subject: email.subject ?? null, messageId: email.messageId ?? null,
     inReplyTo: email.inReplyTo ?? null, references: email.references ?? null,
-    date: email.date ?? null, from: oneAddress(email.from), senderIdentities, ...lists,
+    date: email.date ?? null, from: oneAddress(email.from), senderIdentities,
+    senderHeaderFieldCount, replyToHeaderFieldCount, ...lists,
     text: email.text ?? null, sanitizedHtml,
     attachments,
   });

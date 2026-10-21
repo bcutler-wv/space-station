@@ -6,4 +6,5 @@ export { PrivateBlobStore } from './private-blob-store.js';
 export { applyMailPage, collectOrphanBlobs, evaluateStoredMailPrivacy, MailPageFenceError, type MailPage, type MailChange } from './mail-page.js';
 export { syncStates, syncPages, people, identities, threads, items, itemRecipients, labels, itemLabels, itemOrbits, attachments, blobIntents } from './schema.js';
 export { mailImageConsent, mailSenderImagePreferences } from './schema.js';
+export { drafts } from './schema.js';
 export { appendSyncEvent, readSyncEvents, boundSyncStreamRead, EVENT_REPLAY_LIMIT, EVENT_RETENTION } from './sync-events.js';

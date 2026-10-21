@@ -245,8 +245,12 @@ export const items = pgTable('items', {
   appliedSequence: integer('applied_sequence').notNull(), direction: text('direction').notNull(),
   directionProvenance: text('direction_provenance').notNull(), fromPersonId: text('from_person_id'),
   senderIdentitiesComplete: boolean('sender_identities_complete').notNull().default(false),
+  senderHeaderCount: integer('sender_header_count').notNull().default(0),
+  replyToHeaderCount: integer('reply_to_header_count').notNull().default(0),
+  replyToIdentitiesComplete: boolean('reply_to_identities_complete').notNull().default(false),
   sentAt: timestamp('sent_at', { withTimezone: true }), receivedAt: timestamp('received_at', { withTimezone: true }),
   internalAt: timestamp('internal_at', { withTimezone: true }), subject: text('subject'), snippet: text('snippet'),
+  messageId: text('message_id'), inReplyTo: text('in_reply_to'), referencesHeader: text('references_header'),
   bodyText: text('body_text'), bodyHtmlPath: text('body_html_path'), htmlPolicyVersion: integer('html_policy_version'),
   imageMetadata: jsonb('image_metadata'), flags: jsonb('flags').notNull().default({}),
   parseStatus: text('parse_status').notNull(), parseFailureCode: text('parse_failure_code'),
@@ -330,3 +334,25 @@ export const mailSenderImagePreferences = pgTable('mail_sender_image_preferences
   senderAddress: text('sender_address').notNull(), enabled: boolean('enabled').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.accountId, t.senderAddress] })]);
+
+export const drafts = pgTable('drafts', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull().references(() => users.id),
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  orbitId: text('orbit_id').references(() => orbits.id),
+  threadId: text('thread_id'), threadCollectionId: text('thread_collection_id'), parentItemId: text('parent_item_id'),
+  creationKey: text('creation_key').notNull(),
+  creationDigest: text('creation_digest').notNull(),
+  to: jsonb('to').notNull().default([]), cc: jsonb('cc').notNull().default([]), bcc: jsonb('bcc').notNull().default([]),
+  subject: text('subject').notNull().default(''), bodyText: text('body_text').notNull().default(''),
+  attachmentRefs: jsonb('attachment_refs').notNull().default([]),
+  revision: integer('revision').notNull().default(1), state: text('state').notNull().default('editing'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('drafts_creation_unique').on(t.ownerId, t.creationKey),
+  index('drafts_list_idx').on(t.ownerId, t.accountId, t.updatedAt, t.id),
+  foreignKey({ columns: [t.threadId, t.accountId, t.threadCollectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
+  foreignKey({ columns: [t.parentItemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
+  check('drafts_revision_positive', sql`${t.revision} > 0`),
+  check('drafts_state', sql`${t.state} in ('editing', 'discarded')`),
+]);
