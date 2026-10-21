@@ -28,6 +28,7 @@ const controlHost = process.env.M1_BROWSER_CONTROL_HOST ?? '127.0.0.1';
 if (!['127.0.0.1', '0.0.0.0'].includes(controlHost)) throw new Error('Invalid browser fixture control host');
 if (!blobRoot || !config.APP_TLS_CERT_PATH || !config.APP_TLS_KEY_PATH) throw new Error('Browser fixture needs private blobs and TLS');
 await mkdir(artifacts, { recursive: true });
+await mkdir(blobRoot, { recursive: true, mode: 0o700 });
 const port = () => new Promise((resolve, reject) => {
   const server = createNetServer();
   server.once('error', reject);

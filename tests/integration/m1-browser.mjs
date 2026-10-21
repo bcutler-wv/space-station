@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { URL } from 'node:url';
+import { URL, URLSearchParams } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { generate } from 'otplib';
 
@@ -91,11 +91,37 @@ try {
   // that the accepted process fixture proves, while this fixture supplies the UI.
   await control('hold', { path: '/gmail/v1/users/me/messages/b', format: 'raw' });
   const firstWorker = await control('startWorker');
-  const initial = await until('durable initial checkpoint', async () => {
-    const value = await control('snapshot');
-    return value.provider.holds.some((entry) => entry.path.endsWith('/b')) &&
-      value.rows.some((entry) => entry.externalId === 'a') && value.state?.cursor?.offset === 1 ? value : null;
-  });
+  let initial;
+  try {
+    initial = await until('durable initial checkpoint', async () => {
+      const value = await control('snapshot');
+      return value.provider.holds.some((entry) => entry.path.endsWith('/b')) &&
+        value.rows.some((entry) => entry.externalId === 'a') && value.state?.cursor?.offset === 1 ? value : null;
+    });
+  } catch (error) {
+    // This reports only fixture IDs, queue/cursor state and provider route shapes.
+    // Never persist credentials, request headers, message bodies or a full DB row.
+    const value = await control('snapshot').catch(() => null);
+    const cursor = value?.state?.cursor;
+    const diagnostic = {
+      failure: 'durable_initial_checkpoint_timeout',
+      accountPresent: Boolean(value?.accountId),
+      sync: value?.state ? { status: value.state.status, lastError: value.state.lastError,
+        leaseUntil: value.state.leaseUntil, sequence: value.state.sequence,
+        cursor: cursor && { phase: cursor.phase, offset: cursor.offset, pending: cursor.pending?.length,
+          failures: cursor.failures, retryAt: cursor.retryAt, nextCallAt: cursor.nextCallAt } } : null,
+      rows: value?.rows.map((row) => row.externalId),
+      jobs: value?.jobs.map((job) => ({ state: job.state, retryCount: job.retry_count,
+        accountSingleton: job.singleton_key === value.accountId })),
+      provider: value?.provider && { holds: value.provider.holds.map((entry) => entry.path),
+        calls: value.provider.calls.slice(-30).map((entry) => ({ path: entry.path, method: entry.method,
+          format: new URLSearchParams(entry.query).get('format') })), oauthKinds: value.provider.oauth.map((entry) => entry.kind) },
+      pids: value?.pids,
+    };
+    await writeFile(`${artifacts}/initial-checkpoint-diagnostic.json`, JSON.stringify(diagnostic, null, 2)).catch(() => {});
+    await screenshot(page, 'initial-checkpoint-timeout').catch(() => {});
+    throw new Error(`Durable initial checkpoint failed; see initial-checkpoint-diagnostic.json: ${JSON.stringify(diagnostic)}`, { cause: error });
+  }
   const firstJob = initial.jobs.find((job) => job.state === 'active');
   assert.ok(firstJob);
   await control('killWorker');

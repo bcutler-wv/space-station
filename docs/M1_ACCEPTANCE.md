@@ -1,8 +1,8 @@
 # M1 acceptance record
 
-**Status: Astra source review accepted for version 0.34.0; pending a green full Ubuntu run including the integrated TLS browser job.** M1 is not accepted and M2 has not begun.
+**Status: Astra source review and CI fixture repair accepted through version 0.34.1; pending a green full Ubuntu run including the integrated TLS browser job.** M1 is not accepted and M2 has not begun.
 
-The completed prerequisite at `7ae9054` (0.33.0) passed full Ubuntu CI run `39634320681`, including PostgreSQL 16/Compose process recovery and the existing runtime/browser gates. The integrated journey is included in version 0.34.0 and awaits its Ubuntu run. Its fresh PostgreSQL 15 local run passed on 2026-10-21; that is useful source evidence, not a substitute for the PostgreSQL 16/Compose gate.
+The completed prerequisite at `7ae9054` (0.33.0) passed full Ubuntu CI run `39634320681`, including PostgreSQL 16/Compose process recovery and the existing runtime/browser gates. The integrated journey entered version 0.34.0. Its first Ubuntu run `39641770038` failed at the initial import checkpoint because the CI-only browser fixture did not create its private blob subdirectory before starting the worker; scaffold and process-recovery jobs passed. That fixture setup has been repaired locally and the full browser journey passed against a fresh PostgreSQL 15 database with an initially absent blob directory. Astra accepted the narrow repair for version 0.34.1 after independently verifying absent-root creation and private-store read/write. A new green full Ubuntu run remains required; local PG15 evidence is not a substitute for the PostgreSQL 16/Compose gate.
 
 | M1 requirement | Evidence in this working tree |
 | --- | --- |
@@ -16,4 +16,4 @@ The browser fixture uses only fake `example.com` data and a test-only OAuth tran
 
 The configured privacy and source permission checks apply to M1 mail storage and reads. M1 has no search or AI-derived consumer. M2 must implement authoritative post-action provider-read gating and derived-data invalidation before indexing or retrieval; a local sequence or timestamp advance alone is insufficient. Mission Control and sample Orbit cards remain sample data; this acceptance concerns Gmail Mail.
 
-Astra independently replayed the TLS journey, process-recovery regression and startup-failure cleanup. Review corrected the local control-listener default and hostile-message screenshot capture; both fixes passed rereview. Before marking M1 accepted, record the resulting commit and a green full Ubuntu CI run here and in `ROADMAP.md`. The new `m1-browser` job must pass alongside scaffold, process-recovery and runtime jobs. Any failure requires a reviewed repair and a new green run.
+Astra independently replayed the TLS journey, process-recovery regression and startup-failure cleanup. Review corrected the local control-listener default and hostile-message screenshot capture; both fixes passed rereview. The subsequent CI fixture failure and local repair are recorded above. Before marking M1 accepted, record the resulting repair commit and a green full Ubuntu CI run here and in `ROADMAP.md`. The new `m1-browser` job must pass alongside scaffold, process-recovery and runtime jobs.
