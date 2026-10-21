@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import console from 'node:console';
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
+import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { eq, sql } from 'drizzle-orm';
 import { GmailReadError } from '../../packages/connectors/dist/index.js';
@@ -104,6 +105,9 @@ try {
   const discovered = await readSyncEvents(db, 0);
   assert.deepEqual(discovered.rows.map(({ kind, accountId: id }) => [kind, id]), [['sync-progress', accountId]]);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.accountId, noBackfillId))).length, 0);
+  // An existing nullable cursor is a supported initial import state; leasing
+  // it must compare SQL NULL correctly while preserving the CAS fence.
+  await db.update(syncStates).set({ cursor: null }).where(eq(syncStates.accountId, accountId));
   await runner.run(accountId);
   const runEvents = await readSyncEvents(db, discovered.head);
   assert.ok(runEvents.rows.some((event) => event.kind === 'mail-changed' && event.accountId === accountId));
@@ -572,5 +576,66 @@ try {
   assert.equal((await secondState()).leaseUntil, null);
   await second.run(secondId);
   assert.equal((await secondState()).cursor.phase, 'ready');
+  // Slow checkpoint and adapter preparation must not consume the interval
+  // before the next fast provider dispatch. A wall-clock jump after the first
+  // completion proves the local monotonic floor cannot be bypassed.
+  pending = await resetPending();
+  const dispatchTimes = [];
+  const dispatchWalls = [];
+  const delayedReader = { ...secondReader,
+    async listLabels(...args) {
+      await delay(300);
+      dispatchTimes.push(performance.now());
+      dispatchWalls.push(now().getTime());
+      return secondReader.listLabels(...args);
+    },
+    async getMessageRaw() {
+      dispatchTimes.push(performance.now());
+      dispatchWalls.push(now().getTime());
+      throw new GmailReadError('transient');
+    },
+  };
+  const delayedRunner = new GmailSyncRunner(db, store, delayedReader, origin, parsed, now);
+  const originalCheckpoint = delayedRunner.checkpoint.bind(delayedRunner);
+  let pacingCheckpoints = 0;
+  delayedRunner.checkpoint = async (...args) => {
+    pacingCheckpoints++;
+    if (pacingCheckpoints === 1) await delay(300);
+    const saved = await originalCheckpoint(...args);
+    if (pacingCheckpoints === 2) clockOffset += 60_000;
+    return saved;
+  };
+  try {
+    await delayedRunner.run(secondId);
+    assert.equal(dispatchTimes.length, 2);
+    assert.ok(dispatchTimes[1] - dispatchTimes[0] >= 850,
+      `delayed checkpoint/adapter preparation compressed pacing: ${dispatchTimes[1] - dispatchTimes[0]}ms`);
+    assert.equal((await secondState()).lastError, 'transient');
+    assert.ok((await secondState()).cursor.nextCallAt >= dispatchWalls[1] + 850);
+  } finally { clockOffset -= 60_000; }
+
+  pending = await resetPending();
+  let leaseReturnedAt = 0;
+  let firstAfterLease = 0;
+  const handoffRunner = new GmailSyncRunner(db, store, { ...secondReader,
+    async listLabels() {
+      firstAfterLease = performance.now();
+      throw new GmailReadError('transient');
+    },
+  }, origin, parsed, now);
+  const originalLease = handoffRunner.lease.bind(handoffRunner);
+  handoffRunner.lease = async (...args) => {
+    const claimed = await originalLease(...args);
+    await delay(300);
+    clockOffset += 60_000;
+    leaseReturnedAt = performance.now();
+    return claimed;
+  };
+  try {
+    await handoffRunner.run(secondId);
+    assert.ok(firstAfterLease - leaseReturnedAt >= 850,
+      `slow lease/forward clock compressed handoff: ${firstAfterLease - leaseReturnedAt}ms`);
+    assert.equal((await secondState()).lastError, 'transient');
+  } finally { clockOffset -= 60_000; }
   console.info('Gmail sync PostgreSQL fixture passed.');
 } finally { await handle.close(); }

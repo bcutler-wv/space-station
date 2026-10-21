@@ -114,10 +114,16 @@ export class GmailSyncRunner {
     if (!before) return null;
     const cursor = cursorOf(before, account, this.now());
     if (cursor.retryAt > this.now().getTime() || (before.status === 'blocked' && cursor.blockedGeneration === account.credentialGeneration)) return null;
+    // A prior process may have been killed or aborted with an SDK read still
+    // outstanding. Reserve a conservative handoff floor before this lease can
+    // issue its first read; the old generation cannot extend this cursor.
+    const leasedAt = this.now().getTime();
+    const leasedCursor = { ...cursor, nextCallAt: Math.max(cursor.nextCallAt, leasedAt + 1_000) };
     const state = await this.db.transaction(async (tx) => {
       const [updated] = await tx.update(syncStates).set({ generation: sql`${syncStates.generation} + 1`,
-        leaseUntil: new Date(this.now().getTime() + LEASE_MS), status: 'running', updatedAt: this.now() })
-        .where(and(eq(syncStates.id, before.id), or(isNull(syncStates.leaseUntil), lte(syncStates.leaseUntil, this.now())))).returning();
+        cursor: leasedCursor, leaseUntil: new Date(leasedAt + LEASE_MS), status: 'running', updatedAt: this.now() })
+        .where(and(eq(syncStates.id, before.id), before.cursor === null ? isNull(syncStates.cursor) : eq(syncStates.cursor, before.cursor),
+          or(isNull(syncStates.leaseUntil), lte(syncStates.leaseUntil, this.now())))).returning();
       if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
       return updated;
     });
@@ -296,18 +302,38 @@ export class GmailSyncRunner {
     let { state, cursor } = lease;
     try {
       const historyCache = new Map<string, GmailHistoryPage>();
+      // The lease transaction itself can be slow; its durable wall deadline
+      // may elapse before control returns. Keep a monotonic handoff floor too.
+      let localNextCallAt = performance.now() + 1_000;
       const paced = async <T>(request: () => Promise<T>): Promise<T> => {
         signal.throwIfAborted();
-        while (cursor.nextCallAt > this.now().getTime()) {
-          await delay(Math.min(cursor.nextCallAt - this.now().getTime(), 60_000), undefined, { signal });
+        while (true) {
+          const waitMs = Math.max(cursor.nextCallAt - this.now().getTime(), localNextCallAt - performance.now());
+          if (waitMs <= 0) break;
+          await delay(Math.min(waitMs, 60_000), undefined, { signal });
         }
         signal.throwIfAborted();
         // The current per-user quota charges raw reads heavily. One request each second
         // stays below that ceiling even if every call is a raw message retrieval.
-        cursor = { ...cursor, nextCallAt: this.now().getTime() + 1_000 };
+        // This pre-call reservation is durable if the process dies before the
+        // response. It is not the serial completion floor below.
+        cursor = { ...cursor, nextCallAt: Math.max(cursor.nextCallAt, this.now().getTime() + 1_000) };
         state = await this.checkpoint(state, account, cursor, signal);
         signal.throwIfAborted();
-        const result = await request();
+        let result: T;
+        try { result = await request(); }
+        catch (error) {
+          localNextCallAt = performance.now() + 1_000;
+          cursor = { ...cursor, nextCallAt: Math.max(cursor.nextCallAt, this.now().getTime() + 1_000) };
+          // Keep the original provider error. A stale or failed checkpoint
+          // cannot authorize another call; run() ends through its error path.
+          try { if (!signal.aborted) state = await this.checkpoint(state, account, cursor, signal); }
+          catch { /* The outer fenced error path owns state and retry. */ }
+          throw error;
+        }
+        localNextCallAt = performance.now() + 1_000;
+        cursor = { ...cursor, nextCallAt: Math.max(cursor.nextCallAt, this.now().getTime() + 1_000) };
+        state = await this.checkpoint(state, account, cursor, signal);
         signal.throwIfAborted();
         return result;
       };
@@ -445,7 +471,13 @@ export class GmailSyncRunner {
       if (signal.aborted) {
         // A timed-out or stopped job leaves the last committed offset intact.
         await this.db.transaction(async (tx) => {
-          const [updated] = await tx.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: 'sync_interrupted', updatedAt: this.now() })
+          const [current] = await tx.select().from(syncStates).where(and(eq(syncStates.id, state.id),
+            eq(syncStates.generation, state.generation), eq(syncStates.status, 'running'))).for('update');
+          if (!current) return;
+          const saved = cursorOf(current, account, this.now());
+          const [updated] = await tx.update(syncStates).set({ status: 'idle', leaseUntil: null,
+            cursor: { ...saved, nextCallAt: Math.max(saved.nextCallAt, this.now().getTime() + 1_000) },
+            lastError: 'sync_interrupted', updatedAt: this.now() })
             .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation), eq(syncStates.status, 'running'))).returning({ id: syncStates.id });
           if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
         });
@@ -459,6 +491,7 @@ export class GmailSyncRunner {
         await this.db.transaction(async (tx) => {
         const [updated] = await tx.update(syncStates).set({ status: permanent ? 'blocked' : 'idle', leaseUntil: null, lastError: safeCode(error),
           cursor: currentCursor.success ? { ...currentCursor.data, failures,
+            nextCallAt: Math.max(currentCursor.data.nextCallAt, this.now().getTime() + 1_000),
             retryAt: permanent ? 0 : retryTime(this.now().getTime(), failures, error),
             blockedGeneration: permanent ? account.credentialGeneration : null } : current.cursor,
           updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation))).returning({ id: syncStates.id });

@@ -82,9 +82,10 @@ expansion. It emits no query for an empty or incomplete input.
 ## Consequences
 
 This slice does not install an OpenSearch runtime for Station, publish an
-index, expose an endpoint, serve a result, or retire Meilisearch. The new
-compiled DSL requires actual pinned-engine verification in the separate
-fake-data manual Ubuntu gate. Later index and read consumers need source
+index, expose an endpoint, serve a result, or retire Meilisearch. The compiled DSL passed the separate fake-data manual Ubuntu gate
+[`39669514343`](https://github.com/bcutler-wv/space-station/actions/runs/39669514343)
+at `c0eeba8` (0.39.0), including scoped queries, literal fields and Boolean
+complements. Later index and read consumers need source
 eligibility, generation/deletion fences, private runtime/credentials,
 mapping/version checks, complete-result handling, cutoff/timeout bounds and
 use-time policy revalidation. The proof's 10,000 fake-document latency is not

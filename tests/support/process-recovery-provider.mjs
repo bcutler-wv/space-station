@@ -4,6 +4,7 @@ import process from 'node:process';
 import { URL } from 'node:url';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import { URLSearchParams } from 'node:url';
 const require = createRequire(new URL('../../apps/server/package.json', import.meta.url));
@@ -63,7 +64,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { ok: true });
     }
     const path = url.pathname;
-    observations.calls.push({ path, query: url.search, at: Date.now(), method: request.method });
+    observations.calls.push({ path, query: url.search, at: Date.now(), elapsedMs: Math.round(performance.now()), method: request.method });
     if (path === '/gmail/v1/users/me/profile') return send(response, 200, { emailAddress: 'owner@example.com', historyId: '10' });
     if (path === '/gmail/v1/users/me/labels' && hold?.path === path) {
       observations.holds.push({ path, at: Date.now() });

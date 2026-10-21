@@ -207,7 +207,19 @@ try {
   assert.equal((await db.select().from(itemLabels).where(eq(itemLabels.itemId, (await rows()).find((row) => row.externalId === 'a').id))).length, 1);
   assert.ok((await state()).sequence > historyBefore.sequence);
   const providerCalls = (await observation()).calls.filter((entry) => entry.path.startsWith('/gmail/'));
-  for (let i = 1; i < providerCalls.length; i++) assert.ok(providerCalls[i].at - providerCalls[i - 1].at >= 850, 'provider pacing');
+  for (let i = 1; i < providerCalls.length; i++) {
+    const previous = providerCalls[i - 1], next = providerCalls[i];
+    const wallDelta = next.at - previous.at;
+    if (wallDelta < 850) {
+      const pacingState = await state();
+      const safe = (call) => ({ method: call.method, path: call.path.slice(0, 120),
+        at: call.at, elapsedMs: call.elapsedMs });
+      assert.fail(`provider pacing ${JSON.stringify({ previous: safe(previous), next: safe(next),
+        wallDelta, elapsedDelta: next.elapsedMs - previous.elapsedMs,
+        generation: pacingState.generation, sequence: pacingState.sequence,
+        nextCallAt: pacingState.cursor?.nextCallAt })}`);
+    }
+  }
   const empty = (await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'EMPTY');
   assert.ok(empty);
   assert.equal((await db.select().from(itemLabels).where(eq(itemLabels.labelId, empty.id))).length, 0);
