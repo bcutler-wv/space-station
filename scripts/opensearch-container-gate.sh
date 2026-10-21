@@ -19,7 +19,8 @@ docker inspect "$container_id" | node --input-type=module -e '
   assert.equal(container.HostConfig.PidsLimit, 512);
   assert.equal(container.HostConfig.ReadonlyRootfs, true);
   assert.equal(container.HostConfig.Tmpfs["/tmp"], "rw,exec,nosuid,size=128m");
-  assert.equal(container.HostConfig.Tmpfs["/usr/share/opensearch/logs"], "rw,noexec,nosuid,size=64m");
+  assert.equal(container.HostConfig.Tmpfs["/usr/share/opensearch/logs"],
+    "rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700");
   assert.deepEqual(container.HostConfig.CapDrop, ["ALL"]);
   assert.ok(container.HostConfig.SecurityOpt.includes("no-new-privileges:true"));
   assert.equal(Object.keys(container.NetworkSettings.Networks).length, 1);
@@ -37,4 +38,11 @@ docker inspect "$container_id" | node --input-type=module -e '
 network_id="$(cat .cache/results/opensearch-network-id)"
 test "$(docker network inspect --format '{{.Internal}}' "$network_id")" = true
 test "$(docker compose --profile search exec -T opensearch id -u)" = 1000
-docker compose --profile search exec -T opensearch sh -ec 'test -r /usr/share/opensearch/config/station-certs/node.key; test -w /usr/share/opensearch/data'
+docker compose --profile search exec -T opensearch sh -ec '
+  test -r /usr/share/opensearch/config/station-certs/node.key
+  test -w /usr/share/opensearch/data
+  test "$(stat -c %u:%g:%a /usr/share/opensearch/logs)" = 1000:1000:700
+  test -w /usr/share/opensearch/logs
+  : > /usr/share/opensearch/logs/.station-permission-probe
+  rm /usr/share/opensearch/logs/.station-permission-probe
+'
