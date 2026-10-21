@@ -8,7 +8,8 @@ import { PINNED_STATIC_ACTION_GROUPS } from './opensearch-static-action-groups.j
 
 const profile = () => ({ [OPENSEARCH_PROFILE]: { mappings: OPENSEARCH_MAPPING, settings: { index: {
   number_of_shards: '1', number_of_replicas: '0', max_result_window: '200', refresh_interval: '1s',
-  mapping: { total_fields: { limit: '64' } }, uuid: 'abc_123', creation_date: '1234567890',
+  mapping: { total_fields: { limit: '64' } }, replication: { type: 'DOCUMENT' },
+  uuid: 'abc_123', creation_date: '1234567890',
   provided_name: OPENSEARCH_PROFILE, version: { created: '139600' },
 } } } });
 // ConfigV7 serializes these pinned defaults after SecurityAdmin reads Station's
@@ -106,15 +107,29 @@ test('only the pinned static action groups are accepted', () => {
 
 test('full profile rejects semantic settings beyond engine metadata', () => {
   expect(() => verifyProfile(profile())).not.toThrow();
+  const rejectedProfile = (body: unknown, check: 'mapping' | 'settings') => {
+    let error: unknown;
+    try { verifyProfile(body); } catch (cause) { error = cause; }
+    expect(error).toMatchObject({ kind: 'profile', check });
+  };
+  const missingReplication = profile();
+  delete (missingReplication[OPENSEARCH_PROFILE].settings.index as Record<string, unknown>).replication;
+  rejectedProfile(missingReplication, 'settings');
+  const changedReplication = profile();
+  changedReplication[OPENSEARCH_PROFILE].settings.index.replication.type = 'SEGMENT';
+  rejectedProfile(changedReplication, 'settings');
   const similarity = profile();
   (similarity[OPENSEARCH_PROFILE].settings.index as Record<string, unknown>).similarity = { default: { type: 'BM25', k1: 2 } };
-  rejected(() => verifyProfile(similarity));
+  rejectedProfile(similarity, 'settings');
   const pipeline = profile();
   (pipeline[OPENSEARCH_PROFILE].settings.index as Record<string, unknown>).default_pipeline = 'altered';
-  rejected(() => verifyProfile(pipeline));
+  rejectedProfile(pipeline, 'settings');
   const changed = profile();
   changed[OPENSEARCH_PROFILE].settings.index.refresh_interval = '2s';
-  rejected(() => verifyProfile(changed));
+  rejectedProfile(changed, 'settings');
+  const mapping = profile();
+  rejectedProfile({ [OPENSEARCH_PROFILE]: { ...mapping[OPENSEARCH_PROFILE],
+    mappings: { ...OPENSEARCH_MAPPING, dynamic: 'false' } } }, 'mapping');
 });
 
 test('search response rejects impossible totals, malformed hits and shards', () => {

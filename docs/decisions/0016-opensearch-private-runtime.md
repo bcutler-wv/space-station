@@ -22,6 +22,10 @@ roles, all role mappings, the pinned built-in action groups with no custom
 groups, engine version and complete fixed index
 mapping plus relevant semantic settings before it creates or accepts
 `station-mail-v1`. Unknown or altered state fails closed; repair is explicit.
+The index profile explicitly pins `index.replication.type=DOCUMENT`, which
+OpenSearch 3.9.0 otherwise stamps from its cluster default during creation;
+retained verification requires that exact value alongside the other fixed
+settings and mapping.
 
 `@station/search` wraps the official JavaScript SDK with fixed-index,
 role-specific methods. The wrapper enforces an absolute request deadline

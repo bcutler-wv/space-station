@@ -10,7 +10,8 @@ export const SEARCH_ENGINE_VERSION = '3.9.0';
 const REQUEST_MS = 5_000;
 const RESPONSE_BYTES = 2 * 1024 * 1024;
 const INDEX_SETTINGS = Object.freeze({ number_of_shards: 1, number_of_replicas: 0,
-  max_result_window: 200, refresh_interval: '1s', mapping: { total_fields: { limit: 64 } } });
+  max_result_window: 200, refresh_interval: '1s', mapping: { total_fields: { limit: 64 } },
+  replication: { type: 'DOCUMENT' } });
 type Role = 'admin' | 'query' | 'indexer';
 type SDKOptions = NonNullable<Parameters<Client['info']>[1]>;
 // The generated method types describe parsed bodies even with asStream:true.
@@ -20,7 +21,7 @@ type Abortable = Promise<unknown> & { abort(): void };
 export class SearchEngineError extends Error {
   constructor(readonly kind: 'configuration' | 'transport' | 'timeout' | 'response' | 'status' | 'profile' | 'partial',
     readonly statusCode?: number,
-    readonly check?: 'config' | 'query-role' | 'indexer-role' | 'role-mappings' | 'action-groups') {
+    readonly check?: 'config' | 'query-role' | 'indexer-role' | 'role-mappings' | 'action-groups' | 'mapping' | 'settings') {
     super(`Private search engine ${kind}.`);
   }
 }
@@ -128,22 +129,27 @@ function boundedJsonBytes(value: unknown, max: number): boolean {
 
 export function verifyProfile(body: unknown): void {
   const index = record(record(body)[SEARCH_INDEX]);
-  if (!sameJson(index.mappings, OPENSEARCH_MAPPING)) throw new SearchEngineError('profile');
-  const settings = record(record(index.settings).index);
+  if (!sameJson(index.mappings, OPENSEARCH_MAPPING)) throw new SearchEngineError('profile', undefined, 'mapping');
+  let settings: Record<string, unknown>;
+  try { settings = record(record(index.settings).index); }
+  catch { throw new SearchEngineError('profile', undefined, 'settings'); }
   const metadata = { ...settings };
   // These four values are created by the engine and cannot define text or
   // filter behavior. Every other index setting must match the fixed profile.
   if (typeof metadata.uuid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(metadata.uuid) ||
       typeof metadata.creation_date !== 'string' || !/^\d{1,20}$/.test(metadata.creation_date) ||
-      metadata.provided_name !== SEARCH_INDEX) throw new SearchEngineError('profile');
-  const version = record(metadata.version);
+      metadata.provided_name !== SEARCH_INDEX) throw new SearchEngineError('profile', undefined, 'settings');
+  let version: Record<string, unknown>;
+  try { version = record(metadata.version); }
+  catch { throw new SearchEngineError('profile', undefined, 'settings'); }
   if (!Object.keys(version).every(key => ['created', 'upgraded'].includes(key)) ||
       typeof version.created !== 'string' || !/^\d{1,20}$/.test(version.created) ||
       (version.upgraded !== undefined && (typeof version.upgraded !== 'string' || !/^\d{1,20}$/.test(version.upgraded))))
-    throw new SearchEngineError('profile');
+    throw new SearchEngineError('profile', undefined, 'settings');
   delete metadata.uuid; delete metadata.creation_date; delete metadata.provided_name; delete metadata.version;
   if (!sameJson(metadata, { number_of_shards: '1', number_of_replicas: '0', max_result_window: '200',
-    refresh_interval: '1s', mapping: { total_fields: { limit: '64' } } })) throw new SearchEngineError('profile');
+    refresh_interval: '1s', mapping: { total_fields: { limit: '64' } },
+    replication: { type: 'DOCUMENT' } })) throw new SearchEngineError('profile', undefined, 'settings');
 }
 
 function strings(value: unknown): string[] {
