@@ -14,7 +14,7 @@
     "test:e2e": "playwright test",
     "check:colors": "node scripts/check-colors.mjs",
     "check:licenses": "corepack pnpm licenses list --json | node scripts/check-licenses.mjs",
-    "check": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm check:colors && corepack pnpm check:licenses"
+    "check": "corepack pnpm --filter @station/search check:parser && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm check:colors && corepack pnpm check:licenses"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

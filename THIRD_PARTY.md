@@ -74,7 +74,7 @@ When code is copied from another project, keep its original header, add a row he
 
 | File in this repo | Source | Commit | License |
 |---|---|---|---|
-| (none yet) | | | |
+| `packages/search/src/generated-parser.js`, `generated-parser.d.ts`, and `vendor/peggy-LICENSE` | https://github.com/peggyjs/peggy | v5.1.0 tag | MIT; generated from Station's own grammar using pinned Peggy, with the upstream generated-code header and full license retained |
 
 ## Adopted in M0.3
 
@@ -147,3 +147,7 @@ The already pinned [sharp 0.35.5](https://github.com/lovell/sharp) processes per
 ## Adopted for M1 Gmail send
 
 Checked [Nodemailer MailComposer's documented stream and `keepBcc` API](https://nodemailer.com/extras/mailcomposer), [Gmail's raw send endpoint](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), and the installed Nodemailer 10.1.7 ESM exports/types on 2026-10-20. The upstream repository is [nodemailer/nodemailer](https://github.com/nodemailer/nodemailer); the exact package is pinned in `pnpm-lock.yaml`. Its package manifest reports MIT-0 and bundled `LICENSE` SHA-256 is `4f814dcacd2da618d62829ea1f6238701cf421f18a6b36c91c5d8212245e2c78`. The exact MIT-0 license-gate exception is recorded. The installed package is newer than the [jsonTransport path-access advisory's patched 8.0.9](https://github.com/nodemailer/nodemailer/security/advisories/GHSA-wqvq-jvpq-h66f); this implementation uses direct MailComposer with only owned buffers, not jsonTransport. `pnpm audit --prod --audit-level high` reported no vulnerabilities at verification. No upstream source was copied.
+
+## Adopted for the M2 operator parser
+
+On 2026-10-21, verified [Peggy 5.1.0's tagged package manifest](https://github.com/peggyjs/peggy/blob/v5.1.0/package.json), [tagged MIT license](https://github.com/peggyjs/peggy/blob/v5.1.0/LICENSE), [official CLI and type-generation documentation](https://peggyjs.org/documentation.html), and the installed package. The manifest requires Node >=20 and supports `--format es`, `--dts` and named rule return types; the installed `LICENSE` SHA-256 is `f7225e298740519666c3e35f58d2e5be3cd940b6b2ce2f9b4d1b7a6194568d9a`. The exact npm tarball integrity is recorded in `pnpm-lock.yaml` (`sha512-IEo5aYRZ...`). Peggy is a build-only dependency of `@station/search`; no grammar is generated at runtime. The checked-in generated ESM parser and declaration are reproducible with `pnpm --filter @station/search generate:parser`, verified by `check:parser`, and accompanied by the full installed MIT notice in `packages/search/vendor/peggy-LICENSE`. The grammar is Station-authored; no upstream example grammar was copied.

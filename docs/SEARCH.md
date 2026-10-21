@@ -28,7 +28,11 @@ Gmail-compatible syntax, parsed into Meilisearch filters before the text query r
 | `before:` `after:` `older_than:` `newer_than:` | `after:2026/09/01`, `newer_than:7d` |
 | `-` negation, `OR`, parentheses | `from:dana -label:archive` |
 
-The parser lives in `packages/search` with thorough unit tests.
+The M2 operator parser lives in `packages/search` with a generated, build-time Peggy grammar and bounded unit fixtures. It currently emits an engine-independent Boolean AST only; the live subject filter remains the active search UI. Parser success does not authorize scope, indexing or serving, and no Meilisearch lowering is included yet.
+
+This is the listed Gmail-like subset, not every Gmail operator. Uppercase `OR` has lower precedence than whitespace AND; prefix `-` binds to one term/filter or parenthesized group. Parentheses group expressions. `AND` and Gmail brace OR syntax are not implemented; uppercase `AND` is an error. Unknown `name:value` operators, unsupported values and malformed dates are errors, never ignored. Text and known-field values accept quotes, escaped punctuation and Unicode. An unescaped colon in a bare term is treated as an operator attempt; a known field value may contain additional colons. `is:needs-reply` is parsed for a future field but does not infer or call a model now.
+
+Date input is exactly `YYYY/MM/DD`. Station's later lowerer must interpret `after:` as inclusive UTC midnight and `before:` as exclusive UTC midnight. Relative `d`, `m`, and `y` values are positive integers; later lowering must use an injected UTC clock and calendar-month/year subtraction clamped to the last valid day. The parser stores typed date/duration values without reading a clock. This differs from the [Gmail API's midnight PST interpretation](https://developers.google.com/workspace/gmail/api/guides/filtering). A search is limited to 4,096 UTF-8 bytes, eight levels of parenthesis nesting, eight unary prefixes, 128 lexemes and AST nodes, 64 leaves and 256 Unicode code points per decoded value. Escaped or quoted parentheses and braces are literal. Empty and typing-incomplete queries have explicit results.
 
 ## 3. Semantic search
 

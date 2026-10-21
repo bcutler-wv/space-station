@@ -1,0 +1,15 @@
+# Bounded search operator parser
+
+## Decision
+
+Station parses the listed Gmail-like operators into an engine-independent typed Boolean AST before introducing a search engine adapter. Peggy 5.1.0 generates ESM JavaScript and declarations at build time from Station's grammar; the checked-in output and upstream MIT notice are reproduced and checked on a clean dependency install. User input is only passed to the generated parser, never to Peggy's grammar compiler. No runtime dependency, provider call, query interpolation or policy decision is added by this slice.
+
+The grammar preserves mixed text/filter `OR`, prefix negation and grouping. Prefix `-` binds first, adjacent expressions are AND, and uppercase `OR` binds last. `AND` and braces are outside this subset and rejected or invalid rather than treated as Boolean syntax. Operators and their values are exact: `from`, `to`, `cc`, `subject`, `has:attachment`, `filename`, `label`, `orbit`, `account`, `in:sent|inbox|chat`, `is:unread|starred|needs-reply`, `before`, `after`, `older_than` and `newer_than`. Known field names are case-insensitive; enumerated values and uppercase `OR` are case-sensitive. Unknown `name:value` cannot become a broad free-text query. `is:needs-reply` is syntax only until a separately reviewed authoritative field exists.
+
+The parser accepts quoted phrases, backslash escapes and Unicode. A known field value may contain additional colons, including an address; a bare unescaped colon is an operator attempt. Empty, incomplete, invalid, unknown-operator, invalid-value and limit results are distinct. Limits are 4,096 UTF-8 input bytes, eight structural group levels, eight unary prefixes, 128 lexical starts and AST nodes, 64 leaves and 256 Unicode code points per decoded value. A preflight scanner checks nesting and prefixes iteratively, ignoring escaped and quoted punctuation, before Peggy recursion. Generated-parser and AST checks provide a second bound.
+
+Dates use exact `YYYY/MM/DD` with Gregorian validation. Future lowering must interpret `after` as inclusive UTC midnight and `before` as exclusive UTC midnight. Relative periods retain typed positive amount and `d|m|y` unit; future lowering must use an injected UTC clock, and month/year subtraction must clamp to the last valid day. Parsing itself never reads the clock. This deliberately differs from the [Gmail API's midnight PST behavior](https://developers.google.com/workspace/gmail/api/guides/filtering), despite similar operator syntax.
+
+## Consequences
+
+A later server adapter must resolve account/Orbit names under authoritative owner scope, lower the entire Boolean tree without flattening mixed text/filter OR, and recheck the current derived eligibility and scope before publication and serving. Meilisearch operator support, particularly experimental `CONTAINS`, must be proved against the pinned server before that work. This parser adds no search endpoint, index, purge, attachment extraction, UI or AI behavior. Ordinary subject search stays active.
