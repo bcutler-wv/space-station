@@ -38,8 +38,13 @@ import { AuthGate, csrfHeaders, logout } from "./auth-screen.js";
 import { SetupScreen } from './setup-screen.js';
 import { GoogleScreen, GoogleContinuationScreen } from './google-screen.js';
 import { MailBody } from './mail-body.js';
+import { MailScreen } from './mail-screen.js';
 
 const queryClient = new QueryClient();
+window.addEventListener('station:logout', () => {
+  void queryClient.cancelQueries({ queryKey: ['mail-reader'] });
+  queryClient.removeQueries({ queryKey: ['mail-reader'] });
+});
 function cachedMode(): AppearanceResponse["mode"] {
   try {
     const mode = localStorage.getItem("station-theme-mode");
@@ -590,7 +595,7 @@ function OrbitView({
   );
 }
 
-function App({ active }: { active: 'mission' | OrbitId }) {
+function App({ active, thread }: { active: 'mission' | OrbitId | 'mail'; thread?: { accountId: string; threadId: string } }) {
   const navigate = useNavigate();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [capcomOpen, setCapcomOpen] = useState(false);
@@ -669,6 +674,7 @@ function App({ active }: { active: 'mission' | OrbitId }) {
     }
   }, [capcomOpen]);
   useEffect(() => {
+    if (active === 'mail') return;
     const listener = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -678,7 +684,7 @@ function App({ active }: { active: 'mission' | OrbitId }) {
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, []);
+  }, [active]);
   useEffect(() => {
     if (!capcomOpen) return;
     const listener = (event: KeyboardEvent) => {
@@ -694,7 +700,7 @@ function App({ active }: { active: 'mission' | OrbitId }) {
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
   }, [capcomOpen]);
-  const selected = active === "mission" ? null : orbit(active);
+  const selected = active === "mission" || active === 'mail' ? null : orbit(active);
   const wallpaper =
     value.hasWallpaper && value.showWallpaper
       ? `/api/appearance/wallpaper?v=${wallVersion}`
@@ -729,7 +735,7 @@ function App({ active }: { active: 'mission' | OrbitId }) {
             className={`orbit-button orbit-${item.slot} ${active === item.id ? "active" : ""}`}
             aria-label={item.name}
             aria-current={active === item.id ? "page" : undefined}
-            title={item.name}
+            title={`${item.name} sample Orbit`}
             onClick={() => void navigate({ to: '/demo/orbits/$orbitId', params: { orbitId: item.id } })}
           >
             <span>{item.letter}</span>
@@ -738,10 +744,10 @@ function App({ active }: { active: 'mission' | OrbitId }) {
         ))}
         <span className="bar-divider tools" />
         <button
-          className="nav-button tools"
-          disabled
-          title="Mail is coming later"
-          aria-label="Mail unavailable"
+          className={`nav-button ${active === 'mail' ? 'active' : ''}`}
+          aria-label="Mail"
+          aria-current={active === 'mail' ? 'page' : undefined}
+          onClick={() => void navigate({ to: '/mail' })}
         >
           {icon("mail")}
         </button>
@@ -774,12 +780,12 @@ function App({ active }: { active: 'mission' | OrbitId }) {
       </nav>
       <header className="top-bar">
         <div className="location">
-          <h2>{selected?.name ?? "Mission Control"}</h2>
+          <h2>{active === 'mail' ? 'Mail' : selected?.name ?? "Mission Control"}</h2>
           <small>
-            {selected ? "Orbit · Sample data" : "All Orbits · Sample data"}
+            {active === 'mail' ? 'Connected mailboxes · Live data' : selected ? "Orbit · Sample data" : "All Orbits · Sample data"}
           </small>
         </div>
-        <button
+        {active !== 'mail' && <button
           ref={launchRef}
           className="search-launch"
           aria-label="Search or ask CAPCOM"
@@ -788,10 +794,10 @@ function App({ active }: { active: 'mission' | OrbitId }) {
           {icon("search")}
           <span>Search or ask CAPCOM</span>
           <kbd>Ctrl K</kbd>
-        </button>
+        </button>}
         <div className="top-tools">
           <time>{clock}</time>
-          <button
+          {active !== 'mail' && <button
             className={`nav-button ${blackout ? "active" : ""}`}
             aria-label="Blackout"
             aria-pressed={blackout}
@@ -799,10 +805,11 @@ function App({ active }: { active: 'mission' | OrbitId }) {
             onClick={() => setBlackout(!blackout)}
           >
             {icon("do_not_disturb_on")}
-          </button>
+          </button>}
         </div>
       </header>
       <main className="interior">
+        {active === 'mail' ? <MailScreen {...(thread ? { thread } : {})} /> : <>
         <div className="sample-setup-link"><a href="/setup">Set up your first Orbit</a><span>Sample Mission Control</span></div>
         {blackout && (
           <div className="blackout-note">
@@ -817,6 +824,7 @@ function App({ active }: { active: 'mission' | OrbitId }) {
         ) : (
           <OrbitView id={active} setNotice={setNotice} />
         )}
+        </>}
       </main>
       {notice && (
         <div className="toast" role="status">
@@ -1037,13 +1045,18 @@ const orbitRoute = createRoute({ getParentRoute: () => rootRoute, path: '/demo/o
   const { orbitId } = orbitRoute.useParams();
   return <App active={orbits.some((entry) => entry.id === orbitId) ? orbitId as OrbitId : 'mission'} />;
 } });
+const mailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail', component: () => <App active="mail" /> });
+const mailThreadRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail/thread/$accountId/$threadId', component: () => {
+  const { accountId, threadId } = mailThreadRoute.useParams();
+  return <App active="mail" thread={{ accountId, threadId }} />;
+} });
 const mailBodyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail/body/$accountId/$itemId', component: () => {
   const { accountId, itemId } = mailBodyRoute.useParams();
   const search = useLocation({ select: (location) => location.searchStr });
   const orbitId = new URLSearchParams(search).get('orbitId') ?? undefined;
   return <MailBody accountId={accountId} itemId={itemId} {...(orbitId ? { orbitId } : {})} />;
 } });
-const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute, mailBodyRoute]) });
+const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute, mailRoute, mailThreadRoute, mailBodyRoute]) });
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

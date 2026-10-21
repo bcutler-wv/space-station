@@ -137,3 +137,7 @@ The authenticated image backend is implemented and Astra-reviewed for version 0.
 The reusable safe message body is implemented for version 0.22.0 with render-time sanitization, sandbox isolation, explicit image controls, scoped cancellation and a dedicated Strict Mode regression gate. Source review corrected logout/mutation races and development effect replay. The per-message consent override is an intentional product clarification. Full Ubuntu integration acceptance is pending. See [the body component record](sessions/mail-body-component.md). Full mail navigation follows.
 
 The image backend/runtime and gate repair were accepted after full Ubuntu run `39516183186` passed at commit `4317f22` (0.21.1), including the actual pinned proxy container, PostgreSQL 16 HTTP fixtures and browser gates.
+
+The reusable safe body, consent override and preview-isolation repair were accepted after full Ubuntu run `39518772561` passed at `8a3008c` (0.22.1), including production and development browser gates and PostgreSQL 16/Compose integration. Mail navigation remains in source review.
+
+Live mail navigation is implemented and Astra-reviewed for version 0.23.0: scoped account/Orbit conversations, labels, subject search, lazy thread bodies/attachments, pagination, keyboard navigation and manual event refresh. Review corrected invalid URL scope fallback and mobile entry. Full Ubuntu acceptance is pending. See [the navigation record](sessions/mail-navigation.md). Durable local drafts and reply context are next.

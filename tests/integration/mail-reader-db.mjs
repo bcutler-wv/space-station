@@ -50,6 +50,7 @@ const output = new Console(process.stdout);
 let firstItem;
 try {
   await app.ready();
+  assert.equal((await get('/api/mail/context')).statusCode, 401);
   assert.equal((await get('/api/mail/conversations?accountId=' + id())).statusCode, 401);
   assert.equal((await get(`/api/mail/items/${id()}/images/consent?accountId=${id()}`)).statusCode, 401);
   const bootstrap = randomBytes(32).toString('base64url');
@@ -73,6 +74,12 @@ try {
     { id: accountA, provider: 'google', appId, orbitId: orbitA, email: 'a@example.com', encryptedRefreshToken: 'private-refresh-a', encryptedAccessToken: 'private-access-a', grantedScopes: [] },
     { id: accountB, provider: 'google', appId, orbitId: orbitB, email: 'b@example.com', encryptedRefreshToken: 'private-refresh-b', encryptedAccessToken: 'private-access-b', grantedScopes: [] },
   ]);
+  const mailContext = await get('/api/mail/context');
+  assert.equal(mailContext.statusCode, 200, mailContext.body);
+  assert.deepEqual(mailContext.json().orbits.map(({ id }) => id).sort(), [orbitA, orbitB].sort());
+  assert.deepEqual(mailContext.json().accounts.map(({ id }) => id).sort(), [accountA, accountB].sort());
+  assert.ok(!mailContext.body.includes('private-refresh') && !mailContext.body.includes('private-access') && !mailContext.body.includes('private-secret'));
+  assert.equal((await get('/api/mail/context', { origin: 'https://other.example.com' })).statusCode, 403);
   const state = id();
   await db.insert(syncStates).values({ id: state, accountId: accountA, resource: 'mail', collectionId: 'primary', cursor: {} });
   const threadA = id(), threadB = id(), deletedThread = id();
@@ -372,13 +379,13 @@ try {
   const combined = [list.body, page1.body, download.headers['content-disposition']].join(' ');
   for (const secretValue of ['private-secret', 'private-refresh-a', 'private-access-a', root, key, 'https://remote.example.com/image'])
     assert.ok(!combined.includes(secretValue), secretValue);
-  const whileItemsLocked = async (requestUrl) => {
+  const whileTableLocked = async (requestUrl, table = 'items') => {
     let unlock;
     let enteredResolve;
     let enteredReject;
     const entered = new Promise((resolve, reject) => { enteredResolve = resolve; enteredReject = reject; });
     const holder = other.db.transaction(async (tx) => {
-      await tx.execute(sql`lock table items in access exclusive mode`);
+      await tx.execute(table === 'orbits' ? sql`lock table orbits in access exclusive mode` : sql`lock table items in access exclusive mode`);
       enteredResolve();
       await new Promise((resolve) => { unlock = resolve; });
     });
@@ -393,16 +400,18 @@ try {
       assert.equal(response.statusCode, 500, response.body);
       assert.ok(Date.now() - start < 2_500);
       const activity = await db.execute(sql`select
-        count(*) filter (where wait_event_type = 'Lock' and query ilike '%items%')::integer waiting,
+        count(*) filter (where wait_event_type = 'Lock' and query ilike ${`%${table}%`})::integer waiting,
         count(*) filter (where state = 'idle in transaction')::integer open_transactions
         from pg_stat_activity where datname = current_database()`);
       assert.equal(activity.rows[0].waiting, 0);
       assert.equal(activity.rows[0].open_transactions, 1, 'Only the deliberate lock holder keeps a transaction open');
     } finally { unlock(); await holder; }
   };
-  await whileItemsLocked(`/api/mail/threads/${threadA}/messages?accountId=${accountA}`);
+  await whileTableLocked('/api/mail/context', 'orbits');
+  assert.equal((await get('/api/mail/context')).statusCode, 200);
+  await whileTableLocked(`/api/mail/threads/${threadA}/messages?accountId=${accountA}`);
   assert.equal((await get(`/api/mail/threads/${threadA}/messages?accountId=${accountA}`)).statusCode, 200);
-  await whileItemsLocked(`/api/mail/labels?orbitId=${orbitA}`);
+  await whileTableLocked(`/api/mail/labels?orbitId=${orbitA}`);
   assert.equal((await get(`/api/mail/labels?orbitId=${orbitA}`)).statusCode, 200);
   await db.update(items).set({ deletedAt: new Date(), parseStatus: 'deleted' }).where(eq(items.id, firstItem));
   assert.equal((await get(`/api/mail/items/${firstItem}/body?accountId=${accountA}`)).statusCode, 404);
@@ -413,6 +422,13 @@ try {
   assert.equal((await get(url())).json().conversations.length, 0);
   assert.equal((await get(`/api/mail/threads/${threadA}/messages?accountId=${accountA}`)).statusCode, 404);
   assert.equal((await get(url(), { origin: 'https://other.example.com' })).statusCode, 403);
+  await db.insert(accounts).values(Array.from({ length: 99 }, (_, index) => ({ id: id(), provider: 'google', appId, orbitId: orbitA,
+    email: `cap-${index}@example.com`, encryptedRefreshToken: 'fixture', encryptedAccessToken: 'fixture', grantedScopes: [] })));
+  assert.equal((await get('/api/mail/context')).statusCode, 503, 'Account context is capped at 100');
+  await db.delete(accounts).where(sql`${accounts.email} like 'cap-%@example.com'`);
+  await db.insert(orbits).values(Array.from({ length: 99 }, (_, index) => ({ id: id(), name: `Cap ${index}`, slug: `cap-${index}`,
+    colorSlot: 1, context: '', privacyDefaults: { index: 'deny', ai: 'deny' } })));
+  assert.equal((await get('/api/mail/context')).statusCode, 503, 'Orbit context is capped at 100');
   const [liveSession] = await db.select().from(sessions).where(isNull(sessions.revokedAt)).limit(1);
   await db.update(sessions).set({ data: { ...liveSession.data, recoveryMode: 'totp' } }).where(eq(sessions.tokenHash, liveSession.tokenHash));
   assert.equal((await get(url())).statusCode, 401);

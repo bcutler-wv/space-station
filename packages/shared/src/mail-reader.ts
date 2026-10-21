@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { MAIL_LIMITS } from './mail-parser.js';
 
 export const readerIdSchema = z.string().uuid();
+export const mailNavigationSearchSchema = z.object({
+  accountId: readerIdSchema.optional(), orbitId: readerIdSchema.optional(),
+  labelId: readerIdSchema.optional(), subject: z.string().trim().min(1).max(128).optional(),
+}).strict().refine((value) => !(value.accountId && value.orbitId));
+export const mailContextSchema = z.object({
+  orbits: z.array(z.object({ id: readerIdSchema, name: z.string().max(200), colorSlot: z.number().int().min(1).max(4) }).strict()).max(100),
+  accounts: z.array(z.object({ id: readerIdSchema, orbitId: readerIdSchema, email: z.email().max(254), provider: z.literal('google'), needsReconnect: z.boolean() }).strict()).max(100),
+}).strict();
 export const readerImageRefSchema = z.string().regex(/^[a-f0-9]{32}$/);
 export const conversationQuerySchema = z.object({
   accountId: readerIdSchema.optional(), orbitId: readerIdSchema.optional(),

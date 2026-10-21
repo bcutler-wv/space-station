@@ -1,0 +1,11 @@
+# Mail navigation
+
+Version 0.23.0 enables live Mail in the framed shell on desktop and mobile, with account/Orbit selection, labels, literal subject search, conversation and thread pagination, lazy safe bodies and scoped attachment downloads. Mission Control and sample Orbits remain sample views. The bounded owner-only context endpoint supplies configured account/Orbit choices without credentials or provider IDs.
+
+URLs retain selection and thread identity through history and reload. Invalid, repeated, conflicting or unexpected selectors show an error without rewriting scope, reading mail or displaying cached content. A genuinely absent scope may resolve to the configured Orbit or a direct thread's account. Thread opening shows all live account/Orbit messages, irrespective of the list label filter. j/k, Enter and Escape preserve editable controls and modified shortcuts.
+
+The single authenticated event stream shows a manual refresh prompt after mail changes; it does not automatically refetch ordinary reader routes and extend idle expiry. Reader JSON has a 512 KiB cap, errors 8 KiB, and a ten-second consumption deadline. Logout clears mail query data and cancels work even while the Mail route is unmounted; route re-entry before reload remains signed out. Context SQL uses the accepted reader transaction deadlines and caps accounts and Orbits at 100 each.
+
+Astra review corrected invalid URL fallback that dropped Orbit scope, a mobile-hidden Mail entry, and unsupported selection attributes on buttons. Local checks passed 67 unit tests, lint, typecheck, build, colors and licenses. Ten production navigation browser tests and two Vite Strict Mode tests passed. The actual fresh PostgreSQL 15 HTTP fixture passed context authentication, origin, caps, lock deadline and recovery, together with prior reader/image cases; its database was stopped. Astra independently reran the affected invalid/cached URL and mobile entry tests and inspected desktop/mobile captures. Development-only tests are excluded from production projects and run in their dedicated CI configuration.
+
+The Ubuntu PostgreSQL 16/Compose and full browser acceptance gate remains pending. Compose, send, archive, read-state changes and routing management are separate tasks. No provider mutation or production deployment occurred in this slice.

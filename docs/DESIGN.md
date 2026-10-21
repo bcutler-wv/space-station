@@ -37,6 +37,8 @@ The M1 mail reader backend exposes bounded conversation and message metadata pag
 
 The reusable M1 body reader has its own authenticated deep link ahead of full mail navigation. Its scrollable iframe uses the selected theme's resolved color roles and a local Rubik font, with loading, plain-text, unsupported and unavailable states outside the frame. The surrounding controls own remote image consent and bounded expansion.
 
+The first real Mail view is a separate live workspace inside the frame. The configured Orbit and account selector, label filter, and literal subject filter determine a bounded conversation list. A thread opens all visible messages in that account or Orbit, with bodies opened one at a time. Pagination is explicit. Live mail events show a refresh prompt so passive updates do not renew the idle session. Compose, send, archive, mark read, and routing management remain later slices; no inactive controls suggest those actions work.
+
 ## Color system
 
 ### Tokens

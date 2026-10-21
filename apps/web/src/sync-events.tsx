@@ -42,6 +42,7 @@ export function SyncEvents({ onAuthLost }: { onAuthLost: () => void }) {
     let probe: AbortController | undefined;
     let stopped = false;
     let failures = 0;
+    let openedOnce = false;
     let generation = 0;
     let snapshot = 0;
     let activeRead: number | null = null;
@@ -94,6 +95,7 @@ export function SyncEvents({ onAuthLost }: { onAuthLost: () => void }) {
     };
     const connect = () => {
       if (stopped || document.hidden || source) return;
+      const isReconnect = openedOnce;
       const stream = new EventSource('/api/sync/events', { withCredentials: true });
       source = stream;
       generation++;
@@ -104,6 +106,7 @@ export function SyncEvents({ onAuthLost }: { onAuthLost: () => void }) {
         refetchTimer = undefined;
         void queryClient.invalidateQueries({ queryKey: syncProgressKey, refetchType: 'none' });
         readFresh(stream, true);
+        if (isReconnect) window.dispatchEvent(new CustomEvent('station:mail-update', { detail: {} }));
       });
       for (const name of [SYNC_EVENT_NAMES.progress, SYNC_EVENT_NAMES.mail] as const) {
         stream.addEventListener(name, (event: MessageEvent<string>) => {
@@ -111,10 +114,14 @@ export function SyncEvents({ onAuthLost }: { onAuthLost: () => void }) {
           let accountId: unknown;
           try { accountId = JSON.parse(event.data); } catch { return; }
           const parsed = syncChangeEventSchema.safeParse({ event: name, id: event.lastEventId, accountId });
-          if (parsed.success) refresh();
+          if (parsed.success) {
+            refresh();
+            if (name === SYNC_EVENT_NAMES.mail) window.dispatchEvent(new CustomEvent('station:mail-update', { detail: { accountId: parsed.data.accountId } }));
+          }
         });
       }
       stream.onopen = () => {
+        openedOnce = true;
         stableTimer = setTimeout(() => { if (source === stream) failures = 0; }, 10_000);
         readFresh(stream, true);
       };

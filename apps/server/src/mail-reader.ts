@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { accounts, attachments, identities, itemLabels, itemRecipients, items, labels, orbits, people, PrivateBlobStore, threads } from '@station/db';
-import { MAIL_HTML_POLICY_VERSION, MAIL_LIMITS, conversationPageSchema, conversationQuerySchema, itemQuerySchema,
+import { MAIL_HTML_POLICY_VERSION, MAIL_LIMITS, mailContextSchema, conversationPageSchema, conversationQuerySchema, itemQuerySchema,
   labelListSchema, labelQuerySchema, messagePageSchema, readerBodySchema, readerIdSchema, threadQuerySchema } from '@station/shared';
 import type { AuthConfig } from './auth.js';
 
@@ -97,6 +97,21 @@ export function registerMailReader(app: FastifyInstance, auth: AuthConfig, blobS
       .where(and(eq(items.id, itemId), eq(items.accountId, accountId), isNull(items.deletedAt), visible(orbitId))).limit(1);
     return item;
   };
+  app.get('/api/mail/context', async (request, reply) => {
+    if (!sameOrigin(request.headers)) return reply.code(403).send(invalid);
+    const result = await readerDb(async (tx) => {
+      const orbitRows = await tx.select({ id: orbits.id, name: orbits.name, colorSlot: orbits.colorSlot })
+        .from(orbits).orderBy(asc(orbits.createdAt), asc(orbits.id)).limit(101);
+      const accountRows = await tx.select({ id: accounts.id, orbitId: accounts.orbitId, email: accounts.email,
+        provider: accounts.provider, revokedAt: accounts.revokedAt }).from(accounts)
+        .orderBy(asc(accounts.email), asc(accounts.id)).limit(101);
+      return { orbitRows, accountRows };
+    });
+    if (result.orbitRows.length > 100 || result.accountRows.length > 100)
+      return reply.code(503).send({ error: 'Too many mail contexts to display.' });
+    return respond(reply, mailContextSchema, { orbits: result.orbitRows,
+      accounts: result.accountRows.map(({ revokedAt, ...account }) => ({ ...account, needsReconnect: revokedAt !== null })) });
+  });
   app.get('/api/mail/labels', async (request, reply) => {
     if (!sameOrigin(request.headers)) return reply.code(403).send(invalid);
     const parsed = labelQuerySchema.safeParse(request.query);

@@ -3,7 +3,7 @@ export { id, historyId, token, profile, labelPage, messagePage, metadata, minima
 export type { GmailProfile, GmailLabelPage, GmailMessagePage, GmailHistoryPage, GmailMessageMetadata } from './gmail-read.js';
 export { MAIL_LIMITS, rawMailSchema, parsedMailSchema, parseErrorCodeSchema, parseResultSchema, type ParseResult } from './mail-parser.js';
 export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
-export { readerIdSchema, conversationQuerySchema, threadQuerySchema, itemQuerySchema, labelQuerySchema,
+export { readerIdSchema, mailNavigationSearchSchema, mailContextSchema, conversationQuerySchema, threadQuerySchema, itemQuerySchema, labelQuerySchema,
   readerAttachmentSchema, readerMessageSchema, readerConversationSchema, conversationPageSchema,
   messagePageSchema, labelListSchema, readerBodySchema, readerImageRefSchema, imageConsentSchema,
   imageFetchSchema, senderImagePreferenceSchema, imageConsentResponseSchema, imageChoiceResponseSchema,
