@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 const origin = 'https://localhost:8083';
 const accountId = '11111111-1111-4111-8111-111111111111';
@@ -8,8 +9,29 @@ const setup = { version: 1, configuredOrigin: origin, confirmedOrigin: origin, c
   globalDefaults: { index: 'exclude', ai: 'exclude' }, orbitDefaults: { index: 'exclude', ai: 'exclude' }, exclusions: [] };
 const status = { redirectUri: `${origin}/api/google/callback`, pendingConfirmation: false, pendingReconnectAccountId: null,
   accounts: [{ id: accountId, email: 'owner@example.com', orbitId, grantedScopes: ['https://www.googleapis.com/auth/gmail.modify'], backfill: null, status: 'connected' }] };
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
+  if (!process.env.STATION_E2E_BASE_URL && baseURL) {
+    await page.context().addCookies([{ name: 'station_preview_sse_scope', value: randomUUID(), url: baseURL }]);
+  }
   await page.route('**/api/sync/progress', route => route.fulfill({ json: { accounts: [{ accountId, orbitId, phase: 'waiting', repairCode: null, retryAt: null, processedPages: 0, supportedItems: 0, unsupportedItems: 0, lastSuccessAt: null }] } }));
+});
+
+test('preview SSE counts stay isolated between browser contexts', async ({ browser, page, baseURL }) => {
+  test.skip(Boolean(process.env.STATION_E2E_BASE_URL), 'Preview fixture only.');
+  const other = await browser.newContext();
+  try {
+    await other.addCookies([{ name: 'station_preview_sse_scope', value: randomUUID(), url: baseURL! }]);
+    const otherPage = await other.newPage();
+    await page.goto(`${baseURL}/`);
+    await otherPage.goto(`${baseURL}/`);
+    const ownCount = async () => (await (await page.request.post(`${baseURL}/fixture/sync-event`)).json()).streams as number;
+    const otherCount = async () => (await (await other.request.post(`${baseURL}/fixture/sync-event`)).json()).streams as number;
+    await expect.poll(ownCount).toBe(1);
+    await expect.poll(otherCount).toBe(1);
+    await otherPage.close();
+    await expect.poll(otherCount).toBe(0);
+    expect(await ownCount()).toBe(1);
+  } finally { await other.close(); }
 });
 
 test('flapping SSE responses back off without repeated auth checks', async ({ page, baseURL }) => {

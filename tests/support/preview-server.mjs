@@ -28,17 +28,27 @@ app.get("/api/auth/status", async () => ({
 registerAppearance(app, store);
 // A real, browser-native stream for UI fixtures. This process has fake auth and
 // no database; production never imports it.
-const streams = new Set();
-let syncId = 0;
-app.get('/api/sync/events', async (_request, reply) => {
+const streamsByScope = new Map();
+const scopeFrom = (request) => /(?:^|;\s*)station_preview_sse_scope=([0-9a-f-]{36})(?:;|$)/i.exec(request.headers.cookie ?? '')?.[1] ?? 'default';
+const syncIdsByScope = new Map();
+app.get('/api/sync/events', async (request, reply) => {
+  const scope = scopeFrom(request);
   reply.hijack();
   reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
   reply.raw.write('event: sync-reset\nid: 0\ndata: ""\n\n');
+  let streams = streamsByScope.get(scope);
+  if (!streams) { streams = new Set(); streamsByScope.set(scope, streams); }
   streams.add(reply.raw);
-  reply.raw.once('close', () => streams.delete(reply.raw));
+  reply.raw.once('close', () => {
+    streams.delete(reply.raw);
+    if (streams.size === 0) streamsByScope.delete(scope);
+  });
 });
-app.post('/fixture/sync-event', async () => {
-  syncId++;
+app.post('/fixture/sync-event', async (request) => {
+  const scope = scopeFrom(request);
+  const streams = streamsByScope.get(scope) ?? new Set();
+  const syncId = (syncIdsByScope.get(scope) ?? 0) + 1;
+  syncIdsByScope.set(scope, syncId);
   for (const stream of streams) stream.write(`event: sync-progress\nid: ${syncId}\ndata: "11111111-1111-4111-8111-111111111111"\n\n`);
   return { streams: streams.size };
 });
