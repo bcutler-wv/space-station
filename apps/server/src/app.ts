@@ -10,13 +10,15 @@ import { registerMailReader } from './mail-reader.js';
 import { registerDrafts } from './drafts.js';
 import { registerDraftAttachments } from './draft-attachments.js';
 import { registerSend } from './send.js';
-import type { GmailReadAdapter, GmailSendAdapter } from '@station/connectors';
+import { registerMailChange } from './mail-change.js';
+import type { GmailReadAdapter, GmailSendAdapter, GmailChangeAdapter } from '@station/connectors';
 import { registerMailImages, type MailImageProxyConfig } from './mail-images.js';
 import type { PrivateBlobStore } from '@station/db';
 
 export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }, mailBlobStore?: PrivateBlobStore, mailImageProxy?: MailImageProxyConfig,
   replyReader?: Pick<GmailReadAdapter, 'getReplyHeaders'>,
-  sendProvider?: Pick<GmailSendAdapter, 'credential' | 'send' | 'findSent'>) {
+  sendProvider?: Pick<GmailSendAdapter, 'credential' | 'send' | 'findSent'>,
+  changeProvider?: Pick<GmailChangeAdapter, 'credential' | 'inspectMessage' | 'inspectUserLabel' | 'modify'>) {
   const app = Fastify({
     ...(transport?.key && transport.cert ? { https: { key: transport.key, cert: transport.cert } } : {}),
     ...(transport?.trustedProxyIp ? { trustProxy: (address: string) => address === transport.trustedProxyIp } : {}),
@@ -36,6 +38,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     registerDrafts(instance, auth, replyReader);
     if (mailBlobStore) registerDraftAttachments(instance, auth, mailBlobStore);
     if (mailBlobStore) registerSend(instance, auth, mailBlobStore, sendProvider);
+    registerMailChange(instance, auth, changeProvider);
     if (mailBlobStore && mailImageProxy) registerMailImages(instance, auth, mailBlobStore, mailImageProxy);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));

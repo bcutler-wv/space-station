@@ -8,6 +8,8 @@ export type { GmailProfile, GmailLabelPage, GmailMessagePage, GmailHistoryPage, 
 export { MAIL_LIMITS, rawMailSchema, parsedMailSchema, parseErrorCodeSchema, parseResultSchema, type ParseResult } from './mail-parser.js';
 export { sendRequestSchema, sendScopeSchema, sendDraftStatusQuerySchema, sendOperationSchema,
   sendDiscoveryQuerySchema, sendDiscoveryPageSchema } from './send.js';
+export { mailChangeScopeSchema, mailChangeRequestSchema, mailChangeCurrentStatusQuerySchema, mailChangeOperationSchema,
+  mailChangeDiscoveryQuerySchema, mailChangeDiscoveryPageSchema } from './mail-change.js';
 export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
 export { readerIdSchema, mailNavigationSearchSchema, mailContextSchema, conversationQuerySchema, threadQuerySchema, itemQuerySchema, labelQuerySchema,
   readerAttachmentSchema, readerMessageSchema, readerConversationSchema, conversationPageSchema,

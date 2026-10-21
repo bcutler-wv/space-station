@@ -195,6 +195,7 @@ export function registerMailReader(app: FastifyInstance, auth: AuthConfig, blobS
       const rows = await tx.select({ id: items.id, threadId: items.threadId, accountId: items.accountId,
         subject: items.subject, snippet: items.snippet, internalAt: items.internalAt, sentAt: items.sentAt,
         receivedAt: items.receivedAt, direction: items.direction, parseStatus: items.parseStatus,
+        itemSequence: items.appliedSequence, itemRevision: items.providerRevision,
         fromPersonId: items.fromPersonId, activity }).from(items)
         .where(and(eq(items.threadId, thread.id), eq(items.accountId, accountId), isNull(items.deletedAt), visible(orbitId), after))
         .orderBy(asc(activity), asc(items.id)).limit(limit + 1);
@@ -226,7 +227,8 @@ export function registerMailReader(app: FastifyInstance, auth: AuthConfig, blobS
       return reply.code(503).send({ error: 'This thread has too much metadata to display.' });
     const last = page.at(-1);
     return respond(reply, messagePageSchema, { messages: page.map((row) => ({ id: row.id, threadId: row.threadId,
-      accountId: row.accountId, subject: row.subject, snippet: row.snippet, internalAt: iso(row.internalAt),
+      accountId: row.accountId, itemSequence: row.itemSequence, itemRevision: row.itemRevision,
+      subject: row.subject, snippet: row.snippet, internalAt: iso(row.internalAt),
       sentAt: iso(row.sentAt), receivedAt: iso(row.receivedAt), direction: row.direction, parseStatus: row.parseStatus,
       from: (() => { const person = fromRows.find((entry) => entry.id === row.fromPersonId);
         return person ? { name: person.name, address: person.address } : null; })(),

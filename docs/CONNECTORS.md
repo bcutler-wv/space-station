@@ -24,7 +24,8 @@ No connector needs a public inbound endpoint. Everything below works with Statio
 - **Push:** Gmail `watch` publishes to a Google Pub/Sub topic. Station uses a **pull** subscription, so nothing needs to reach in. Renew the watch daily. If Pub/Sub isn't configured, poll history every 60 seconds.
 - **Labels and threads** map directly. Gmail labels are Station labels.
 - **Send:** An explicit owner action freezes one bounded MIME blob and calls `messages.send` once with the thread ID for a validated same-account reply. The Gmail raw message keeps Bcc for routing. A claimed call with lost confirmation remains unknown; an explicit read-only Sent lookup by exact Message-ID can confirm it but never resends it.
-- **Reliability:** persist Gmail history cursor per mailbox, deduplicate by provider message ID and revision, and recover an expired history cursor by bounded rescan. Reconcile send results against Sent before retrying an unknown outcome.
+- **Message changes:** Explicit owner archive/read/unread/existing USER-label requests freeze one exact message and desired add/remove IDs before one `messages.modify` call. A bounded `labels.get` checks USER type, and `messages.get` checks DRAFT absence before the claim. Both reads and the write use the installed official SDK, fixed `users/me` host, a ten-second deadline and no retry. The existing `gmail.modify` grant covers them. A claimed uncertain write is never repeated; explicit reconciliation reads current labels and records observed desired state separately from direct provider confirmation. Gmail history/polling refreshes the local label snapshot.
+- **Reliability:** persist Gmail history cursor per mailbox, deduplicate by provider message ID and revision, and recover an expired history cursor by bounded rescan. Unknown send or message-change writes are never blindly retried.
 - **Calendar:** Google Calendar API with sync tokens for incremental sync.
 
 ## Microsoft 365, Outlook.com, and Teams

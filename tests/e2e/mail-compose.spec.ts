@@ -45,6 +45,7 @@ async function fixture(page: Page) {
     if (path === '/api/mail/labels') return respond(route, { labels: [] });
     if (path === '/api/mail/conversations') return respond(route, { conversations: [{ threadId: thread, accountId: account, subject: 'Example reply', snippet: 'Please reply', lastActivityAt: now, messageCount: 1 }], nextCursor: null });
     if (path.endsWith('/messages')) return respond(route, { messages: [{ id: item, threadId: thread, accountId: account,
+      itemSequence: 1, itemRevision: '7',
       subject: 'Example reply', snippet: 'Please reply', internalAt: now, sentAt: null, receivedAt: null, direction: 'in',
       parseStatus: 'supported', from: { name: 'Example Sender', address: 'sender@example.com' }, labels: [], recipients: [], attachments: [],
     }], nextCursor: null });

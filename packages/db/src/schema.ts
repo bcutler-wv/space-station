@@ -188,7 +188,7 @@ export const auditLog = pgTable('audit_log', {
   targetId: text('target_id').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account', 'send_requested', 'send_succeeded', 'send_unknown', 'send_failed', 'send_reconciled')`),
+  check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account', 'send_requested', 'send_succeeded', 'send_unknown', 'send_failed', 'send_reconciled', 'mail_change_requested', 'mail_change_confirmed', 'mail_change_observed', 'mail_change_unknown', 'mail_change_failed')`),
 ]);
 
 // Mail keys include the account and provider collection at every relationship boundary.
@@ -385,6 +385,33 @@ export const outboundOperations = pgTable('outbound_operations', {
   check('outbound_operations_state', sql`${t.state} in ('pending', 'in_flight', 'succeeded', 'failed', 'outcome_unknown')`),
   check('outbound_operations_attempt', sql`${t.attemptCount} >= 0 and ${t.attemptCount} <= 1`),
   check('outbound_operations_mime_size', sql`${t.mimeBytes} is null or (${t.mimeBytes} >= 0 and ${t.mimeBytes} <= 12582912)`),
+]);
+
+// Message changes have no draft or MIME. A claimed operation is never replayed.
+export const mailChangeOperations = pgTable('mail_change_operations', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull().references(() => users.id),
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  orbitId: text('orbit_id').references(() => orbits.id),
+  itemId: text('item_id').notNull(), externalId: text('external_id').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(), requestDigest: text('request_digest').notNull(),
+  action: text('action').notNull(), addLabels: text('add_labels').array().notNull().default([]),
+  removeLabels: text('remove_labels').array().notNull().default([]),
+  itemRevision: text('item_revision'), itemSequence: integer('item_sequence').notNull(),
+  credentialGeneration: integer('credential_generation'),
+  state: text('state').notNull().default('pending'),
+  confirmation: text('confirmation'), attemptCount: integer('attempt_count').notNull().default(0),
+  lastError: text('last_error'), userActionAt: timestamp('user_action_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, (t) => [
+  foreignKey({ columns: [t.itemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
+  uniqueIndex('mail_change_operations_key_unique').on(t.ownerId, t.idempotencyKey),
+  index('mail_change_operations_discovery_idx').on(t.ownerId, t.accountId, t.userActionAt, t.id),
+  index('mail_change_operations_item_idx').on(t.itemId, t.itemSequence),
+  check('mail_change_operations_action', sql`${t.action} in ('archive', 'mark_read', 'mark_unread', 'add_label', 'remove_label')`),
+  check('mail_change_operations_state', sql`${t.state} in ('pending', 'in_flight', 'outcome_unknown', 'succeeded', 'failed')`),
+  check('mail_change_operations_confirmation', sql`${t.confirmation} is null or ${t.confirmation} in ('provider', 'observed')`),
+  check('mail_change_operations_attempt', sql`${t.attemptCount} >= 0 and ${t.attemptCount} <= 1`),
 ]);
 
 // Draft-owned blobs have no sync page or provider lease. A pending row is a

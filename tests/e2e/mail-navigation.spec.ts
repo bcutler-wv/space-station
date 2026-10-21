@@ -13,7 +13,7 @@ const context = { orbits: [{ id: orbit, name: 'Example work', colorSlot: 1 }], a
   { id: account2, orbitId: orbit, email: 'second@example.com', provider: 'google', needsReconnect: false },
 ] };
 const row = (id: string, owner: string, subject: string) => ({ threadId: id, accountId: owner, subject, snippet: 'A useful preview', lastActivityAt: '2026-10-20T12:00:00.000Z', messageCount: 2 });
-const message = { id: item, threadId: thread, accountId: account, subject: 'Budget %_literal', snippet: 'A useful preview', internalAt: '2026-10-20T12:00:00.000Z', sentAt: null, receivedAt: null, direction: 'in', parseStatus: 'supported', from: { name: 'Sender', address: 'sender@example.com' }, labels: [{ id: label, name: 'Important' }], recipients: [{ role: 'to', name: 'Owner', address: 'owner@example.com' }], attachments: [{ id: attachment, filename: 'report.pdf', mimeType: 'application/pdf', size: 1024, related: false }] };
+const message = { id: item, threadId: thread, accountId: account, itemSequence: 1, itemRevision: '7', subject: 'Budget %_literal', snippet: 'A useful preview', internalAt: '2026-10-20T12:00:00.000Z', sentAt: null, receivedAt: null, direction: 'in', parseStatus: 'supported', from: { name: 'Sender', address: 'sender@example.com' }, labels: [{ id: label, name: 'Important' }], recipients: [{ role: 'to', name: 'Owner', address: 'owner@example.com' }], attachments: [{ id: attachment, filename: 'report.pdf', mimeType: 'application/pdf', size: 1024, related: false }] };
 async function fixture(page: Page) {
   const calls: string[] = [];
   const threadCalls: string[] = [];

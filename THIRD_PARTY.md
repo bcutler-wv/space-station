@@ -115,7 +115,7 @@ On 2026-10-19, checked the current package releases, installed TypeScript APIs, 
 | Package/version | Upstream repository | License evidence | Use |
 |---|---|---|---|
 | google-auth-library 11.3.1 | https://github.com/googleapis/google-cloud-node/tree/main/core/packages/google-auth-library-nodejs | Apache-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | OAuth2Client web flow, official PKCE S256, token exchange and refresh. Refresh event and returned-token behavior checked against current upstream and installed source on 2026-10-20. |
-| @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail profile identity, bounded read pages and filtered reply metadata |
+| @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail profile identity, bounded read pages, filtered reply metadata and explicit message-label changes |
 
 For M1.3d on 2026-10-20, checked installed `gaxios` 8.3.1 source against https://github.com/googleapis/google-cloud-node/tree/main/core/packages/gaxios and its Apache-2.0 LICENSE (`cfc7749b96f6`). It is pinned transitively by the Google SDK in `pnpm-lock.yaml`. Its `maxContentLength` checks a response header before parsing but does not enforce a body byte limit for every fetch response, so the read adapter caps the stream in its fetch transport. The installed SDK path and Gmail REST methods were verified with fixture requests. `zod` 4.6.7, previously adopted in M0.1, remains a direct connector dependency for typed validation; provider response schemas live in `@station/shared`.
 

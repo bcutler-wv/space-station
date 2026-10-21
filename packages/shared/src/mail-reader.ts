@@ -27,6 +27,7 @@ export const readerAddressSchema = z.object({ address: z.string().max(254), name
 export const readerAttachmentSchema = z.object({ id: readerIdSchema, filename: z.string().max(255).nullable(),
   mimeType: z.string().max(256), size: z.number().int().nonnegative(), related: z.boolean() }).strict();
 export const readerMessageSchema = z.object({ id: readerIdSchema, threadId: readerIdSchema, accountId: readerIdSchema,
+  itemSequence: z.number().int().nonnegative(), itemRevision: z.string().max(256).nullable(),
   subject: z.string().max(4096).nullable(), snippet: z.string().max(4096).nullable(),
   internalAt: z.iso.datetime().nullable(), sentAt: z.iso.datetime().nullable(), receivedAt: z.iso.datetime().nullable(),
   direction: z.enum(['in', 'out']), parseStatus: z.enum(['supported', 'unsupported']),

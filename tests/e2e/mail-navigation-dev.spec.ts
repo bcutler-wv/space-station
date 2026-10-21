@@ -23,7 +23,8 @@ test('Vite StrictMode replay loads mail navigation and lazy body across scope ch
     return route.fulfill({ json: { conversations: [{ threadId: thread, accountId: account, subject: 'StrictMode conversation', snippet: 'Ready', lastActivityAt: '2026-10-20T12:00:00.000Z', messageCount: 1 }], nextCursor: null } });
   });
   await page.route('**/api/mail/threads/*/messages?**', route => route.fulfill({ json: { messages: [{
-    id: item, threadId: thread, accountId: account, subject: 'StrictMode conversation', snippet: 'Ready',
+    id: item, threadId: thread, accountId: account, itemSequence: 1, itemRevision: '7',
+    subject: 'StrictMode conversation', snippet: 'Ready',
     internalAt: '2026-10-20T12:00:00.000Z', sentAt: null, receivedAt: null, direction: 'in', parseStatus: 'supported',
     from: { name: 'Sender', address: 'sender@example.com' }, labels: [], recipients: [], attachments: [],
   }], nextCursor: null } }));

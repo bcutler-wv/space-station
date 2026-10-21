@@ -64,6 +64,9 @@ jobs:
       - run: docker compose exec -T postgres createdb -U station station_send_test
       - run: docker compose run --rm -T -e DB_NAME=station_send_test migrate
       - run: docker compose run --rm -T --no-deps -e DB_NAME=station_send_test -e SEND_TEST_BLOB_ROOT=/var/lib/station/blobs/send-fixture app node tests/integration/send-db.mjs
+      - run: docker compose exec -T postgres createdb -U station station_mail_change_test
+      - run: docker compose run --rm -T -e DB_NAME=station_mail_change_test migrate
+      - run: docker compose run --rm -T --no-deps -e DB_NAME=station_mail_change_test app node tests/integration/mail-change-db.mjs
       - run: docker compose exec -T postgres createdb -U station station_gmail_sync_test
       - run: docker compose run --rm -T -e DB_NAME=station_gmail_sync_test migrate
       - run: docker compose run --rm -T --no-deps -e DB_NAME=station_gmail_sync_test app node tests/integration/gmail-sync-db.mjs

@@ -7,6 +7,7 @@ export { applyMailPage, collectOrphanBlobs, evaluateStoredMailPrivacy, MailPageF
 export { syncStates, syncPages, people, identities, threads, items, itemRecipients, labels, itemLabels, itemOrbits, attachments, blobIntents } from './schema.js';
 export { mailImageConsent, mailSenderImagePreferences } from './schema.js';
 export { drafts, draftAttachments, outboundOperations } from './schema.js';
+export { mailChangeOperations } from './schema.js';
 export { collectDraftAttachmentBlobs } from './draft-attachment-collector.js';
 export { collectOutboundOperations } from './outbound-collector.js';
 export { appendSyncEvent, readSyncEvents, boundSyncStreamRead, EVENT_REPLAY_LIMIT, EVENT_RETENTION } from './sync-events.js';
