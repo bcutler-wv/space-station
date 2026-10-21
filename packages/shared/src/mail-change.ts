@@ -16,5 +16,6 @@ export const mailChangeDiscoveryQuerySchema = mailChangeScopeSchema.safeExtend({
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(20).default(20),
 });
 export const mailChangeDiscoveryPageSchema = z.object({
-  operations: z.array(mailChangeOperationSchema).max(20), nextCursor: z.string().nullable(),
+  operations: z.array(mailChangeOperationSchema.safeExtend({ context: z.object({ subject: z.string().max(256).nullable(),
+    threadId: uuid }).strict().nullable() })).max(20), nextCursor: z.string().nullable(),
 }).strict();

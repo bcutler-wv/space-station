@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { GmailChangeAdapter, GoogleCredentialService, GMAIL_MODIFY_SCOPE } from '@station/connectors';
@@ -238,13 +238,26 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
     }, true);
     if (!rows) return reply.code(404).send(unavailable);
     const page = rows.slice(0, limit);
+    const contexts = page.length ? await run((tx) => tx.select({ operationId: mailChangeOperations.id,
+      subject: sql<string | null>`left(${items.subject}, 120)`, threadId: items.threadId }).from(mailChangeOperations)
+      .innerJoin(items, and(eq(items.id, mailChangeOperations.itemId), eq(items.accountId, mailChangeOperations.accountId),
+        isNull(items.deletedAt), sql`(${mailChangeOperations.orbitId} is null or exists
+          (select 1 from item_orbits io where io.item_id = ${items.id} and io.orbit_id = ${mailChangeOperations.orbitId}))`))
+      .where(and(eq(mailChangeOperations.ownerId, OWNER), eq(mailChangeOperations.accountId, accountId),
+        inArray(mailChangeOperations.id, page.map((row) => row.id)))), true) : [];
+    const contextById = new Map(contexts.map((entry) => [entry.operationId,
+      { subject: entry.subject, threadId: entry.threadId }]));
     const last = page.at(-1);
     const nextCursor = rows.length > limit && last ? await run(async (tx) => {
       const [time] = await tx.select({ at: sql<string>`to_char(${mailChangeOperations.userActionAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` })
         .from(mailChangeOperations).where(eq(mailChangeOperations.id, last.id)).limit(1);
       return time ? discoveryCursor({ at: time.at, id: last.id, accountId, orbitId: orbitId ?? null }, auth.masterKey) : null;
     }, true) : null;
-    return mailChangeDiscoveryPageSchema.parse({ operations: page.map(status), nextCursor });
+    const response = mailChangeDiscoveryPageSchema.parse({ operations: page.map((row) => ({
+      ...status(row), context: contextById.get(row.id) ?? null })), nextCursor });
+    if (Buffer.byteLength(JSON.stringify(response)) > 64 * 1024)
+      return reply.code(503).send({ error: 'There are too many changes to display. Narrow the scope and try again.' });
+    return response;
   });
 
   app.get('/api/mail/changes/:operationId', async (request, reply) => {

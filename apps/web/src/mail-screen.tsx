@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from '@tanstack/react-router';
 import type { z } from 'zod';
 import { conversationPageSchema, labelListSchema, mailContextSchema, mailNavigationSearchSchema, messagePageSchema, readerIdSchema } from '@station/shared';
 import { MailBody } from './mail-body.js';
+import { MailMessageActions, PendingMessageChanges } from './mail-message-actions.js';
 import { createDraft, DraftOverview, MailCompose } from './mail-compose.js';
 
 type Scope = { accountId?: string | undefined; orbitId?: string | undefined; labelId?: string | undefined; subject?: string | undefined };
@@ -117,7 +118,9 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
   const [notice, setNotice] = useState(false);
   const [focused, setFocused] = useState(0);
   const [openItem, setOpenItem] = useState<string | null>(null);
+  const [actionItem, setActionItem] = useState<string | null>(null);
   const [showDrafts, setShowDrafts] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [composeAccount, setComposeAccount] = useState('');
@@ -136,7 +139,7 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
     return () => { createGeneration.current++; createController.current?.abort(); createController.current = null; };
   }, [scopeKey, thread?.threadId, draftRoute?.draftId]);
   useEffect(() => { setDraft(scope.subject ?? ''); }, [scope.subject]);
-  useEffect(() => { setFocused(0); setOpenItem(null); }, [scopeKey, thread?.threadId]);
+  useEffect(() => { setFocused(0); setOpenItem(null); setActionItem(null); }, [scopeKey, thread?.threadId]);
   useEffect(() => {
     if (loggedOut.current || !validAddress) return;
     const accountId = selectedAccount?.id;
@@ -180,6 +183,7 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
       if (loggedOut.current || !validAddress) return;
       if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
           !(event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]'))) {
+        if (actionItem) { event.preventDefault(); setActionItem(null); threadHeadingRef.current?.focus(); return; }
         if (openItem) { event.preventDefault(); setOpenItem(null); threadHeadingRef.current?.focus(); return; }
         if (thread) { event.preventDefault(); void navigate({ to: '/mail', search: Object.fromEntries(parameters(scope)) }); return; }
       }
@@ -193,7 +197,7 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [rows, focused, thread, draftRoute, openItem, navigate, scope, validAddress]);
+  }, [rows, focused, thread, draftRoute, openItem, actionItem, navigate, scope, validAddress]);
   useEffect(() => { if (!validAddress) void queryClient.cancelQueries({ queryKey: mailKey }); }, [validAddress, queryClient]);
   const refresh = () => { if (loggedOut.current || !validAddress) return; setNotice(false); void queryClient.resetQueries({ queryKey: [...mailKey, 'conversations'] }); void queryClient.resetQueries({ queryKey: [...mailKey, 'thread'] }); void queryClient.invalidateQueries({ queryKey: [...mailKey, 'labels'], refetchType: 'active' }); };
   const availableAccounts = context.data?.accounts.filter((account) => scope.accountId ? account.id === scope.accountId :
@@ -219,7 +223,7 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
   if (signedOut) return <section className="mail-workspace" aria-label="Mail"><p role="status">Signing out…</p></section>;
   if (!validAddress) return <section className="mail-workspace" aria-label="Mail"><h1>Mail</h1><p role="alert">This mail address has invalid filters. Check the link or return to mail.</p><a href="/mail">Open mail</a></section>;
   return <section className="mail-workspace" aria-label="Mail">
-    <div className="mail-heading"><div><p className="mail-overline">Live mailbox</p><h1 ref={headingRef} tabIndex={-1}>Mail</h1><p>Messages from your connected accounts.</p></div><div className="mail-heading-actions">{!draftRoute && <><button type="button" onClick={() => { setShowDrafts(!showDrafts); setComposeAccount(''); }}>Drafts and sends</button><button type="button" onClick={() => { setComposeAccount(availableAccounts[0]?.id ?? ''); setShowDrafts(false); }}>New message</button><button type="button" onClick={refresh}>Refresh mail</button></>}</div></div>
+    <div className="mail-heading"><div><p className="mail-overline">Live mailbox</p><h1 ref={headingRef} tabIndex={-1}>Mail</h1><p>Messages from your connected accounts.</p></div><div className="mail-heading-actions">{!draftRoute && <><button type="button" aria-expanded={showDrafts} onClick={() => { setShowDrafts(!showDrafts); setShowChanges(false); setComposeAccount(''); }}>Drafts and sends</button><button type="button" aria-expanded={showChanges} onClick={() => { setShowChanges(!showChanges); setShowDrafts(false); setComposeAccount(''); }}>Pending message changes</button><button type="button" onClick={() => { setComposeAccount(availableAccounts[0]?.id ?? ''); setShowDrafts(false); setShowChanges(false); }}>New message</button><button type="button" onClick={refresh}>Refresh mail</button></>}</div></div>
     {notice && <div className="mail-update" role="status"><span>New mail available.</span><button type="button" onClick={refresh}>Refresh</button></div>}
     {context.isPending && <p role="status">Loading mail accounts…</p>}
     {context.isError && <p role="alert">{context.error.message} <button onClick={() => void context.refetch()}>Retry</button></p>}
@@ -228,6 +232,7 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
       {createError && <p role="alert">{createError}</p>}
       {composeAccount && !draftRoute && <div className="mail-compose-start"><label>Send from<select aria-label="Send from" value={composeAccount} onChange={(event) => setComposeAccount(event.target.value)}>{availableAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</select></label><button type="button" disabled={creating} onClick={() => startDraft(composeAccount)}>{creating ? 'Opening…' : 'Continue'}</button><button type="button" onClick={() => setComposeAccount('')}>Cancel</button></div>}
       {showDrafts && !draftRoute && <DraftOverview accounts={scope.orbitId ? context.data.accounts : availableAccounts} {...(scope.orbitId ? { orbitId: scope.orbitId } : {})} onOpen={openDraft} />}
+      {showChanges && !draftRoute && <PendingMessageChanges key={scope.orbitId ?? 'all-orbits'} accounts={context.data.accounts} {...(scope.orbitId ? { orbitId: scope.orbitId } : {})} />}
       {draftRoute ? validScope ? <MailCompose key={`${draftRoute.accountId}:${draftRoute.draftId}:${scope.orbitId ?? ''}`} accountId={draftRoute.accountId} draftId={draftRoute.draftId} accounts={context.data.accounts}
         orbitName={scope.orbitId ? context.data.orbits.find((entry) => entry.id === scope.orbitId)?.name : undefined}
         {...(scope.orbitId ? { orbitId: scope.orbitId } : {})} onClose={() => void navigate({ to: '/mail', search: Object.fromEntries(parameters(scope)) })} /> :
@@ -247,7 +252,8 @@ export function MailScreen({ thread, draftRoute }: { thread?: Thread; draftRoute
         {messages.isPending && <p role="status">Loading conversation…</p>}
         {messages.isError && <p role="alert">{messages.error.message} <button onClick={() => void messages.refetch()}>Retry</button></p>}
         {messages.isSuccess && threadRows.length === 0 && <p>This conversation has no available messages.</p>}
-        {threadRows.map((message) => <article className="mail-message" key={message.id} aria-label={message.subject || 'Message'}><div className="mail-message-head"><div><strong>{message.from?.name || message.from?.address || (message.direction === 'out' ? 'You' : 'Unknown sender')}</strong><p>{message.from?.address}</p></div><time>{displayDate(message.receivedAt || message.sentAt || message.internalAt)}</time></div><p className="mail-recipients">To: {message.recipients.filter((entry) => entry.role === 'to').map((entry) => entry.name || entry.address).join(', ') || 'Unavailable'}</p><p>{message.snippet}</p><div className="mail-message-actions"><button type="button" aria-expanded={openItem === message.id} onClick={() => setOpenItem(openItem === message.id ? null : message.id)}>{openItem === message.id ? 'Close message' : 'Read message'}</button>{message.direction === 'in' && <button type="button" disabled={creating} onClick={() => startDraft(message.accountId, message.id)}>Reply</button>}</div>
+        {threadRows.map((message) => <article className="mail-message" key={message.id} aria-label={message.subject || 'Message'}><div className="mail-message-head"><div><strong>{message.from?.name || message.from?.address || (message.direction === 'out' ? 'You' : 'Unknown sender')}</strong><p>{message.from?.address}</p></div><time>{displayDate(message.receivedAt || message.sentAt || message.internalAt)}</time></div><p className="mail-recipients">To: {message.recipients.filter((entry) => entry.role === 'to').map((entry) => entry.name || entry.address).join(', ') || 'Unavailable'}</p><p>{message.snippet}</p><div className="mail-message-actions"><button type="button" aria-expanded={openItem === message.id} onClick={() => setOpenItem(openItem === message.id ? null : message.id)}>{openItem === message.id ? 'Close message' : 'Read message'}</button><button type="button" aria-expanded={actionItem === message.id} onClick={() => setActionItem(actionItem === message.id ? null : message.id)}>{actionItem === message.id ? 'Close actions' : 'Message actions'}</button>{message.direction === 'in' && <button type="button" disabled={creating} onClick={() => startDraft(message.accountId, message.id)}>Reply</button>}</div>
+          {actionItem === message.id && <MailMessageActions key={`${message.id}:${message.accountId}:${scope.orbitId ?? ''}`} itemId={message.id} accountId={message.accountId} {...(scope.orbitId ? { orbitId: scope.orbitId } : {})} onRefreshMail={refresh} />}
           {openItem === message.id && <MailBody accountId={thread.accountId} itemId={message.id} {...(scope.orbitId ? { orbitId: scope.orbitId } : {})} />}
           {message.attachments.filter((attachment) => !attachment.related).length > 0 && <div className="mail-attachments"><h3>Attachments</h3>{message.attachments.filter((attachment) => !attachment.related).map((attachment) => <a key={attachment.id} href={`/api/mail/items/${message.id}/attachments/${attachment.id}/download?${new URLSearchParams({ accountId: thread.accountId, ...(scope.orbitId ? { orbitId: scope.orbitId } : {}) })}`}>{attachment.filename || 'Attachment'} ({Math.ceil(attachment.size / 1024)} KB)</a>)}</div>}
         </article>)}

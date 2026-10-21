@@ -8,4 +8,4 @@ Sol implemented the bounded slice and Astra reviewed it. Review corrected false 
 
 The route limits two active reads, uses bounded read-only database transactions, and signals cancellation after 20 seconds or client close. Credential work has its own deadline; the signal is not a hard total response deadline. Both SDK reads share a ten-second deadline, fixed host, zero retries, bounded streamed responses and 500-label limit. Final responses are limited to 128 KiB. No dependency or migration was added. ADR 0012 documents these presentation limits.
 
-Ubuntu PostgreSQL 16/Compose validation of this exact diff remains pending. The existing mail-change CI fixture includes the new assertions. Browser controls and integrated M1 acceptance follow; no production deployment was performed.
+Full Ubuntu CI run `39616109952` passed at commit `3e07722`, including PostgreSQL 16/Compose validation, the extended mail-change fixture and browser gates. Browser controls and integrated M1 acceptance follow; no production deployment was performed.

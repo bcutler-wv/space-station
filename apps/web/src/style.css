@@ -1239,3 +1239,31 @@ h4 {
 .mail-compose-result button { margin-right: 8px; }
 .mail-compose-result > div { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 640px) { .mail-heading-actions { justify-content: flex-start; } .mail-compose-fields label { grid-template-columns: 1fr; gap: 5px; } .mail-compose-hint { margin-left: 0; } .mail-compose-file { align-items: flex-start; flex-direction: column; } .mail-compose-upload { align-items: flex-start; flex-direction: column; } }
+.mail-message-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mail-action-panel { margin-top: 14px; padding: 16px; border-radius: 20px; background: var(--surface-container-low); color: var(--on-surface); }
+.mail-action-head, .mail-action-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mail-action-head { justify-content: space-between; }
+.mail-action-head strong { font-size: 1.05rem; }
+.mail-action-panel p { margin: 10px 0; line-height: 1.45; }
+.mail-action-note { color: var(--on-surface-variant); }
+.mail-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.mail-action-panel button { border: 0; border-radius: 999px; padding: 9px 14px; background: var(--secondary-container); color: var(--on-secondary-container); font: inherit; cursor: pointer; }
+.mail-action-panel button:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+.mail-action-panel button:disabled { opacity: .5; cursor: default; }
+.mail-action-labels { margin-top: 16px; display: grid; gap: 8px; }
+.mail-action-labels h3 { font-size: .9rem; margin: 0 0 2px; }
+.mail-action-label { padding: 8px 10px; border-radius: 16px; background: var(--surface-container-high); }
+.mail-action-label span { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 520px) { .mail-action-panel { padding: 12px; } .mail-action-buttons button { flex: 1 1 135px; } }
+.mail-pending-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 14px 0; }
+.mail-pending-filters label { display: grid; gap: 6px; font-weight: 500; }
+.mail-pending-filters label:has(input) { display: flex; align-items: center; min-height: 44px; }
+.mail-pending-filters select { max-width: 100%; padding: 10px 14px; border-radius: 14px; background: var(--surface-container-high); color: var(--on-surface); border: 1px solid var(--outline-variant); }
+.mail-pending-row { margin: 8px 0; padding: 14px 16px; border-radius: 18px; background: var(--surface-container-high); overflow-wrap: anywhere; }
+.mail-pending-row p { margin: 4px 0 9px; }
+.mail-pending-row a { color: var(--primary); text-decoration: underline; overflow-wrap: anywhere; }
+.mail-pending-row a:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; border-radius: 2px; }
+.mail-pending-row > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.mail-pending-row button:focus-visible, .mail-pending-filters select:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+.mail-pending-row button, .mail-draft-overview > button { border: 0; border-radius: 999px; padding: 9px 14px; background: var(--secondary-container); color: var(--on-secondary-container); font: inherit; cursor: pointer; }
+.mail-pending-row button:disabled, .mail-draft-overview > button:disabled { opacity: .55; cursor: wait; }

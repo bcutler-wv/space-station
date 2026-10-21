@@ -18,7 +18,7 @@ type Account = { id: string; email: string; orbitId: string; needsReconnect: boo
 type Scope = { accountId: string; orbitId?: string };
 let signedOut = false;
 window.addEventListener('station:logout', () => { signedOut = true; });
-class MailHttpError extends Error { constructor(message: string, readonly status: number) { super(message); } }
+export class MailHttpError extends Error { constructor(message: string, readonly status: number, readonly payload?: unknown) { super(message); } }
 
 async function bounded(response: Response, max = LIMIT): Promise<unknown> {
   if (Number(response.headers.get('content-length') ?? 0) > max) throw new Error('The response is too large. Try again.');
@@ -48,7 +48,7 @@ export async function mailRequest<S extends z.ZodType>(path: string, schema: S, 
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT)]) : AbortSignal.timeout(TIMEOUT) });
   const value = await bounded(response, response.ok ? maxBytes : 8192);
   if (!response.ok) throw new MailHttpError(typeof value === 'object' && value && 'error' in value && typeof value.error === 'string' ? value.error :
-    response.status === 401 ? 'Your session ended. Sign in again.' : `Request failed (${response.status}). Try again.`, response.status);
+    response.status === 401 ? 'Your session ended. Sign in again.' : `Request failed (${response.status}). Try again.`, response.status, value);
   if (signedOut) throw new Error('Signed out.');
   return schema.parse(value);
 }

@@ -92,6 +92,7 @@ try {
   await db.insert(items).values([itemA, itemB, tombstone, ...capItems].map((itemId) => ({ id: itemId, accountId: accountA,
     collectionId: 'primary', threadId: threadA, externalId: `message_${itemId.replaceAll('-', '')}`,
     providerRevision: '7', appliedSequence: 1, direction: 'in', directionProvenance: 'incoming',
+    subject: itemId === itemB ? 'Example recovery subject '.repeat(30) : 'Example message',
     parseStatus: 'supported', flags: {}, ...(itemId === tombstone ? { deletedAt: new Date() } : {}) })));
   await db.insert(itemOrbits).values([itemA, itemB, ...capItems].map((itemId) => ({ itemId, orbitId: orbitA, reason: 'account' })));
   await db.insert(labels).values([{ id: labelA, accountId: accountA, providerRef: 'Label_1', name: 'Example label' },
@@ -201,7 +202,10 @@ try {
   const unresolved = await request('GET', `/api/mail/changes/unresolved?accountId=${accountA}`);
   assert.equal(unresolved.statusCode, 200, unresolved.body);
   assert.equal(unresolved.json().operations[0].id, unknown.json().id);
+  assert.equal(unresolved.json().operations[0].context.threadId, threadA);
+  assert.equal(unresolved.json().operations[0].context.subject.length, 120);
   assert.equal((await request('GET', `/api/mail/changes/unresolved?accountId=${accountB}`)).json().operations.length, 0);
+  assert.equal((await request('GET', `/api/mail/changes/unresolved?accountId=${accountA}&orbitId=${orbitB}`)).json().operations.length, 0);
   await db.update(mailChangeOperations).set({ updatedAt: new Date(Date.now() - 31_000) }).where(eq(mailChangeOperations.id, unknown.json().id));
   await db.update(accounts).set({ credentialGeneration: 1 }).where(eq(accounts.id, accountA));
   credentialGeneration = 1;
@@ -342,7 +346,18 @@ try {
   const page1 = await request('GET', `/api/mail/changes/unresolved?accountId=${accountA}&orbitId=${orbitA}&limit=20`);
   assert.equal(page1.statusCode, 200, page1.body);
   assert.equal(page1.json().operations.length, 20);
+  assert.ok(Buffer.byteLength(page1.body) <= 64 * 1024);
   assert.ok(page1.json().nextCursor);
+  assert.ok(page1.json().operations.every((entry) => entry.context?.threadId === threadA || entry.context === null));
+  const removedRows = [...page1.json().operations];
+  let contextCursor = page1.json().nextCursor;
+  while (contextCursor) {
+    const next = await request('GET', `/api/mail/changes/unresolved?accountId=${accountA}&orbitId=${orbitA}&limit=20&cursor=${encodeURIComponent(contextCursor)}`);
+    removedRows.push(...next.json().operations); contextCursor = next.json().nextCursor;
+  }
+  assert.equal(removedRows.find((entry) => entry.id === tombstoneOperation)?.context, null);
+  assert.equal(removedRows.find((entry) => entry.id === orbitOperation)?.context, null);
+  assert.ok(removedRows.some((entry) => entry.context?.subject === 'Example message' && entry.context.threadId === threadA));
   const page2 = await request('GET', `/api/mail/changes/unresolved?accountId=${accountA}&orbitId=${orbitA}&limit=20&cursor=${encodeURIComponent(page1.json().nextCursor)}`);
   assert.equal(page2.statusCode, 200, page2.body);
   assert.ok(page2.json().operations.length >= 3);
