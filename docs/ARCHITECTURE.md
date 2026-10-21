@@ -13,7 +13,7 @@
 | Database | PostgreSQL 16+ with pgvector | Drizzle ORM and Drizzle migrations |
 | Job queue | pg-boss | Postgres-backed, so no Redis container |
 | Validation | zod | Every API payload and every AI output |
-| Lexical search | Meilisearch Community Edition | Typo tolerance, prefix search, facets |
+| Lexical search | OpenSearch 3.9.0 (intended M2 live engine; no live consumer yet) | Native full Boolean DSL with fuzzy/prefix and typed filters; private runtime still pending |
 | Embeddings | Local embedding service in its own container | Evaluate Hugging Face text-embeddings-inference and Ollama before M6 semantic search. OpenAI embeddings as an option. |
 | Attachment text | Apache Tika server, with Tesseract for OCR | |
 | Remote images | go-camo | Proxies remote images and hides the client IP; images remain blocked by default because unique URLs can reveal opens |
@@ -31,7 +31,7 @@ Settle evaluated choices before implementing the feature that uses them. M0.3 re
                                         |
      +---------------+------------------+------------------+---------------+
      |               |                  |                  |               |
- [ worker ]    [ postgres ]      [ meilisearch ]     [ embeddings ]   [ tika ]   [ camo ]
+ [ worker ]    [ postgres ]      [ opensearch ]      [ embeddings ]   [ tika ]   [ camo ]
  sync, parse,   data, queue,      lexical index       local model      text, OCR   image proxy
  extract        vectors
 ```
@@ -56,7 +56,7 @@ packages/
   db/               Drizzle schema and migrations
   connectors/       gmail, graph, imap, caldav, slack (one folder each, one interface)
   ai/               provider adapters, prompts, tools, extraction
-  search/           Meilisearch and pgvector query layer
+  search/           Bounded parser and pure OpenSearch compiler; pgvector later
   theme/            tokens, scheme generation
 design/
   wireframe.html    reference design, open it in a browser
@@ -73,7 +73,7 @@ connector sync
   -> Tier 1 rules (deterministic labels, bulk mail detection, Orbit routing)
   -> compute effective privacy across all matching Orbits
   -> commit normalized page and cursor atomically
-  -> index in Meilisearch (planned M2 consumer; the current private engine foundation has no source ingestion)
+  -> index in OpenSearch (planned M2 consumer; no source ingestion exists yet)
   -> embed into pgvector
   -> Tier 2 extraction (if not bulk and not excluded)
   -> derived records: proposals, promises, entities, task updates

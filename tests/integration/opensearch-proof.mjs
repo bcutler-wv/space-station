@@ -6,7 +6,8 @@ import { PassThrough, Readable } from 'node:stream';
 import { TextDecoder } from 'node:util';
 import { once } from 'node:events';
 import { Client } from '@opensearch-project/opensearch';
-import { parseSearchQuery, SEARCH_PARSE_LIMITS } from '../../packages/search/dist/index.js';
+import { parseSearchQuery, compileSearchQuery, OPENSEARCH_MAPPING, OPENSEARCH_PROFILE,
+  SEARCH_PARSE_LIMITS } from '../../packages/search/dist/index.js';
 
 const ENGINE_VERSION = '3.9.0';
 const INDEX = 'station-fake-proof';
@@ -274,6 +275,89 @@ async function semantics(client) {
   await expectIds(client, 'Korean analysis', strict('한국어 형태소'), ['korean']);
 }
 
+async function compiledSemantics(client) {
+  const index = `${INDEX}-compiler`;
+  await call(client.indices, client.indices.create, { index, body: {
+    settings: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '1s' },
+    mappings: OPENSEARCH_MAPPING,
+  } });
+  const mapping = await call(client.indices, client.indices.getMapping, { index }, 32_768);
+  assert.equal(mapping[index]?.mappings?._meta?.stationProfile, OPENSEARCH_PROFILE);
+  for (const [field, expected] of Object.entries(OPENSEARCH_MAPPING.properties))
+    assert.equal(mapping[index]?.mappings?.properties?.[field]?.type, expected.type, `mapping ${field}`);
+  const base = { ownerId: OWNER, accountId: ACCOUNT, orbitIds: [ORBIT], labelIds: [],
+    kind: 'email', mailboxes: ['inbox'], hasAttachment: false, unread: false, starred: false,
+    sentAt: '2026-01-01T00:00:00.000Z', subjectValues: '', fromValues: [], toValues: [],
+    ccValues: [], filenameValues: [] };
+  const docs = [
+    { id: 'a', searchText: 'apple fruit', subjectValues: 'rate*sheet',
+      fromValues: ['Dana <dana@example.com>'], unread: true },
+    { id: 'b', searchText: 'appl fruit', subjectValues: 'rate-sheet' },
+    { id: 'c', searchText: 'foo-bar', labelIds: ['label-work'] },
+    { id: 'd', searchText: 'quiet robin', subjectValues: 'path\\a' },
+    { id: 'e', searchText: 'one two three four five six seven eight nine ten eleven' },
+    { id: 'f', searchText: '東京大学' },
+  ].map(row => ({ ...base, ...row, stableId: row.id }));
+  const outsider = { ...docs[0], id: 'outside', stableId: 'outside', ownerId: 'outside@example.com' };
+  const body = [];
+  for (const doc of [...docs, outsider]) body.push({ index: { _index: index, _id: doc.id } }, doc);
+  assert.equal((await call(client, client.bulk, { body, refresh: true })).errors, false);
+  const context = { scope: 'accounts', ownerId: OWNER, accountIds: [ACCOUNT],
+    authorizedOrbitIds: [ORBIT], accountNames: [{ id: ACCOUNT, name: 'work' }],
+    orbitNames: [{ id: ORBIT, name: 'glassworks' }],
+    labelNames: [{ id: 'label-work', accountId: ACCOUNT, name: 'vendors' }],
+    nowUtc: '2026-01-02T00:00:00.000Z' };
+  async function compiled(input, expected, scope = context) {
+    const plan = compileSearchQuery(input, scope);
+    assert.equal(plan.status, 'ok', `${input}: ${JSON.stringify(plan)}`);
+    assert.equal(plan.profile, OPENSEARCH_PROFILE);
+    const result = await call(client, client.search, { index, allow_partial_search_results: false,
+      body: { query: plan.query, size: 20, track_total_hits: true, _source: false, timeout: '5s' } }, 32_768);
+    assert.deepEqual(validateSearch(result, 20).map(hit => hit._id).sort(), expected.slice().sort(), input);
+    assert.equal(result.hits.total.value, expected.length, `${input} cutoff`);
+    results.checks.push(`compiled ${input}`);
+  }
+  for (const [input, expected] of [
+    ['apple', ['a', 'b']], ['-apple', ['c', 'd', 'e', 'f']],
+    ['apple OR label:vendors', ['a', 'b', 'c']],
+    ['-(apple OR label:vendors)', ['d', 'e', 'f']],
+    ['subject:"rate*sheet"', ['a']], ['subject:"path\\\\a"', ['d']],
+    ['subject:"RATE*sheet"', ['a']], ['from:DANA@example.com', ['a']], ['is:unread', ['a']],
+    ['"one two three four five six seven eight nine ten eleven"', ['e']],
+    ['-"one two three four five six seven eight nine ten eleven"', ['a', 'b', 'c', 'd', 'f']],
+    ['東京大学', ['f']],
+    ['after:2026/01/01 before:2026/01/02', ['a', 'b', 'c', 'd', 'e', 'f']],
+    ['!!!', []], ['-!!!', ['a', 'b', 'c', 'd', 'e', 'f']],
+  ]) await compiled(input, expected);
+  assert.equal(compileSearchQuery('is:needs-reply', context).status, 'error');
+
+  const otherAccount = 'account-other';
+  const otherOrbit = 'orbit-other';
+  const probes = [
+    { id: 'unassigned', accountId: ACCOUNT, orbitIds: [] },
+    { id: 'other-orbit', accountId: ACCOUNT, orbitIds: [otherOrbit] },
+    { id: 'other-account', accountId: otherAccount, orbitIds: [ORBIT] },
+    { id: 'label-a', accountId: ACCOUNT, orbitIds: [ORBIT], labelIds: ['label-work'] },
+    { id: 'label-b', accountId: otherAccount, orbitIds: [ORBIT], labelIds: ['label-other'] },
+    { id: 'label-cross', accountId: otherAccount, orbitIds: [ORBIT], labelIds: ['label-work'] },
+  ].map(row => ({ ...base, ...row, searchText: 'scopeprobe', stableId: row.id }));
+  const probeBody = [];
+  for (const doc of probes) probeBody.push({ index: { _index: index, _id: doc.id } }, doc);
+  assert.equal((await call(client, client.bulk, { body: probeBody, refresh: true })).errors, false);
+  const broad = { ...context, accountIds: [ACCOUNT, otherAccount],
+    authorizedOrbitIds: [ORBIT, otherOrbit],
+    accountNames: [...context.accountNames, { id: otherAccount, name: 'personal' }],
+    orbitNames: [...context.orbitNames, { id: otherOrbit, name: 'home' }],
+    labelNames: [...context.labelNames, { id: 'label-other', accountId: otherAccount, name: 'vendors' }] };
+  await compiled('scopeprobe', probes.map(doc => doc.id), broad);
+  await compiled('scopeprobe', ['unassigned', 'other-orbit', 'label-a'],
+    { ...broad, accountIds: [ACCOUNT], accountNames: context.accountNames,
+      labelNames: context.labelNames });
+  await compiled('scopeprobe', ['other-account', 'label-a', 'label-b', 'label-cross'],
+    { ...broad, scope: 'selected-orbits', selectedOrbitIds: [ORBIT] });
+  await compiled('scopeprobe label:vendors', ['label-a', 'label-b'], broad);
+}
+
 async function ingest(client, documents) {
   for (let start = 0; start < documents.length; start += 250) {
     const body = [];
@@ -496,6 +580,7 @@ async function main() {
     await pagination(client);
     await writes(client);
     const latencyWithinTarget = await measure(client);
+    await compiledSemantics(client);
     await resourceSnapshot(client, 'warmNode');
     assert.ok(latencyWithinTarget, 'engine-request p95 exceeded 100ms fixture target');
     results.status = 'pass';

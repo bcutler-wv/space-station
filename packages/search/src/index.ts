@@ -150,3 +150,6 @@ export function parseSearchQuery(input: string): SearchParseResult {
     throw error;
   }
 }
+
+export { compileSearchQuery, OPENSEARCH_PROFILE, OPENSEARCH_MAPPING, OPENSEARCH_COMPILE_LIMITS } from './opensearch-compiler.js';
+export type { AuthorizedSearchContext, OpenSearchDsl, SearchCompileResult } from './opensearch-compiler.js';
