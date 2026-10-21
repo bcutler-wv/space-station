@@ -19,7 +19,10 @@ type Abortable = Promise<unknown> & { abort(): void };
 
 export class SearchEngineError extends Error {
   constructor(readonly kind: 'configuration' | 'transport' | 'timeout' | 'response' | 'status' | 'profile' | 'partial',
-    readonly statusCode?: number) { super(`Private search engine ${kind}.`); }
+    readonly statusCode?: number,
+    readonly check?: 'config' | 'query-role' | 'indexer-role' | 'role-mappings' | 'action-groups') {
+    super(`Private search engine ${kind}.`);
+  }
 }
 
 function assertEndpoint(value: string): string {
@@ -165,21 +168,35 @@ export function verifySecurityConfig(body: unknown): void {
   if (config._meta !== undefined && !sameJson(config._meta, { type: 'config', config_version: 2 }))
     throw new SearchEngineError('profile');
   delete config._meta; // The pinned document's type/version metadata carries no grants.
-  const dynamic = record(config.dynamic);
-  const authc = record(dynamic.authc);
-  const cert = record(authc.station_clientcert);
-  const backend = record(cert.authentication_backend);
-  const normalized = { ...dynamic, authc: { ...authc, station_clientcert: {
-    ...cert, authentication_backend: { ...backend } } } };
-  const normalizedBackend = record(record(record(normalized.authc).station_clientcert).authentication_backend);
-  if (normalizedBackend.config !== undefined && !sameJson(normalizedBackend.config, {}))
-    throw new SearchEngineError('profile');
-  delete normalizedBackend.config;
-  const expected = { authz: {}, auth_failure_listeners: {}, http: { anonymous_auth_enabled: false },
+  const dynamic = { ...record(config.dynamic) };
+  // Security 3.9.0.0 ConfigV7 materializes these constructor defaults in the
+  // REST response. DefaultObjectMapper omits null fields; ConfigV7 annotates
+  // sign_in_options NON_EMPTY. Reject every other field or value difference.
+  const internalProxies = [
+    String.raw`10\.\d{1,3}\.\d{1,3}\.\d{1,3}`,
+    String.raw`192\.168\.\d{1,3}\.\d{1,3}`,
+    String.raw`169\.254\.\d{1,3}\.\d{1,3}`,
+    String.raw`127\.\d{1,3}\.\d{1,3}\.\d{1,3}`,
+    String.raw`172\.1[6-9]{1}\.\d{1,3}\.\d{1,3}`,
+    String.raw`172\.2[0-9]{1}\.\d{1,3}\.\d{1,3}`,
+    String.raw`172\.3[0-1]{1}\.\d{1,3}\.\d{1,3}`,
+  ].join('|');
+  const expected = {
+    filtered_alias_mode: 'warn', disable_rest_auth: false, disable_intertransport_auth: false,
+    respect_request_indices_options: false, do_not_fail_on_forbidden: false,
+    multi_rolespan_enabled: true, hosts_resolver_mode: 'ip-only', do_not_fail_on_forbidden_empty: false,
+    privileges_evaluation_ignore_unauthorized_indices: true,
+    kibana: { multitenancy_enabled: true, private_tenant_enabled: true, default_tenant: '',
+      preferred_tenants: [], server_username: 'kibanaserver', index: '.kibana' },
+    http: { anonymous_auth_enabled: false,
+      xff: { enabled: false, internalProxies, remoteIpHeader: 'X-Forwarded-For' } },
     authc: { station_clientcert: { description: 'Station private client certificates', http_enabled: true,
-      transport_enabled: false, order: 0, http_authenticator: { type: 'clientcert', challenge: false,
-        config: { username_attribute: 'cn' } }, authentication_backend: { type: 'noop' } } } };
-  if (!sameJson(Object.keys(config), ['dynamic']) || !sameJson(normalized, expected)) throw new SearchEngineError('profile');
+      order: 0, http_authenticator: { type: 'clientcert', challenge: false,
+        config: { username_attribute: 'cn' } }, authentication_backend: { type: 'noop', config: {} } } },
+    authz: {}, auth_failure_listeners: {}, on_behalf_of: { enabled: false },
+    api_tokens: { enabled: false, max_tokens: 100, max_duration_seconds: 7_776_000 },
+  };
+  if (!sameJson(Object.keys(config), ['dynamic']) || !sameJson(dynamic, expected)) throw new SearchEngineError('profile');
 }
 function verifyRole(body: unknown, name: 'station_query' | 'station_indexer'): void {
   const root = record(body);
@@ -279,12 +296,20 @@ export async function openSearchAccess(input: { endpoint: string; identityDir: s
   const verifySecurity = async () => {
     if (input.role !== 'admin') throw new SearchEngineError('configuration');
     const get = (path: string) => json(options => client.transport.request({ method: 'GET', path }, options) as unknown as Abortable, 128_000);
-    verifySecurityConfig(await get('/_plugins/_security/api/securityconfig'));
+    const check = async (name: NonNullable<SearchEngineError['check']>, work: () => Promise<void>) => {
+      try { await work(); }
+      catch (error) {
+        if (error instanceof SearchEngineError) throw new SearchEngineError(error.kind, error.statusCode, name);
+        throw error;
+      }
+    };
+    await check('config', async () => verifySecurityConfig(await get('/_plugins/_security/api/securityconfig')));
     for (const name of ['station_query', 'station_indexer'] as const) {
-      verifyRole(await get(`/_plugins/_security/api/roles/${name}`), name);
+      await check(name === 'station_query' ? 'query-role' : 'indexer-role',
+        async () => verifyRole(await get(`/_plugins/_security/api/roles/${name}`), name));
     }
-    verifyAllRoleMappings(await get('/_plugins/_security/api/rolesmapping'));
-    verifyActionGroups(await get('/_plugins/_security/api/actiongroups'));
+    await check('role-mappings', async () => verifyAllRoleMappings(await get('/_plugins/_security/api/rolesmapping')));
+    await check('action-groups', async () => verifyActionGroups(await get('/_plugins/_security/api/actiongroups')));
   };
   const createProfile = async () => {
     if (input.role !== 'admin') throw new SearchEngineError('configuration');

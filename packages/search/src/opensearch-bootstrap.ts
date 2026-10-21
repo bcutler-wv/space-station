@@ -21,7 +21,7 @@ try {
   console.info('Private OpenSearch profile verified.');
 } catch (error) {
   const detail = error instanceof SearchEngineError ?
-    `${error.kind}${error.statusCode === undefined ? '' : `/${error.statusCode}`}` : 'unexpected';
+    `${error.check ? `${error.check}/` : ''}${error.kind}${error.statusCode === undefined ? '' : `/${error.statusCode}`}` : 'unexpected';
   console.error(`Private OpenSearch bootstrap failed: ${phase}/${detail}.`);
   process.exitCode = 1;
 } finally { await access?.close(); }

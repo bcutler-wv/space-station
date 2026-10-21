@@ -11,12 +11,27 @@ const profile = () => ({ [OPENSEARCH_PROFILE]: { mappings: OPENSEARCH_MAPPING, s
   mapping: { total_fields: { limit: '64' } }, uuid: 'abc_123', creation_date: '1234567890',
   provided_name: OPENSEARCH_PROFILE, version: { created: '139600' },
 } } } });
-const security = () => ({ config: { dynamic: { authz: {}, auth_failure_listeners: {},
-  http: { anonymous_auth_enabled: false }, authc: { station_clientcert: {
-    description: 'Station private client certificates', http_enabled: true, transport_enabled: false,
+// ConfigV7 serializes these pinned defaults after SecurityAdmin reads Station's
+// small YAML. transport_enabled is a deprecated ignored input in that model.
+const security = () => ({ config: { dynamic: {
+  filtered_alias_mode: 'warn', disable_rest_auth: false, disable_intertransport_auth: false,
+  respect_request_indices_options: false, do_not_fail_on_forbidden: false,
+  multi_rolespan_enabled: true, hosts_resolver_mode: 'ip-only', do_not_fail_on_forbidden_empty: false,
+  privileges_evaluation_ignore_unauthorized_indices: true,
+  kibana: { multitenancy_enabled: true, private_tenant_enabled: true, default_tenant: '',
+    preferred_tenants: [], server_username: 'kibanaserver', index: '.kibana' },
+  http: { anonymous_auth_enabled: false, xff: { enabled: false,
+    internalProxies: [String.raw`10\.\d{1,3}\.\d{1,3}\.\d{1,3}`,
+      String.raw`192\.168\.\d{1,3}\.\d{1,3}`, String.raw`169\.254\.\d{1,3}\.\d{1,3}`,
+      String.raw`127\.\d{1,3}\.\d{1,3}\.\d{1,3}`, String.raw`172\.1[6-9]{1}\.\d{1,3}\.\d{1,3}`,
+      String.raw`172\.2[0-9]{1}\.\d{1,3}\.\d{1,3}`, String.raw`172\.3[0-1]{1}\.\d{1,3}\.\d{1,3}`].join('|'),
+    remoteIpHeader: 'X-Forwarded-For' } },
+  authc: { station_clientcert: { description: 'Station private client certificates', http_enabled: true,
     order: 0, http_authenticator: { type: 'clientcert', challenge: false,
-      config: { username_attribute: 'cn' } }, authentication_backend: { type: 'noop' },
-  } } } } });
+      config: { username_attribute: 'cn' } }, authentication_backend: { type: 'noop', config: {} } } },
+  authz: {}, auth_failure_listeners: {}, on_behalf_of: { enabled: false },
+  api_tokens: { enabled: false, max_tokens: 100, max_duration_seconds: 7_776_000 },
+} } });
 const mappings = () => ({ station_query: { users: ['station-search-query'], backend_roles: [], hosts: [] },
   station_indexer: { users: ['station-search-indexer'], backend_roles: [], hosts: [] } });
 const result = () => ({ timed_out: false, _shards: { total: 1, successful: 1, failed: 0 },
@@ -38,6 +53,29 @@ test('security config and complete role mappings reject extra authority and fiel
   const authz = security();
   (authz.config.dynamic as Record<string, unknown>).authz = { ldap: { http_enabled: true } };
   rejected(() => verifySecurityConfig(authz));
+  for (const mutate of [
+    (value: ReturnType<typeof security>) => { value.config.dynamic.http.anonymous_auth_enabled = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.http.xff.enabled = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.http.xff.remoteIpHeader = 'X-User'; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.http.xff.internalProxies = '.*'; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.disable_rest_auth = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.disable_intertransport_auth = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.respect_request_indices_options = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.do_not_fail_on_forbidden = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.do_not_fail_on_forbidden_empty = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.multi_rolespan_enabled = false; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.on_behalf_of.enabled = true; },
+    (value: ReturnType<typeof security>) => { (value.config.dynamic.on_behalf_of as Record<string, unknown>).signing_key = 'extra'; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.api_tokens.enabled = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.api_tokens.max_tokens = 1_000; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.privileges_evaluation_ignore_unauthorized_indices = false; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.authc.station_clientcert.http_enabled = false; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.authc.station_clientcert.http_authenticator.challenge = true; },
+    (value: ReturnType<typeof security>) => { value.config.dynamic.authc.station_clientcert.authentication_backend.type = 'intern'; },
+    (value: ReturnType<typeof security>) => { (value.config.dynamic.authc as Record<string, unknown>).extra = { http_enabled: true }; },
+    (value: ReturnType<typeof security>) => { (value.config.dynamic as Record<string, unknown>).license = null; },
+    (value: ReturnType<typeof security>) => { (value.config.dynamic.kibana as Record<string, unknown>).sign_in_options = []; },
+  ]) { const changed = security(); mutate(changed); rejected(() => verifySecurityConfig(changed)); }
   const unknown = security();
   (unknown.config.dynamic as Record<string, unknown>).unexpected = true;
   rejected(() => verifySecurityConfig(unknown));

@@ -68,6 +68,9 @@ projection of the pinned Security plugin's [3.9.0.0 static action-group
 data](https://github.com/opensearch-project/security/blob/3.9.0.0/src/main/resources/static_config/static_action_groups.yml)
 under Apache-2.0. The source YAML SHA-256 is
 `0e0b87756f49cb31eaa1adb435da900335832bd77e9037753d241c6c8f9d8a54`.
+The strict retained-config verifier also projects constructor defaults and the
+deprecated `transport_enabled` handling from pinned
+[ConfigV7.java](https://github.com/opensearch-project/security/blob/3.9.0.0/src/main/java/org/opensearch/security/securityconf/impl/v7/ConfigV7.java).
 The tagged repository's `LICENSE.txt` and `NOTICE.txt` are retained at
 `packages/search/vendor/opensearch-security-LICENSE` and
 `packages/search/vendor/opensearch-security-NOTICE` (SHA-256
