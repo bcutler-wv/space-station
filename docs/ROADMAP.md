@@ -22,6 +22,8 @@ Each substep ends with Astra review and fixes before the next begins:
 
 ## M1: Gmail and the mail view
 
+**Accepted on 2026-10-21** at `eacea64` (0.34.1) after full Ubuntu run `39644248698` passed scaffold, process-recovery, integrated TLS browser and runtime jobs. See [M1 acceptance](M1_ACCEPTANCE.md) for tested scope and limits. M2 is next.
+
 Each M1 substep gets separate implementation, checks, Astra review and acceptance before the next begins:
 
 1. **First Orbit, privacy and navigation.** Confirm configured HTTPS origin, save one Orbit and explicit global/Orbit defaults and exclusions before any connector or sync; implement URL routing and decide live transport. Preserve the sample shell separately. Local checks and CI setup persistence/security gates apply.
@@ -191,3 +193,5 @@ The final M1 TLS browser journey is implemented and Astra-reviewed for version 0
 The first integrated Ubuntu run `39641770038` failed in the `m1-browser` job at initial import; scaffold and process-recovery passed. Its fresh fixture blob subdirectory was absent, and the worker could not store the first message. A local reproduction with the directory absent matched the checkpoint failure; test-only supervisor startup now creates that private directory, and a fresh PG15 TLS journey passes. The repair remains under Astra review and requires a new full green Ubuntu run before M1 acceptance.
 
 Version 0.34.1 fixes the integrated browser fixture’s missing private blob subdirectory. Fresh absent-root PostgreSQL 15 browser testing and independent startup/storage verification passed; Astra accepted the repair. The full Ubuntu rerun remains required before M1 acceptance.
+
+M1 integrated acceptance and the 0.34.1 fixture repair were accepted after full Ubuntu run `39644248698` passed at `eacea64`. The new real TLS browser journey and all existing gates are green. M2 may now begin.
