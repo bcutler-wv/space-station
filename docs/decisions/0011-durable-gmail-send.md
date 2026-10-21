@@ -1,0 +1,13 @@
+# Durable Gmail send
+
+## Decision
+
+An authenticated owner POST with exact configured Origin, CSRF token, draft revision and client UUID key reserves one outbound operation before external I/O. The reservation changes the draft to `sending` and writes a content-free audit intent. The server validates account, Orbit, recipient and reply scope, then copies only owned ready attachments into a bounded RFC 822 stream. It publishes the exact 12 MiB-or-less MIME bytes under a private reserved blob key and records the digest before claiming one Gmail send. The browser can recover operation status by draft ID after a lost response.
+
+The Gmail raw payload retains Bcc because Gmail routes Bcc from the raw header. No provider write occurs from draft creation, autosave, status GET or AI code. Credential-service database statements have three-second statement and 750-millisecond lock deadlines; a blocked refresh fails before the send claim and unlocks the draft. The claim records credential generation and commits before the official SDK call; SDK request retries are disabled. A timeout, disconnect, invalid success body or crash after claim is an unknown outcome. Recovery never sends again. A stale unclaimed preparation fails and unlocks the draft. Confirmed success moves the draft to immutable `sent` and detaches source attachments for collection. Reconciliation is an explicit POST that reads a small Sent candidate set, checks the exact RFC Message-ID, Gmail Sent label, account, sender, selected visible recipients and thread, then conditionally saves confirmation if credential generation and scope still match. No match remains unknown.
+
+Failed MIME blobs are collected after a one-minute grace, including publication before the ready bit commits. Confirmed MIME blobs are collected after 30 days. Unknown MIME blobs remain until a later explicit resolution policy. Draft attachments remain attached while a send owns the draft; the attachment collector also checks pending frozen references. Audit rows contain operation IDs and outcome names only.
+
+## Consequences
+
+One client key can never cause a second Gmail send. A failed preflight needs a new explicit key after the draft is corrected. An unknown outcome blocks editing that draft and needs manual Sent reconciliation; absence from Sent is not proof of nondelivery. Local MIME composition enforces the 12 MiB support boundary even though draft body and attachment storage have separate limits. The send UI and other provider actions remain separate M1 work.

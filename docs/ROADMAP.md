@@ -155,3 +155,5 @@ Draft attachment storage is implemented and Astra-reviewed for version 0.26.0, p
 Legacy reply metadata repair was accepted after full Ubuntu run `39524137665` passed at `f4aaa3d` (0.25.0), including PostgreSQL 16/Compose and browser gates. Attachment integration is separately pending.
 
 Attachment run `39525762004` failed during fixture directory creation, before attachment assertions. Version 0.26.1 makes repo-local artifact creation conditional when CI supplies a writable volume root; Astra accepted the narrow fix after explicit-root/read-only-cwd and default-root checks. Full integration remains pending.
+
+Durable Gmail send and reconciliation are implemented and Astra-reviewed for version 0.27.0, pending Ubuntu integration. Frozen MIME and a durable one-attempt claim prevent automatic resend after unknown outcomes. Independent review corrected credential database deadlines and verified provider evidence and crash recovery. See [the send record](sessions/gmail-send-backend.md). Compose UI and unresolved-send discovery are next.

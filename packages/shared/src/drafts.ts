@@ -35,7 +35,7 @@ export const replyContextSchema = z.object({ accountId: id, orbitId: id.nullable
   references: z.string().max(8192),
 }).strict();
 export const draftSchema = z.object({ ...contents.shape, id, accountId: id,
-  revision: z.number().int().positive(), state: z.enum(['editing', 'discarded']),
+  revision: z.number().int().positive(), state: z.enum(['editing', 'discarded', 'sending', 'sent']),
   threadId: id.nullable(), parentItemId: id.nullable(), orbitId: id.nullable(),
   createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
 }).strict();

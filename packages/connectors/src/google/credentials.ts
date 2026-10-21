@@ -5,6 +5,7 @@ import { GMAIL_MODIFY_SCOPE, type GoogleTransport } from './index.js';
 import { openSecret, sealSecret } from './secret-envelope.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
+type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 type CredentialCode = 'not_found' | 'needs_reconnect' | 'busy' | 'transient';
 export class GoogleCredentialError extends Error {
   constructor(readonly code: CredentialCode, readonly retryAfterMs?: number) { super(code); }
@@ -13,6 +14,13 @@ export class GoogleCredentialError extends Error {
 const context = (id: string, field: string) => `accounts/${id}/${field}`;
 const appContext = (id: string) => `oauth_apps/${id}/client_secret`;
 const eligible = (now: Date) => or(isNull(accounts.credentialLeaseUntil), lt(accounts.credentialLeaseUntil, now));
+
+function databaseError(error: unknown): GoogleCredentialError {
+  if (error instanceof GoogleCredentialError) return error;
+  const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : error;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined;
+  return code === '55P03' ? new GoogleCredentialError('busy', 1000) : new GoogleCredentialError('transient');
+}
 
 function classify(error: unknown): { permanent: boolean; retryAfterMs?: number } {
   if (!error || typeof error !== 'object') return { permanent: false };
@@ -97,8 +105,19 @@ export async function refreshGoogleGrant(input: RefreshInput): Promise<{
 export class GoogleCredentialService {
   constructor(private readonly db: Database, private readonly masterKey: Buffer, private readonly transport?: GoogleTransport) {}
 
+  private async bounded<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
+    try {
+      return await this.db.transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '3000ms'`);
+        await tx.execute(sql`set local lock_timeout = '750ms'`);
+        return work(tx);
+      });
+    } catch (error) { throw databaseError(error); }
+  }
+
   async get(accountId: string, rejected?: { generation: number; accessToken: string }): Promise<{ accessToken: string; expiresAt: Date | null; generation: number }> {
-    const [account] = await this.db.select().from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.provider, 'google')));
+    const [account] = await this.bounded((tx) => tx.select().from(accounts)
+      .where(and(eq(accounts.id, accountId), eq(accounts.provider, 'google'))));
     if (!account) throw new GoogleCredentialError('not_found');
     if (account.revokedAt) throw new GoogleCredentialError('needs_reconnect');
     if (rejected && account.credentialGeneration < rejected.generation)
@@ -111,12 +130,12 @@ export class GoogleCredentialService {
 
     // A reconnect increments the generation and clears this finite lease. No provider
     // request holds a database transaction, and an older response cannot persist.
-    const [lease] = await this.db.update(accounts).set({ credentialGeneration: sql`${accounts.credentialGeneration} + 1`,
+    const [lease] = await this.bounded((tx) => tx.update(accounts).set({ credentialGeneration: sql`${accounts.credentialGeneration} + 1`,
       credentialLeaseUntil: new Date(Date.now() + 45_000) }).where(and(eq(accounts.id, accountId),
       eq(accounts.credentialGeneration, account.credentialGeneration), isNull(accounts.revokedAt), eligible(new Date())))
-      .returning({ generation: accounts.credentialGeneration });
+      .returning({ generation: accounts.credentialGeneration }));
     if (!lease) {
-      const [current] = await this.db.select().from(accounts).where(eq(accounts.id, accountId));
+      const [current] = await this.bounded((tx) => tx.select().from(accounts).where(eq(accounts.id, accountId)));
       if (current?.revokedAt) throw new GoogleCredentialError('needs_reconnect');
       if (current && current.accessTokenExpiresAt && current.accessTokenExpiresAt.getTime() > Date.now() + 60_000) {
         const accessToken = await this.readAccess(current.encryptedAccessToken, accountId, current.credentialGeneration);
@@ -126,7 +145,7 @@ export class GoogleCredentialService {
       throw new GoogleCredentialError('busy', 1000);
     }
     try {
-      const [app] = await this.db.select().from(oauthApps).where(eq(oauthApps.id, account.appId));
+      const [app] = await this.bounded((tx) => tx.select().from(oauthApps).where(eq(oauthApps.id, account.appId)));
       if (!app) throw new GoogleCredentialError('needs_reconnect');
       let refreshToken: string;
       let clientSecret: string;
@@ -136,29 +155,29 @@ export class GoogleCredentialService {
       } catch { throw new GoogleCredentialError('needs_reconnect'); }
       const fresh = await refreshGoogleGrant({ clientId: app.clientId, clientSecret, redirectUri: app.redirectUri,
         refreshToken, ...(this.transport ? { transport: this.transport } : {}) });
-      const [saved] = await this.db.update(accounts).set({
+      const [saved] = await this.bounded((tx) => tx.update(accounts).set({
         encryptedAccessToken: sealSecret(fresh.accessToken, this.masterKey, context(accountId, 'access')),
         encryptedRefreshToken: sealSecret(fresh.refreshToken, this.masterKey, context(accountId, 'refresh')),
         accessTokenExpiresAt: fresh.expiresAt, grantedScopes: fresh.scopes ?? account.grantedScopes,
         credentialLeaseUntil: null, updatedAt: new Date(),
       }).where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, lease.generation), isNull(accounts.revokedAt)))
-        .returning({ id: accounts.id });
+        .returning({ id: accounts.id }));
       if (!saved) throw new GoogleCredentialError('busy', 1000);
       return { accessToken: fresh.accessToken, expiresAt: fresh.expiresAt, generation: lease.generation };
     } catch (error) {
       if (error instanceof GoogleCredentialError && error.code === 'needs_reconnect')
         return this.markNeedsReconnect(accountId, lease.generation);
-      await this.db.update(accounts).set({ credentialLeaseUntil: null }).where(and(eq(accounts.id, accountId),
-        eq(accounts.credentialGeneration, lease.generation)));
+      await this.bounded((tx) => tx.update(accounts).set({ credentialLeaseUntil: null }).where(and(eq(accounts.id, accountId),
+        eq(accounts.credentialGeneration, lease.generation))));
       if (error instanceof GoogleCredentialError) throw error;
       throw new GoogleCredentialError('transient');
     }
   }
 
   private async markNeedsReconnect(accountId: string, generation: number): Promise<never> {
-    const [marked] = await this.db.update(accounts).set({ revokedAt: new Date(), credentialLeaseUntil: null, updatedAt: new Date() })
+    const [marked] = await this.bounded((tx) => tx.update(accounts).set({ revokedAt: new Date(), credentialLeaseUntil: null, updatedAt: new Date() })
       .where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, generation), isNull(accounts.revokedAt)))
-      .returning({ id: accounts.id });
+      .returning({ id: accounts.id }));
     throw new GoogleCredentialError(marked ? 'needs_reconnect' : 'busy', marked ? undefined : 1000);
   }
 

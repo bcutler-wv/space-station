@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { blobIntents, draftAttachments, drafts } from './schema.js';
+import { blobIntents, draftAttachments, drafts, outboundOperations } from './schema.js';
 import type { openDatabase } from './connection.js';
 import { PrivateBlobStore } from './private-blob-store.js';
 
@@ -38,6 +38,11 @@ export async function collectDraftAttachmentBlobs(db: Database, store: PrivateBl
           await tx.update(draftAttachments).set({ state: 'ready', updatedAt: new Date() }).where(eq(draftAttachments.id, intent.id));
           return false;
         }
+        const [outbound] = await tx.select({ id: outboundOperations.id }).from(outboundOperations)
+          .where(and(eq(outboundOperations.draftId, intent.draftId), eq(outboundOperations.accountId, intent.accountId),
+            eq(outboundOperations.state, 'pending'), eq(outboundOperations.blobReady, false),
+            sql`${outboundOperations.attachmentRefs} @> ${JSON.stringify([intent.id])}::jsonb`)).limit(1);
+        if (outbound) return false;
         // Mail blobs own their own collector. A key collision or corrupt row
         // must never let this collector remove a sync-owned file.
         const [mailIntent] = await tx.select({ key: blobIntents.key }).from(blobIntents)

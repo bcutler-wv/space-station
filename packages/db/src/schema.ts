@@ -188,7 +188,7 @@ export const auditLog = pgTable('audit_log', {
   targetId: text('target_id').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account')`),
+  check('audit_log_action', sql`${table.action} in ('connect_account', 'reconnect_account', 'send_requested', 'send_succeeded', 'send_unknown', 'send_failed', 'send_reconciled')`),
 ]);
 
 // Mail keys include the account and provider collection at every relationship boundary.
@@ -355,7 +355,36 @@ export const drafts = pgTable('drafts', {
   foreignKey({ columns: [t.threadId, t.accountId, t.threadCollectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
   foreignKey({ columns: [t.parentItemId, t.accountId], foreignColumns: [items.id, items.accountId] }),
   check('drafts_revision_positive', sql`${t.revision} > 0`),
-  check('drafts_state', sql`${t.state} in ('editing', 'discarded')`),
+  check('drafts_state', sql`${t.state} in ('editing', 'discarded', 'sending', 'sent')`),
+]);
+
+// A committed row reserves the private MIME key before publication. Only a
+// ready, pending row may be claimed for the one provider call.
+export const outboundOperations = pgTable('outbound_operations', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull().references(() => users.id),
+  draftId: text('draft_id').notNull().references(() => drafts.id),
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  orbitId: text('orbit_id').references(() => orbits.id),
+  idempotencyKey: text('idempotency_key').notNull(), requestDigest: text('request_digest').notNull(),
+  draftRevision: integer('draft_revision').notNull(), state: text('state').notNull().default('pending'),
+  blobKey: text('blob_key').notNull().unique(), blobReady: boolean('blob_ready').notNull().default(false),
+  attachmentRefs: jsonb('attachment_refs').notNull().default([]),
+  blobCollectedAt: timestamp('blob_collected_at', { withTimezone: true }),
+  mimeDigest: text('mime_digest'), mimeBytes: integer('mime_bytes'),
+  messageId: text('message_id').notNull(), fromAddress: text('from_address').notNull(),
+  recipientAddresses: jsonb('recipient_addresses').notNull(),
+  providerThreadId: text('provider_thread_id'), providerResultId: text('provider_result_id'),
+  credentialGeneration: integer('credential_generation'),
+  attemptCount: integer('attempt_count').notNull().default(0), lastError: text('last_error'),
+  userActionAt: timestamp('user_action_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('outbound_operations_key_unique').on(t.ownerId, t.idempotencyKey),
+  index('outbound_operations_state_idx').on(t.state, t.updatedAt),
+  check('outbound_operations_state', sql`${t.state} in ('pending', 'in_flight', 'succeeded', 'failed', 'outcome_unknown')`),
+  check('outbound_operations_attempt', sql`${t.attemptCount} >= 0 and ${t.attemptCount} <= 1`),
+  check('outbound_operations_mime_size', sql`${t.mimeBytes} is null or (${t.mimeBytes} >= 0 and ${t.mimeBytes} <= 12582912)`),
 ]);
 
 // Draft-owned blobs have no sync page or provider lease. A pending row is a

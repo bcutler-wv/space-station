@@ -69,7 +69,7 @@ function validatedReplyMetadata(headers: readonly { name: string; value: string 
   if (!to || `${references ? `${references} ` : ''}${messageId}`.length > 8192) return null;
   return { messageId, references: references ?? null, to, from, replyTo: replyTo ?? null };
 }
-function storedReplyMetadata(value: unknown): ReplyMetadata | null {
+export function storedReplyMetadata(value: unknown): ReplyMetadata | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const keys = Object.keys(row);

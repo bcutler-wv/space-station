@@ -1,4 +1,4 @@
-import { collectDraftAttachmentBlobs, databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore } from '@station/db';
+import { collectDraftAttachmentBlobs, collectOutboundOperations, databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore } from '@station/db';
 import { GmailReadAdapter, GoogleCredentialService } from '@station/connectors';
 import { GmailSyncRunner } from './gmail-sync.js';
 import { makeBoss, PROBE_QUEUE, GMAIL_DISCOVER_QUEUE, GMAIL_SYNC_QUEUE, MAIL_BLOB_CLEANUP_QUEUE, DRAFT_BLOB_CLEANUP_QUEUE } from './queue.js';
@@ -43,8 +43,12 @@ await boss.work(MAIL_BLOB_CLEANUP_QUEUE, async () => {
   catch { throw new Error('Mail blob cleanup failed'); }
 });
 await boss.work(DRAFT_BLOB_CLEANUP_QUEUE, async () => {
-  try { await collectDraftAttachmentBlobs(database.db, new PrivateBlobStore('/var/lib/station/blobs')); }
-  catch { throw new Error('Draft blob cleanup failed'); }
+  const store = new PrivateBlobStore('/var/lib/station/blobs');
+  const results = await Promise.allSettled([
+    collectOutboundOperations(database.db, store),
+    collectDraftAttachmentBlobs(database.db, store),
+  ]);
+  if (results.some((result) => result.status === 'rejected')) throw new Error('Draft or outbound blob cleanup failed');
 });
 await boss.schedule(GMAIL_DISCOVER_QUEUE, '* * * * *', {}, { singletonKey: 'discovery' });
 await boss.schedule(MAIL_BLOB_CLEANUP_QUEUE, '*/5 * * * *', {}, { singletonKey: 'cleanup' });
