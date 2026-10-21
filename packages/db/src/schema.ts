@@ -251,6 +251,7 @@ export const items = pgTable('items', {
   sentAt: timestamp('sent_at', { withTimezone: true }), receivedAt: timestamp('received_at', { withTimezone: true }),
   internalAt: timestamp('internal_at', { withTimezone: true }), subject: text('subject'), snippet: text('snippet'),
   messageId: text('message_id'), inReplyTo: text('in_reply_to'), referencesHeader: text('references_header'),
+  replyMetadata: jsonb('reply_metadata'),
   bodyText: text('body_text'), bodyHtmlPath: text('body_html_path'), htmlPolicyVersion: integer('html_policy_version'),
   imageMetadata: jsonb('image_metadata'), flags: jsonb('flags').notNull().default({}),
   parseStatus: text('parse_status').notNull(), parseFailureCode: text('parse_failure_code'),

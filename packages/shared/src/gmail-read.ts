@@ -14,6 +14,8 @@ export const messageRef = z.object({ id, threadId: id });
 export const messagePage = z.object({ messages: z.array(messageRef).max(100).default([]), nextPageToken: token.optional(), resultSizeEstimate: positiveInt.optional() });
 export const metadata = z.object({ id, threadId: id, historyId, labelIds: labels.default([]), internalDate, sizeEstimate: positiveInt.optional() });
 export const minimalMessage = z.object({ id, threadId: id, historyId: historyId.optional(), labelIds: labels.default([]), internalDate: internalDate.optional(), sizeEstimate: positiveInt.optional() });
+export const replyHeadersMessage = z.object({ id, threadId: id, historyId: historyId.optional(),
+  payload: z.object({ headers: z.array(z.object({ name: z.string().min(1).max(64), value: z.string().max(8192) })).max(20) }) });
 // The transport caps the full JSON response. Leave room for a bounded oversize
 // raw field so the adapter can classify it as too_large after schema validation.
 export const rawMessage = metadata.extend({ raw: z.string().max(Math.ceil(MAIL_LIMITS.rawBytes / 3) * 4 + 64 * 1024).regex(/^[A-Za-z0-9_-]+={0,2}$/) });

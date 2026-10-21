@@ -253,6 +253,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           replyToIdentitiesComplete,
           internalAt: change.internalAt, receivedAt: change.receivedAt, sentAt: parsed?.date && !Number.isNaN(Date.parse(parsed.date)) ? new Date(parsed.date) : null,
           messageId: parsed?.messageId ?? null, inReplyTo: parsed?.inReplyTo ?? null, referencesHeader: parsed?.references ?? null,
+          replyMetadata: null,
           subject: parsed?.subject ?? null, snippet: change.snippet?.slice(0, 4096) ?? null, bodyText: parsed?.text ?? null,
           bodyHtmlPath: files?.html ?? null, htmlPolicyVersion: parsed?.sanitizedHtml ? MAIL_HTML_POLICY_VERSION : null,
           imageMetadata: parsed?.sanitizedHtml?.images ?? null, flags: change.flags,

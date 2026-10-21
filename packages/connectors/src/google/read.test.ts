@@ -22,6 +22,25 @@ const fixture = (reply: (url: URL, request: RequestInit) => Response | Promise<R
 };
 
 describe('Gmail read SDK transport', () => {
+  it('reads only bounded reply metadata with the fixed header allowlist and one token refresh', async () => {
+    const headers = [{ name: 'Message-ID', value: '<source@example.com>' }, { name: 'From', value: 'Sender <sender@example.com>' }];
+    const observed: string[] = [];
+    const { adapter, calls } = fixture((_url, request) => {
+      expect(request.redirect).toBe('error');
+      observed.push(new Headers(request.headers).get('authorization') ?? '');
+      return observed.length === 1 ? json({ error: 'expired' }, 401) : json({ id: 'abc', threadId: 'thread1', historyId: '4', payload: { headers } });
+    }, async (_id, rejected) => rejected ? { ...access, accessToken: 'fixture-fresh', generation: 2 } : access);
+    const result = await adapter.getReplyHeaders('account', 'abc');
+    expect(result).toMatchObject({ id: 'abc', credentialGeneration: 2, payload: { headers } });
+    expect(observed).toEqual(['Bearer fixture-token', 'Bearer fixture-fresh']);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.searchParams.get('format')).toBe('metadata');
+    expect(calls[0]?.searchParams.getAll('metadataHeaders')).toEqual(['Message-ID', 'In-Reply-To', 'References', 'Reply-To', 'From']);
+    const huge = fixture(() => json({ id: 'abc', threadId: 'thread1', payload: { headers: [{ name: 'From', value: 'x'.repeat(9000) }] } }));
+    await expect(huge.adapter.getReplyHeaders('account', 'abc')).rejects.toMatchObject({ code: 'invalid_response' });
+    const missing = fixture(() => json({ error: 'gone' }, 404));
+    await expect(missing.adapter.getReplyHeaders('account', 'abc')).rejects.toMatchObject({ code: 'message_missing' });
+  });
   it('requests explicit bounded pages and preserves opaque history cursors', async () => {
     const { adapter, calls } = fixture((url) => {
       if (url.pathname.endsWith('/profile')) return json({ emailAddress: 'owner@example.com', historyId: '9007199254740999' });

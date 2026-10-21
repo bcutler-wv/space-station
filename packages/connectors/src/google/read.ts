@@ -1,7 +1,7 @@
 import { gmail } from '@googleapis/gmail';
 import { OAuth2Client, type OAuth2ClientOptions } from 'google-auth-library';
 import { z } from 'zod';
-import { MAIL_LIMITS, id, historyId, token, profile, labelPage, messagePage, minimalMessage, rawMessage, historyPage,
+import { MAIL_LIMITS, id, historyId, token, profile, labelPage, messagePage, minimalMessage, replyHeadersMessage, rawMessage, historyPage,
   type GmailProfile, type GmailLabelPage, type GmailMessagePage, type GmailHistoryPage, type GmailMessageMetadata } from '@station/shared';
 import { GoogleCredentialError, GoogleCredentialService } from './credentials.js';
 
@@ -95,7 +95,7 @@ export class GmailReadAdapter {
 
   private async call<T>(accountId: string, kind: 'message' | 'history' | 'other', limit: number,
     request: (api: ReturnType<typeof gmail>, options: { timeout: number; retry: false; retryConfig: { retry: 0 }; signal: AbortSignal }) => Promise<{ data: unknown }>,
-    schema: z.ZodType<T>): Promise<T> {
+    schema: z.ZodType<T>, onCredential?: (generation: number) => void): Promise<T> {
     let credential: Awaited<ReturnType<GoogleCredentialService['get']>>;
     try { credential = await this.credentials.get(accountId); }
     catch (error) { throw classify(error, kind); }
@@ -110,6 +110,7 @@ export class GmailReadAdapter {
         const response = await request(api, { timeout: TIMEOUT_MS, retry: false, retryConfig: { retry: 0 }, signal: controller.signal });
         const parsed = schema.safeParse(response.data);
         if (!parsed.success) throw new GmailReadError('invalid_response');
+        onCredential?.(credential.generation);
         return parsed.data;
       } catch (error) {
         const response = error && typeof error === 'object' && 'response' in error ? error.response : undefined;
@@ -152,6 +153,15 @@ export class GmailReadAdapter {
     valid(id, messageId);
     const result = await this.call(accountId, 'message', MAX_METADATA_BYTES, (api, options) => api.users.messages.get({ userId: 'me', id: messageId, format: 'minimal' }, options), minimalMessage);
     return { ...result, trustedSent: result.labelIds.includes('SENT') };
+  }
+  getReplyHeaders(accountId: string, messageId: string) {
+    valid(id, messageId);
+    let credentialGeneration = -1;
+    return this.call(accountId, 'message', MAX_METADATA_BYTES, (api, options) => api.users.messages.get({
+      userId: 'me', id: messageId, format: 'metadata',
+      metadataHeaders: ['Message-ID', 'In-Reply-To', 'References', 'Reply-To', 'From'],
+    }, options), replyHeadersMessage, (generation) => { credentialGeneration = generation; })
+      .then((message) => ({ ...message, credentialGeneration }));
   }
   listHistory(accountId: string, input: { startHistoryId: string; pageToken?: string }): Promise<GmailHistoryPage> {
     valid(historyId, input.startHistoryId);

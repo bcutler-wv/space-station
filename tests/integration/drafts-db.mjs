@@ -18,7 +18,13 @@ const db = first.db;
 const origin = 'https://example.com';
 const key = Buffer.from(config.STATION_MASTER_KEY, 'base64');
 const store = authStore(db);
-const app = buildApp(async () => {}, undefined, { db, origin, masterKey: key, store }, { trustedProxyIp: '127.0.0.1' });
+let headerResponse = { id: 'legacy-provider', threadId: 'provider-thread', historyId: '4', credentialGeneration: 0,
+  payload: { headers: [{ name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: '"Example, Sender" <sender@example.com>' },
+    { name: 'Reply-To', value: '"Reply, Desk" <reply@example.com>' }] } };
+let onHeaderRead = async () => {};
+let headerReads = 0;
+const replyReader = { async getReplyHeaders() { headerReads++; await onHeaderRead(); return headerResponse; } };
+const app = buildApp(async () => {}, undefined, { db, origin, masterKey: key, store }, { trustedProxyIp: '127.0.0.1' }, undefined, undefined, replyReader);
 let cookie = '';
 const request = async (method, url, payload, csrf, headers = {}) => {
   const response = await app.inject({ method, url, ...(payload !== undefined ? { payload } : {}), remoteAddress: '127.0.0.1',
@@ -47,7 +53,7 @@ try {
   await db.insert(orbits).values([{ id: orbitA, name: 'Example A', slug: 'draft-a', colorSlot: 1, context: '', privacyDefaults: { index: 'deny', ai: 'deny' } },
     { id: orbitB, name: 'Example B', slug: 'draft-b', colorSlot: 2, context: '', privacyDefaults: { index: 'deny', ai: 'deny' } }]);
   await db.insert(oauthApps).values({ id: appId, provider: 'google', ownerId: 'owner', clientId: 'fixture', encryptedClientSecret: 'private-secret', redirectUri: `${origin}/api/google/callback` });
-  await db.insert(accounts).values([{ id: accountA, provider: 'google', appId, orbitId: orbitA, email: 'owner@example.com', encryptedRefreshToken: 'x', encryptedAccessToken: 'x', grantedScopes: [] },
+  await db.insert(accounts).values([{ id: accountA, provider: 'google', appId, orbitId: orbitA, email: 'owner@example.com', encryptedRefreshToken: 'x', encryptedAccessToken: 'x', grantedScopes: ['https://www.googleapis.com/auth/gmail.modify'] },
     { id: accountB, provider: 'google', appId, orbitId: orbitB, email: 'other@example.com', encryptedRefreshToken: 'x', encryptedAccessToken: 'x', grantedScopes: [] }]);
   await db.insert(threads).values({ id: threadA, accountId: accountA, collectionId: 'primary', externalId: 'provider-thread' });
   await db.insert(items).values({ id: itemA, accountId: accountA, collectionId: 'primary', threadId: threadA, externalId: 'provider-item', appliedSequence: 1,
@@ -135,5 +141,91 @@ try {
   await db.update(items).set({ replyToIdentitiesComplete: true, replyToHeaderCount: 0 }).where(eq(items.id, itemA));
   await db.update(items).set({ messageId: 'bad\r\nInjected: x' }).where(eq(items.id, itemA));
   assert.equal((await request('GET', `/api/mail/items/${itemA}/reply-context?accountId=${accountA}`)).statusCode, 409);
+  const legacy = id();
+  await db.insert(items).values({ id: legacy, accountId: accountA, collectionId: 'primary', threadId: threadA,
+    externalId: 'legacy-provider', providerRevision: '4', appliedSequence: 2, direction: 'in',
+    directionProvenance: 'incoming', parseStatus: 'supported', flags: {}, subject: 'Legacy' });
+  await db.insert(itemOrbits).values({ itemId: legacy, orbitId: orbitA, reason: 'account' });
+  await db.insert(itemRecipients).values({ itemId: legacy, accountId: accountA, identityId, role: 'sender' });
+  const replyPersonId = id(), replyIdentityId = id();
+  await db.insert(people).values({ id: replyPersonId, accountId: accountA, displayName: 'Example Reply' });
+  await db.insert(identities).values({ id: replyIdentityId, accountId: accountA, personId: replyPersonId,
+    provider: 'google', kind: 'email', normalizedValue: 'reply@example.com' });
+  await db.insert(itemRecipients).values({ itemId: legacy, accountId: accountA, identityId: replyIdentityId, role: 'reply_to' });
+  const legacyUrl = `/api/mail/items/${legacy}/reply-context?accountId=${accountA}&orbitId=${orbitA}`;
+  const beforeScope = headerReads;
+  assert.equal((await request('GET', `/api/mail/items/${legacy}/reply-context?accountId=${accountB}&orbitId=${orbitA}`)).statusCode, 409);
+  assert.equal((await request('GET', `/api/mail/items/${legacy}/reply-context?accountId=${accountA}&orbitId=${orbitB}`)).statusCode, 409);
+  assert.equal(headerReads, beforeScope);
+  const repaired = await request('GET', legacyUrl);
+  assert.equal(repaired.statusCode, 200, repaired.body);
+  assert.equal(repaired.json().messageId, '<legacy@example.com>');
+  assert.deepEqual(repaired.json().to, [{ address: 'reply@example.com', name: '' }]);
+  assert.equal((await request('POST', '/api/mail/drafts', { ...content, id: id(), creationKey: id(),
+    accountId: accountA, orbitId: orbitA, parentItemId: legacy, to: repaired.json().to }, csrf)).statusCode, 201);
+  assert.equal(headerReads, beforeScope + 1);
+  const snapshot = (await db.select().from(items).where(eq(items.id, legacy)))[0];
+  assert.equal(snapshot.messageId, null);
+  assert.equal(snapshot.replyMetadata.messageId, '<legacy@example.com>');
+  assert.equal(snapshot.senderIdentitiesComplete, false);
+  for (const corrupt of [
+    { messageId: '<legacy@example.com>', references: null, to: 'reply@example.com', unexpected: 'x'.repeat(100000) },
+    { messageId: '<legacy@example.com>', references: null, to: 'reply@example.com'.repeat(1000) },
+    { messageId: 'bad\r\nX: injected', references: null, to: 'reply@example.com' },
+    { messageId: '<legacy@example.com>', references: null, to: '<sender@example.com>' },
+    { messageId: '<legacy@example.com>', references: null, to: 'a,b@example.com' },
+  ]) {
+    await db.update(items).set({ replyMetadata: corrupt }).where(eq(items.id, legacy));
+    const priorReads = headerReads;
+    assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+    assert.equal(headerReads, priorReads);
+  }
+  await db.delete(itemRecipients).where(eq(itemRecipients.identityId, replyIdentityId));
+  await db.update(items).set({ replyMetadata: null }).where(eq(items.id, legacy));
+  headerResponse = { ...headerResponse, payload: { headers: [
+    { name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: 'Sender <sender@example.com>' }] } };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 200);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata.to, 'sender@example.com');
+  await db.update(items).set({ replyMetadata: null }).where(eq(items.id, legacy));
+  headerResponse = { ...headerResponse, payload: { headers: [
+    { name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'Message-ID', value: '<other@example.com>' },
+    { name: 'From', value: 'Sender <sender@example.com>' }] } };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  headerResponse = { ...headerResponse, payload: { headers: [
+    { name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: 'Sender <sender@example.com>' },
+    { name: 'Reply-To', value: 'valid@example.com, bad address' }] } };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  for (const headers of [
+    [{ name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: '<sender@example.com> <evil@example.com>' }],
+    [{ name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: 'Sender <sender@example.com>' },
+      { name: 'Reply-To', value: '<sender@example.com> <evil@example.com>' }],
+  ]) {
+    headerResponse = { ...headerResponse, payload: { headers } };
+    assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+    assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  }
+  headerResponse = { ...headerResponse, payload: { headers: [
+    { name: 'Message-ID', value: '<legacy@example.com>' }, { name: 'From', value: 'Sender <sender@example.com>' }] } };
+  onHeaderRead = async () => { throw new Error('fixture timeout with provider secret'); };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 503);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  onHeaderRead = async () => {};
+  headerResponse = { ...headerResponse, credentialGeneration: 3 };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  headerResponse = { ...headerResponse, credentialGeneration: 0 };
+  onHeaderRead = async () => { await db.delete(itemOrbits).where(eq(itemOrbits.itemId, legacy)); };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  await db.insert(itemOrbits).values({ itemId: legacy, orbitId: orbitA, reason: 'account' });
+  onHeaderRead = async () => { await db.update(items).set({ providerRevision: '5' }).where(eq(items.id, legacy)); };
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  assert.equal((await db.select().from(items).where(eq(items.id, legacy)))[0].replyMetadata, null);
+  onHeaderRead = async () => {};
+  await db.update(items).set({ deletedAt: new Date() }).where(eq(items.id, legacy));
+  const afterDelete = headerReads;
+  assert.equal((await request('GET', legacyUrl)).statusCode, 409);
+  assert.equal(headerReads, afterDelete);
   console.log('draft PG HTTP fixture passed');
 } finally { await app.close(); await first.close(); await second.close(); }

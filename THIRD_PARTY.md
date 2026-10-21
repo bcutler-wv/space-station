@@ -115,7 +115,7 @@ On 2026-10-19, checked the current package releases, installed TypeScript APIs, 
 | Package/version | Upstream repository | License evidence | Use |
 |---|---|---|---|
 | google-auth-library 11.3.1 | https://github.com/googleapis/google-cloud-node/tree/main/core/packages/google-auth-library-nodejs | Apache-2.0; installed LICENSE SHA-256 prefix `cfc7749b96f6` | OAuth2Client web flow, official PKCE S256, token exchange and refresh. Refresh event and returned-token behavior checked against current upstream and installed source on 2026-10-20. |
-| @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail profile identity and bounded read pages |
+| @googleapis/gmail 22.0.2 | https://github.com/googleapis/google-api-nodejs-client | Apache-2.0; installed manifest and upstream LICENSE, no bundled LICENSE | Gmail profile identity, bounded read pages and filtered reply metadata |
 
 For M1.3d on 2026-10-20, checked installed `gaxios` 8.3.1 source against https://github.com/googleapis/google-cloud-node/tree/main/core/packages/gaxios and its Apache-2.0 LICENSE (`cfc7749b96f6`). It is pinned transitively by the Google SDK in `pnpm-lock.yaml`. Its `maxContentLength` checks a response header before parsing but does not enforce a body byte limit for every fetch response, so the read adapter caps the stream in its fetch transport. The installed SDK path and Gmail REST methods were verified with fixture requests. `zod` 4.6.7, previously adopted in M0.1, remains a direct connector dependency for typed validation; provider response schemas live in `@station/shared`.
 
@@ -124,6 +124,8 @@ The Google SDK dependency tree includes `url-template` 2.0.8 from https://github
 ## Adopted in M1.3a
 
 On 2026-10-20, checked the published PostalMime 4.0.11 package, its TypeScript options (`maxNestingDepth`, `maxHeadersSize`, `maxPartCount`, `maxRfc822NestingDepth`, `maxForwardedAddresses`), package manifest, and bundled license. Its upstream is https://github.com/postalsys/postal-mime; the license is MIT-0 (bundled `LICENSE.txt` SHA-256 prefix `831ad54932cb`). The exact version is pinned in `pnpm-lock.yaml` and has an exact exception in the license gate. No upstream source was copied.
+
+The legacy reply repair reuses that pinned PostalMime address parser in the server for the small, filtered From and Reply-To header values. The installed `addressParser` export was checked on 2026-10-20; no new upstream package or copied parser was added.
 
 ## Adopted in M1.3b
 

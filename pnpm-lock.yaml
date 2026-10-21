@@ -92,6 +92,9 @@ importers:
       otplib:
         specifier: 13.5.0
         version: 13.5.0
+      postal-mime:
+        specifier: 4.0.11
+        version: 4.0.11
       sharp:
         specifier: 0.35.5
         version: 0.35.5(@types/node@22.15.30)
