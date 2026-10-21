@@ -59,10 +59,13 @@ jobs:
       - if: always()
         run: docker compose down -v --remove-orphans
 
-  meili-contract:
+  opensearch-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     needs: scaffold
+    env:
+      APP_UID: '1001'
+      APP_GID: '1001'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -73,17 +76,47 @@ jobs:
           node-version: '22.23.2'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: sudo sysctl -w vm.max_map_count=262144
       - run: node scripts/init-env.mjs
-      - run: docker compose --profile search up -d --build --wait meilisearch
-      - run: bash scripts/meili-container-gate.sh
-      - run: docker compose --profile search --profile fixture build meili-bootstrap search-contract
-      - run: docker compose --profile search run --rm -T --no-deps meili-bootstrap
-      - run: docker compose --profile fixture run --rm -T --no-deps search-contract
-      - run: '! docker compose --profile search port meilisearch 7700'
-      - if: failure()
-        run: docker compose --profile search logs --no-color --tail=100 meilisearch meili-bootstrap
+      - run: node scripts/init-search-security.mjs
+      - run: mkdir -p .cache/results
+      - run: docker compose --profile search --profile fixture build search-init search-profile-bootstrap search-contract search-profile-drift
+      - run: docker compose --profile search run --rm -T --no-deps search-init
+      - run: docker compose --profile search up -d --no-deps opensearch
+      - run: bash scripts/opensearch-container-gate.sh
+      - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+      - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
+      - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=initial search-contract
+      - run: docker compose --profile search restart opensearch
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=ready search-contract
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=retained search-contract
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=profile search-profile-drift
+      - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=restore search-profile-drift
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow search-profile-drift
+      - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+      - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow-restore search-profile-drift
+      - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
+      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
+      - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+      - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
       - if: always()
-        run: docker compose --profile search down -v --remove-orphans
+        run: |
+          mkdir -p .cache/results
+          docker compose --profile search logs --no-color --tail=100 opensearch search-security-bootstrap search-profile-bootstrap > .cache/results/opensearch-tail.log 2>&1 || true
+          tail -c 65536 .cache/results/opensearch-tail.log > .cache/results/opensearch-tail-bounded.log
+          mv .cache/results/opensearch-tail-bounded.log .cache/results/opensearch-tail.log
+          node scripts/check-search-logs.mjs .cache/results/opensearch-tail.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opensearch-runtime-failure
+          path: .cache/results/opensearch-tail.log
+          if-no-files-found: ignore
+      - if: always()
+        run: docker compose --profile search --profile fixture down -v --remove-orphans
 
   m1-browser:
     runs-on: ubuntu-latest

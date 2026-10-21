@@ -90,3 +90,7 @@ eligibility, generation/deletion fences, private runtime/credentials,
 mapping/version checks, complete-result handling, cutoff/timeout bounds and
 use-time policy revalidation. The proof's 10,000 fake-document latency is not
 an end-to-end typing result.
+
+The later private runtime candidate is recorded separately in
+[decision 0016](0016-opensearch-private-runtime.md); it does not revise this
+pure compiler contract or enable a live consumer.

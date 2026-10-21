@@ -1,0 +1,18 @@
+cluster.name: station-private-search
+node.name: opensearch
+discovery.type: single-node
+network.host: 0.0.0.0
+plugins.security.ssl.transport.pemcert_filepath: station-certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: station-certs/node.key
+plugins.security.ssl.transport.pemtrustedcas_filepath: station-certs/ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: true
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: station-certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: station-certs/node.key
+plugins.security.ssl.http.pemtrustedcas_filepath: station-certs/ca.pem
+plugins.security.ssl.http.clientauth_mode: REQUIRE
+plugins.security.authcz.admin_dn:
+  - CN=station-search-admin
+plugins.security.nodes_dn:
+  - CN=opensearch
+plugins.security.allow_default_init_securityindex: false

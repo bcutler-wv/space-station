@@ -1,4 +1,4 @@
-import { parseSearchQuery, type SearchNode } from './index.js';
+import { parseSearchQuery, type SearchNode } from './parser.js';
 
 export const OPENSEARCH_PROFILE = 'station-mail-v1' as const;
 function deepFreeze<T extends object>(value: T): Readonly<T> {

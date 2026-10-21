@@ -13,7 +13,7 @@
 | Database | PostgreSQL 16+ with pgvector | Drizzle ORM and Drizzle migrations |
 | Job queue | pg-boss | Postgres-backed, so no Redis container |
 | Validation | zod | Every API payload and every AI output |
-| Lexical search | OpenSearch 3.9.0 (intended M2 live engine; no live consumer yet) | Native full Boolean DSL with fuzzy/prefix and typed filters; private runtime still pending |
+| Lexical search | OpenSearch 3.9.0 (intended M2 live engine; no live consumer yet) | Native full Boolean DSL with fuzzy/prefix and typed filters; private mTLS runtime candidate awaits Ubuntu validation |
 | Embeddings | Local embedding service in its own container | Evaluate Hugging Face text-embeddings-inference and Ollama before M6 semantic search. OpenAI embeddings as an option. |
 | Attachment text | Apache Tika server, with Tesseract for OCR | |
 | Remote images | go-camo | Proxies remote images and hides the client IP; images remain blocked by default because unique URLs can reveal opens |
@@ -42,6 +42,7 @@ Settle evaluated choices before implementing the feature that uses them. M0.3 re
 - **mime-parser** is an internal-only service shared with the worker. It receives raw RFC822 bytes at a fixed address, spawns one killable child per request, and returns a bounded schema. Its service container has cgroup memory/CPU and PID limits, an unprivileged read-only filesystem, and no runtime secrets or persistent mounts. It has no published port and no outbound provider network. The worker may use the parser only after privacy gating.
   The same child now sanitizes decoded HTML with DOMPurify and jsdom before returning it. It returns policy-versioned HTML and inert image placeholders plus separately bounded image metadata. It never returns raw HTML. The reader must re-sanitize with the shared policy before display. The backend image route resolves only stored opaque references and signs URLs internally for an isolated go-camo service; the browser body component remains later work.
   The parser health endpoint reports service liveness; CI and worker calls exercise child parsing. A 512 MiB memory cgroup and 64 PID limit leave room for the service, two children, and a health probe; a one-core CPU quota limits sustained CPU use while the eight-second child deadline bounds elapsed parsing time. The whole HTTP request has an 8.5-second limit, and the worker client has a ten-second timeout. The quota was raised from half a core after an unchanged two-child near-cap HTML workload passed once and then timed out on another Ubuntu runner. CI repeats that workload three times and checks recovery, health, OOM counts, and restarts.
+- The optional **opensearch** profile has its own internal network and persistent index volume, with separate node, admin, query, and indexer certificates. Its one-shot security and profile bootstraps are separate from app and worker. The current app and worker have no search network attachment or search identity. This private runtime candidate has no live source ingestion or user query route; its Ubuntu isolation and role gate remains pending.
 - Everything except **app** has no published ports. Containers share a Compose bridge so future connectors can make outbound provider requests; ingress remains limited to the app's configured host binding.
 
 ## Repo layout

@@ -4,7 +4,7 @@ Search has to be excellent. It runs in three layers that work together, plus CAP
 
 ## 1. Instant lexical search
 
-- OpenSearch 3.9.0 is the chosen intended live lexical engine after the pinned fake-data Boolean/resource proof. Its pure query compiler and immutable mapping profile are M2 prerequisites; no live indexer, query endpoint or serving path has switched on yet. The earlier private Meilisearch foundation is historical and optional until a separately reviewed runtime replacement.
+- OpenSearch 3.9.0 is the chosen intended live lexical engine after the pinned fake-data Boolean/resource proof. Its pure query compiler and immutable mapping profile are M2 prerequisites. A private mTLS runtime, role-specific bounded SDK access and fake-data contract gate are Astra-reviewed and await Ubuntu validation. No live indexer, query endpoint or serving path has switched on yet. The earlier Meilisearch foundation is historical and no longer configured in Compose.
 - Unquoted free text uses one composite OpenSearch leaf: analyzed AND with edit distance one and at most 50 fuzzy expansions, OR analyzed AND with a final-term prefix. Negation wraps the same composite. Quoted free text uses ordered analyzed tokens with zero phrase slop; punctuation is not byte-exact. Automatic stemming is not promised.
 - Results appear as the user types, target under 100 ms.
 - Indexed fields: subject, body text, sender and recipient names and addresses, attachment filenames, attachment text, labels, Orbit, account, kind (email or chat).

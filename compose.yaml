@@ -145,79 +145,136 @@ services:
       - camo_egress
     restart: unless-stopped
 
-  meili-init:
+  search-init:
     profiles: [search]
     build: .
     user: "0:0"
-    entrypoint: ["sh", "-eu", "-c"]
-    command: ["install -d -m 700 -o 1000 -g 1000 /meili_data; chown 1000:1000 /meili_data; chmod 700 /meili_data"]
+    entrypoint: ["sh", "/app/ops/opensearch/install-private.sh"]
+    environment:
+      SEARCH_APP_GID: ${APP_GID:-1000}
     volumes:
-      - meili_data:/meili_data
+      - ./.cache/search-security:/source:ro
+      - opensearch_data:/search-data
+      - opensearch_config:/search-config
+      - search_security_state:/state
+      - search_node_certs:/node
+      - search_admin_certs:/admin
+      - search_query_certs:/query
+      - search_indexer_certs:/indexer
+      - search_outsider_certs:/outsider
     network_mode: none
     restart: "no"
 
-  meilisearch:
+  opensearch:
     profiles: [search]
-    image: getmeili/meilisearch:v1.55.0@sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c
+    image: opensearchproject/opensearch:3.9.0@sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c
     user: "1000:1000"
-    env_file:
-      - ./.cache/meilisearch.env
     environment:
-      MEILI_ENV: production
-      MEILI_NO_ANALYTICS: "true"
-      MEILI_DB_PATH: /meili_data/data.ms
-      MEILI_MAX_INDEXING_MEMORY: 256 MiB
-      MEILI_MAX_INDEXING_THREADS: "2"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
     volumes:
-      - meili_data:/meili_data
+      - opensearch_data:/usr/share/opensearch/data
+      - opensearch_config:/usr/share/opensearch/config
+      - search_node_certs:/usr/share/opensearch/config/station-certs:ro
+      - ./ops/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    # The official image can write its keystore/config in a private volume;
+    # the image root stays read-only. Compatibility is proved in Ubuntu CI.
     read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
+      - /tmp:rw,exec,nosuid,size=128m
+      - /usr/share/opensearch/logs:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2.0
+    networks:
+      - search_internal
+    depends_on:
+      search-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  search-security-bootstrap:
+    profiles: [search]
+    image: opensearchproject/opensearch:3.9.0@sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c
+    user: "1000:1000"
+    entrypoint: ["/bin/bash", "/run/station-bootstrap/bootstrap-security.sh"]
+    volumes:
+      - search_admin_certs:/run/station-admin:ro
+      - search_security_state:/run/station-state
+      - ./ops/opensearch/security:/run/station-security-config:ro
+      - ./ops/opensearch/bootstrap-security.sh:/run/station-bootstrap/bootstrap-security.sh:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,size=128m
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     pids_limit: 128
-    mem_limit: 1g
+    mem_limit: 512m
     cpus: 1.0
     networks:
       - search_internal
     depends_on:
-      meili-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7700/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-    restart: unless-stopped
+      opensearch:
+        condition: service_started
+    restart: "no"
 
-  meili-bootstrap:
+  search-profile-bootstrap:
     profiles: [search]
     build: .
-    command: ["node", "packages/search/dist/meili-bootstrap.js"]
-    env_file:
-      - ./.cache/meilisearch.env
+    user: "1000:1000"
+    command: ["node", "packages/search/dist/opensearch-bootstrap.js"]
     environment:
-      MEILI_HOST: http://meilisearch:7700
+      OPENSEARCH_URL: https://opensearch:9200
+      OPENSEARCH_IDENTITY_DIR: /run/station-admin
+    volumes:
+      - search_admin_certs:/run/station-admin:ro
     networks:
       - search_internal
     depends_on:
-      meilisearch:
-        condition: service_healthy
+      search-security-bootstrap:
+        condition: service_completed_successfully
     restart: "no"
 
   search-contract:
     build: .
-    command: ["node", "tests/integration/meili-contract.mjs"]
-    env_file:
-      - ./.cache/meilisearch.env
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    command: ["node", "tests/integration/opensearch-contract.mjs"]
     environment:
-      MEILI_HOST: http://meilisearch:7700
+      OPENSEARCH_URL: https://opensearch:9200
     networks:
       - search_internal
+    volumes:
+      - search_query_certs:/run/station-query:ro
+      - search_indexer_certs:/run/station-indexer:ro
+      - search_outsider_certs:/run/station-outsider:ro
     profiles:
       - fixture
+    depends_on:
+      search-profile-bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+
+  search-profile-drift:
+    profiles: [fixture]
+    build: .
+    user: "1000:1000"
+    group_add:
+      - "${APP_GID:-1000}"
+    command: ["node", "tests/integration/opensearch-profile-drift.mjs"]
+    environment:
+      OPENSEARCH_URL: https://opensearch:9200
+    networks:
+      - search_internal
+    volumes:
+      - search_admin_certs:/run/station-admin:ro
+      - search_query_certs:/run/station-query:ro
     restart: "no"
 
 networks:
@@ -230,4 +287,11 @@ networks:
 volumes:
   postgres_data:
   private_blobs:
-  meili_data:
+  opensearch_data:
+  opensearch_config:
+  search_node_certs:
+  search_admin_certs:
+  search_security_state:
+  search_query_certs:
+  search_indexer_certs:
+  search_outsider_certs:

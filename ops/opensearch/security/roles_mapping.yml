@@ -1,0 +1,9 @@
+_meta:
+  type: rolesmapping
+  config_version: 2
+station_query:
+  users:
+    - station-search-query
+station_indexer:
+  users:
+    - station-search-indexer

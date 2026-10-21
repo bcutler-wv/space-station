@@ -1,0 +1,41 @@
+# 0016: Private OpenSearch runtime foundation
+
+**Status:** source accepted after independent Astra review; Ubuntu container gate pending (2026-10-21).
+
+## Decision
+
+The intended M2 lexical engine is the official OpenSearch 3.9.0 image pinned by
+digest in Compose. The optional `search` profile keeps it on a dedicated
+internal network with no host port, 2 GiB memory, 1 GiB heap and two CPUs.
+The image retains its security plugin; demo initialization, anonymous auth and
+TLS verification bypasses are disabled. A create-only private CA issues
+different node, bootstrap administrator, query and indexer certificates.
+The node receives no CA private key or ordinary client identity. The app and
+worker receive no search credentials or network attachment in this slice.
+
+One networkless root init copies only the required role identities into
+group-restricted private volumes. First security initialization uses the
+official `securityadmin.sh` with a durable phase marker. A retained run checks
+authenticated security availability and never reapplies the YAML. A bounded
+administrator bootstrap verifies the client-certificate auth domain, intended
+roles, all role mappings, the pinned built-in action groups with no custom
+groups, engine version and complete fixed index
+mapping plus relevant semantic settings before it creates or accepts
+`station-mail-v1`. Unknown or altered state fails closed; repair is explicit.
+
+`@station/search` wraps the official JavaScript SDK with fixed-index,
+role-specific methods. The wrapper enforces an absolute request deadline
+through body decoding, SDK abort, a response byte cap, fatal UTF-8, no retry,
+no redirect/compression acceptance and complete-result checks. Its raw client
+is not exported. The current indexer methods only support the fake contract;
+future live publication needs source eligibility, version and deletion fences.
+
+## Limits
+
+The manual fake OpenSearch semantics/resource proof passed Ubuntu run
+[`39667416208`](https://github.com/bcutler-wv/space-station/actions/runs/39667416208).
+The separate private-image gate described here has not run on Ubuntu yet.
+Local checks cover certificate create-only behavior and actual SDK loopback
+fault transport; they cannot prove image entrypoint, security-role action
+names, read-only mount compatibility or retained index behavior. No live
+indexer, search API, serving permission or M2 acceptance is implied.

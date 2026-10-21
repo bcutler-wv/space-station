@@ -1,0 +1,22 @@
+_meta:
+  type: config
+  config_version: 2
+config:
+  dynamic:
+    authz: {}
+    auth_failure_listeners: {}
+    http:
+      anonymous_auth_enabled: false
+    authc:
+      station_clientcert:
+        description: Station private client certificates
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: clientcert
+          challenge: false
+          config:
+            username_attribute: cn
+        authentication_backend:
+          type: noop

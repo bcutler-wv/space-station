@@ -40,19 +40,21 @@ Checked pinned package versions and repository links against npm metadata and op
 | pgvector/pgvector:0.8.7-pg16-bookworm | https://github.com/pgvector/pgvector | PostgreSQL; upstream LICENSE | PostgreSQL 16 and vector extension |
 | node:22.23.2-bookworm-slim | https://github.com/nodejs/docker-node | MIT for image build repo; Node and Debian component licenses also apply | Build and runtime base image |
 
-## Adopted in M2 engine foundation
+## Historical M2 engine foundation (retired from current Compose)
 
-On 2026-10-21, verified the official Community release v1.55.0, its tagged MIT license and distinct Enterprise assets, the official Docker Hub Community image and immutable multi-platform index digest, and a checksum-verified Community Linux amd64 binary running with telemetry disabled. The exact SDK 0.62.0 npm tarball, installed MIT license, Node compatibility, named `Meilisearch` export and fixture APIs were inspected and exercised against that binary. The lockfile pins the SDK; the image digest pins the container. No source or index data is copied from upstream.
+On 2026-10-21, verified the official Community release v1.55.0, its tagged MIT license and distinct Enterprise assets, the official Docker Hub Community image and immutable multi-platform index digest, and a checksum-verified Community Linux amd64 binary running with telemetry disabled. The exact SDK 0.62.0 npm tarball, installed MIT license, Node compatibility, named `Meilisearch` export and fixture APIs were inspected and exercised against that binary. The former lockfile pinned the SDK, and the historical image digest pinned the container. No source or index data is copied from upstream.
 
 | Package/image version | Upstream repository | License and integrity evidence | Use |
 |---|---|---|---|
-| getmeili/meilisearch CE v1.55.0 | https://github.com/meilisearch/meilisearch/tree/v1.55.0 | MIT [tagged license](https://github.com/meilisearch/meilisearch/blob/v1.55.0/LICENSE-MIT); Docker Hub image index `sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c`; official Linux amd64 Community binary SHA-256 `7e33f5889235f14290074a19a6d3574bd9b10fb2ee8731eabb7dafd0714b0513` | Private lexical engine foundation and fake contract gate; no live ingestion yet |
-| meilisearch JS SDK 0.62.0 | https://github.com/meilisearch/meilisearch-js/tree/v0.62.0 | MIT installed LICENSE SHA-256 prefix `f38718a82ebe`; npm tarball SHA-512 `fc44c35bb9a6588d8d7129ad25d4cf85b8ec21bb3755cb9aa6ccd7e57e8985d1c1d176ecccf3a1a9ddc40766c4ca52f41caedd83087fe19dcc772bb271655fe4` | Pinned client, bounded transport/bootstrap and fake engine fixture |
+| getmeili/meilisearch CE v1.55.0 | https://github.com/meilisearch/meilisearch/tree/v1.55.0 | MIT [tagged license](https://github.com/meilisearch/meilisearch/blob/v1.55.0/LICENSE-MIT); Docker Hub image index `sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c`; official Linux amd64 Community binary SHA-256 `7e33f5889235f14290074a19a6d3574bd9b10fb2ee8731eabb7dafd0714b0513` | Historical fake engine proof; no live ingestion was enabled |
+| meilisearch JS SDK 0.62.0 | https://github.com/meilisearch/meilisearch-js/tree/v0.62.0 | MIT installed LICENSE SHA-256 prefix `f38718a82ebe`; npm tarball SHA-512 `fc44c35bb9a6588d8d7129ad25d4cf85b8ec21bb3755cb9aa6ccd7e57e8985d1c1d176ecccf3a1a9ddc40766c4ca52f41caedd83087fe19dcc772bb271655fe4` | Historical bounded transport/bootstrap and fake engine fixture; no longer installed by current lock |
 
-## Test-only M2 OpenSearch comparison and intended future engine
+## M2 OpenSearch comparison and private runtime candidate
 
-The official `@opensearch-project/opensearch` 3.9.0 client is a **root dev
-dependency used only by the manual fake-data proof**. Its published Apache-2.0
+The official `@opensearch-project/opensearch` 3.9.0 client is pinned both as a
+`@station/search` runtime dependency and as a root dev dependency for the
+independent manual fake-data proof. The private mTLS runtime is pending Ubuntu
+acceptance; no live consumer uses it. Its published Apache-2.0
 `LICENSE.txt` SHA-256 is
 `43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1`;
 the committed pnpm lock pins npm integrity
@@ -61,16 +63,29 @@ The [official client release](https://github.com/opensearch-project/opensearch-j
 and [tagged license](https://raw.githubusercontent.com/opensearch-project/opensearch-js/3.9.0/LICENSE.txt)
 were checked on 2026-10-21.
 
-The manual workflow pins the official OpenSearch 3.9.0 Linux image index
+`packages/search/src/opensearch-static-action-groups.ts` is a narrow
+projection of the pinned Security plugin's [3.9.0.0 static action-group
+data](https://github.com/opensearch-project/security/blob/3.9.0.0/src/main/resources/static_config/static_action_groups.yml)
+under Apache-2.0. The source YAML SHA-256 is
+`0e0b87756f49cb31eaa1adb435da900335832bd77e9037753d241c6c8f9d8a54`.
+The tagged repository's `LICENSE.txt` and `NOTICE.txt` are retained at
+`packages/search/vendor/opensearch-security-LICENSE` and
+`packages/search/vendor/opensearch-security-NOTICE` (SHA-256
+`c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`
+and `2dc932397aef59f151b238e35ae9e94ecd0b5f1567e088d8317cba6b10eab806`).
+It lets retained-security verification reject any custom action group,
+including a group shadowing a literal role action. No plugin code is copied.
+
+The manual proof and optional private Compose profile pin the official OpenSearch 3.9.0 Linux image index
 `sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c`.
 Its [tagged release](https://github.com/opensearch-project/OpenSearch/releases/tag/3.9.0)
 and [Apache-2.0 license](https://raw.githubusercontent.com/opensearch-project/OpenSearch/3.9.0/LICENSE.txt)
 were checked on 2026-10-21. The pinned image passed the manual fake-data
 Ubuntu proof `39667416208` within its stated resource budget, and OpenSearch
-is selected as the intended future lexical engine. The packaged image closure
-and production private-runtime controls still require separate review. No
-image is installed in Station or pulled on agent-dev; the SDK remains
-test-only and there is no live search consumer yet.
+is selected as the intended future lexical engine. The private-runtime
+candidate is still awaiting actual Ubuntu isolation, security and retention
+validation. No image is pulled on agent-dev, and there is no live search
+consumer yet.
 
 ## Planned dependencies
 

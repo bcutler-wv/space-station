@@ -6,6 +6,8 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 
+M2 search work has a pure OpenSearch query compiler and an Astra-reviewed private runtime foundation awaiting Ubuntu validation. The current Mail UI still uses its existing subject filter; no search indexer or result-serving path is enabled.
+
 ## Planned product
 
 - **Mission Control.** A morning briefing, today's meetings from every calendar on one timeline (with cross-account conflicts flagged), a ranked list of what needs you and why, a prep sheet for your next meeting, and a weekly task board.

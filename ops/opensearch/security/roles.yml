@@ -1,0 +1,29 @@
+_meta:
+  type: roles
+  config_version: 2
+station_query:
+  cluster_permissions:
+    - cluster:monitor/main
+    - cluster:monitor/health
+  index_permissions:
+    - index_patterns:
+        - station-mail-v1
+      allowed_actions:
+        - indices:data/read/search
+        - indices:data/read/get
+        - indices:admin/get
+        - indices:admin/mappings/get
+station_indexer:
+  cluster_permissions:
+    - cluster:monitor/main
+    - cluster:monitor/health
+    - indices:data/write/bulk*
+  index_permissions:
+    - index_patterns:
+        - station-mail-v1
+      allowed_actions:
+        - indices:data/write/index
+        - indices:data/write/delete
+        - indices:data/write/bulk*
+        - indices:admin/get
+        - indices:admin/mappings/get
