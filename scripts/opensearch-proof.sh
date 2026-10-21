@@ -60,7 +60,7 @@ docker run --detach --name "$name" --network "$network" --network-alias station-
   --label "station-proof=$name" \
   --user 1000:1000 --memory 2g --memory-swap 2g --cpus 2 --pids-limit 512 \
   --cap-drop ALL --security-opt no-new-privileges \
-  --ulimit nofile=65536:65536 --tmpfs /tmp:rw,nosuid,size=128m \
+  --ulimit nofile=65536:65536 --tmpfs /tmp:rw,exec,nosuid,size=128m \
   --volume "$volume:/usr/share/opensearch/data" \
   --env 'discovery.type=single-node' \
   --env 'DISABLE_INSTALL_DEMO_CONFIG=true' \
@@ -74,11 +74,22 @@ docker inspect --format '{{json .NetworkSettings.Ports}}' "$name" > "$artifact/p
 test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$name")" = "$network"
 test "$(docker inspect --format '{{.HostConfig.Memory}}' "$name")" = 2147483648
 test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$name")" = 2000000000
+test "$(docker inspect --format '{{index .HostConfig.Tmpfs "/tmp"}}' "$name")" = 'rw,exec,nosuid,size=128m'
 test "$(docker network inspect --format '{{.Internal}}' "$network")" = true
 test "$(docker inspect --format '{{.Config.User}}' "$name")" = '1000:1000'
 test "$(docker port "$name" | wc -l)" -eq 0
 engine_started_at="$(date -u -d "$(docker inspect --format '{{.State.StartedAt}}' "$name")" +%s%3N)"
 printf '%s\n' "$engine_started_at" > "$artifact/engine-started-at-ms.txt"
+
+# Catch immediate JVM bootstrap failures before the client spends the full
+# readiness window retrying a DNS name whose container has already exited.
+for _ in $(seq 1 8); do
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$name")" != true ]]; then
+    printf 'OpenSearch proof engine exited during bootstrap; see bounded engine state/log artifacts.\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 (
   for _ in $(seq 1 600); do
