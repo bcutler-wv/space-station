@@ -6,7 +6,7 @@ import { evaluatePrivacy, privacyDefaultsSchema, type ScopedPrivacyRule, type Pr
 import { z } from 'zod';
 import { openDatabase } from './connection.js';
 import { PrivateBlobStore } from './private-blob-store.js';
-import { accounts, attachments, blobIntents, exclusionRules, identities, itemLabels, itemOrbits, itemRecipients, items, labels, orbits, people, settings, syncPages, syncStates, threads } from './schema.js';
+import { accounts, attachments, blobIntents, exclusionRules, identities, itemLabels, itemOrbits, itemRecipients, items, labels, mailChangeOperations, orbits, people, settings, syncPages, syncStates, threads } from './schema.js';
 import { appendSyncEvent } from './sync-events.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
@@ -17,6 +17,8 @@ export type MailChange = {
   internalAt: Date | null; receivedAt: Date | null; snippet: string | null; // receivedAt is an observation time, excluded from replay identity.
   flags: Record<string, boolean>; labelRefs: readonly { ref: string; name: string | null }[];
   providerSent: boolean; deleted: boolean; parsed: ParseResult | null;
+  // Captured before the provider item read, never inferred from page commit time.
+  observedActionEpoch?: number | null; observedCredentialGeneration?: number | null;
   // Explicit routed membership is determined before application; the account Orbit is added here.
   routedOrbitIds: readonly string[];
 };
@@ -118,6 +120,8 @@ function validPage(page: MailPage): void {
       snippet: z.string().max(4096).nullable(), flags: z.record(z.string().max(64), z.boolean()),
       labelRefs: z.array(z.object({ ref: z.string().min(1).max(1024), name: z.string().max(1024).nullable() })).max(100),
       providerSent: z.boolean(), deleted: z.boolean(), parsed: parseResultSchema.nullable(),
+      observedActionEpoch: z.number().int().nonnegative().nullable().optional(),
+      observedCredentialGeneration: z.number().int().nonnegative().nullable().optional(),
       routedOrbitIds: z.array(z.string().uuid()).max(32), })).max(500) }).strict();
   pageShape.parse(page);
   if (!Number.isSafeInteger(page.expectedSequence) || !Number.isSafeInteger(page.expectedLeaseGeneration) || !Number.isSafeInteger(page.expectedCredentialGeneration)) throw new Error('Invalid mail page fence');
@@ -127,6 +131,9 @@ function validPage(page: MailPage): void {
     keys.add(change.externalId);
     if (change.providerRevision !== null && change.providerRevision.length > 1024) throw new Error('Invalid provider revision');
     if (change.deleted && change.parsed !== null) throw new Error('Deleted item carries content');
+    if ((change.observedActionEpoch == null) !== (change.observedCredentialGeneration == null)) throw new Error('Incomplete provider observation');
+    if (change.observedCredentialGeneration != null && change.observedCredentialGeneration !== page.expectedCredentialGeneration) throw new Error('Observation credential changed');
+    if ((!change.parsed?.ok || change.deleted) && change.observedActionEpoch != null) throw new Error('Unsupported item has provider observation');
     if (!change.deleted && (!change.parsed || !parseResultSchema.safeParse(change.parsed).success)) throw new Error('Missing or invalid parse result');
     if (change.parsed && !change.parsed.ok && ['timeout', 'busy', 'service_unavailable'].includes(change.parsed.code)) throw new Error('Transient parser failure');
     if (change.parsed?.ok) {
@@ -217,6 +224,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
         signal?.throwIfAborted();
         const parsed = change.parsed?.ok ? change.parsed.mail : null;
         const [prior] = await tx.select().from(items).where(and(eq(items.accountId, page.accountId), eq(items.collectionId, page.collectionId), eq(items.externalId, change.externalId)));
+        if (change.observedActionEpoch != null && change.observedActionEpoch > (prior?.actionEpoch ?? 0)) throw new MailPageFenceError();
         const threadExternalId = change.threadExternalId ?? `tombstone:${change.externalId}`;
         let [thread] = change.deleted && !change.threadExternalId && prior
           ? await tx.select().from(threads).where(eq(threads.id, prior.threadId))
@@ -246,6 +254,8 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
         const files = staged.get(change.externalId);
         const values = { accountId: page.accountId, collectionId: page.collectionId, threadId: thread.id,
           externalId: change.externalId, providerRevision: change.providerRevision, appliedSequence: page.expectedSequence + 1,
+          observedActionEpoch: parsed ? change.observedActionEpoch ?? null : null,
+          observedCredentialGeneration: parsed ? change.observedCredentialGeneration ?? null : null,
           direction, directionProvenance: direction === 'out' ? 'provider_sent_account' : 'incoming', fromPersonId: fromRow?.personId ?? null,
           senderIdentitiesComplete,
           senderHeaderCount: parsed?.senderIdentities.length ?? 0,
@@ -311,18 +321,24 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
   });
 }
 
-// Consumers re-evaluate this at use time; no cached grant survives a rule edit.
-export async function evaluateStoredMailPrivacy(db: Database, itemId: string) {
-  const [item] = await db.select().from(items).where(eq(items.id, itemId));
-  if (!item || item.deletedAt || item.parseStatus !== 'supported') return { canIndex: false, canUseAi: false, canEmbed: false };
-  const [account] = await db.select().from(accounts).where(eq(accounts.id, item.accountId));
+const DENIED = { canIndex: false, canUseAi: false, canEmbed: false } as const;
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+
+async function evaluateStoredMailPrivacySnapshot(db: Transaction, itemId: string) {
+  const [item] = await db.select({ accountId: items.accountId, deletedAt: items.deletedAt,
+    parseStatus: items.parseStatus, senderIdentitiesComplete: items.senderIdentitiesComplete })
+    .from(items).where(eq(items.id, itemId));
+  if (!item || item.deletedAt || item.parseStatus !== 'supported') return DENIED;
+  const [account] = await db.select({ email: accounts.email, orbitId: accounts.orbitId }).from(accounts).where(eq(accounts.id, item.accountId));
   const [marker] = await db.select({ value: settings.value }).from(settings).where(eq(settings.key, 'first_orbit_setup_v1'));
-  const defaults = z.object({ globalDefaults: privacyDefaultsSchema }).safeParse(marker?.value);
-  if (!account || !defaults.success) return { canIndex: false, canUseAi: false, canEmbed: false };
-  const memberships = await db.select().from(itemOrbits).where(eq(itemOrbits.itemId, itemId));
+  const defaults = z.object({ version: z.literal(1), orbitId: z.string().uuid(), confirmedOrigin: z.url(),
+    globalDefaults: privacyDefaultsSchema }).safeParse(marker?.value);
+  if (!account || !defaults.success) return DENIED;
+  const memberships = await db.select({ orbitId: itemOrbits.orbitId }).from(itemOrbits).where(eq(itemOrbits.itemId, itemId)).limit(65);
+  if (memberships.length > 64) return DENIED;
   const orbitIds = [...new Set(memberships.map((row) => row.orbitId))];
-  if (!orbitIds.includes(account.orbitId)) return { canIndex: false, canUseAi: false, canEmbed: false };
-  const orbitRows = await db.select().from(orbits).where(inArray(orbits.id, orbitIds));
+  if (!orbitIds.includes(account.orbitId)) return DENIED;
+  const orbitRows = await db.select({ id: orbits.id, privacyDefaults: orbits.privacyDefaults }).from(orbits).where(inArray(orbits.id, orbitIds));
   const orbitDefaults = new Map<string, PrivacyDefaults>();
   for (const row of orbitRows) {
     const parsed = privacyDefaultsSchema.safeParse(row.privacyDefaults);
@@ -330,11 +346,15 @@ export async function evaluateStoredMailPrivacy(db: Database, itemId: string) {
   }
   const recipientRows = await db.select({ role: itemRecipients.role, value: identities.normalizedValue }).from(itemRecipients)
     .innerJoin(identities, and(eq(itemRecipients.identityId, identities.id), eq(itemRecipients.accountId, identities.accountId)))
-    .where(eq(itemRecipients.itemId, itemId));
+    .where(eq(itemRecipients.itemId, itemId)).limit(257);
   const labelRows = await db.select({ name: labels.name }).from(itemLabels)
     .innerJoin(labels, and(eq(itemLabels.labelId, labels.id), eq(itemLabels.accountId, labels.accountId)))
-    .where(eq(itemLabels.itemId, itemId));
-  const rules = await db.select().from(exclusionRules);
+    .where(eq(itemLabels.itemId, itemId)).limit(257);
+  const rules = await db.select({ orbitId: exclusionRules.orbitId, kind: exclusionRules.kind,
+    value: exclusionRules.value, effect: exclusionRules.effect }).from(exclusionRules)
+    .where(sql`${exclusionRules.orbitId} is null or ${exclusionRules.orbitId} in (${sql.join(orbitIds.map((id) => sql`${id}`), sql`, `)})`)
+    .limit(1001);
+  if (recipientRows.length > 256 || labelRows.length > 256 || rules.length > 1000) return DENIED;
   return evaluatePrivacy({ account: account.email, sender: recipientRows.find((row) => row.role === 'sender')?.value ?? '',
     senderIdentities: recipientRows.filter((row) => row.role === 'sender').map((row) => row.value), unresolvedSenders: !item.senderIdentitiesComplete,
     labels: labelRows.map((row) => row.name), unresolvedLabels: labelRows.some((row) => !row.name), orbitIds },
@@ -342,6 +362,47 @@ export async function evaluateStoredMailPrivacy(db: Database, itemId: string) {
       orbitId: row.orbitId, scope: row.orbitId ? 'orbit' : 'global', kind: row.kind as ScopedPrivacyRule['kind'],
       value: row.value, effect: row.effect as ScopedPrivacyRule['effect'],
     })));
+}
+
+const privacySnapshot = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
+async function boundPrivacySnapshot(tx: Transaction) {
+  await tx.execute(sql`set local statement_timeout = '3000ms'`);
+  await tx.execute(sql`set local lock_timeout = '750ms'`);
+}
+
+// This is source policy only; derived consumers must use the causal gate below.
+export async function evaluateStoredMailPrivacy(db: Database, itemId: string) {
+  return db.transaction(async (tx) => {
+    await boundPrivacySnapshot(tx);
+    return evaluateStoredMailPrivacySnapshot(tx, itemId);
+  }, privacySnapshot);
+}
+
+// A grant is current only inside this transaction. Later index publication and
+// serving must recheck it; a cached result cannot survive an action or rule edit.
+export async function evaluateDerivedMailEligibility(db: Database, itemId: string) {
+  return db.transaction(async (tx) => {
+    await boundPrivacySnapshot(tx);
+    const [item] = await tx.select({ accountId: items.accountId, deletedAt: items.deletedAt,
+      parseStatus: items.parseStatus, actionEpoch: items.actionEpoch,
+      observedActionEpoch: items.observedActionEpoch,
+      observedCredentialGeneration: items.observedCredentialGeneration })
+      .from(items).where(eq(items.id, itemId));
+    if (!item || item.deletedAt || item.parseStatus !== 'supported' ||
+      item.observedActionEpoch === null || item.observedActionEpoch !== item.actionEpoch ||
+      item.observedCredentialGeneration === null) return DENIED;
+    const [account] = await tx.select({ provider: accounts.provider, revokedAt: accounts.revokedAt,
+      backfill: accounts.backfill, grantedScopes: accounts.grantedScopes,
+      credentialGeneration: accounts.credentialGeneration }).from(accounts).where(eq(accounts.id, item.accountId));
+    if (!account || account.provider !== 'google' || account.revokedAt || !account.backfill ||
+      !account.grantedScopes.includes(GMAIL_SCOPE) ||
+      account.credentialGeneration !== item.observedCredentialGeneration) return DENIED;
+    const [unresolved] = await tx.select({ id: mailChangeOperations.id }).from(mailChangeOperations)
+      .where(and(eq(mailChangeOperations.itemId, itemId),
+        sql`${mailChangeOperations.state} in ('pending', 'in_flight', 'outcome_unknown')`)).limit(1);
+    if (unresolved) return DENIED;
+    return evaluateStoredMailPrivacySnapshot(tx, itemId);
+  }, privacySnapshot);
 }
 
 // Bounded collector. A row lock serializes with publication and page commit;

@@ -178,7 +178,10 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
         const [observed] = await tx.update(mailChangeOperations).set({ state: 'succeeded', confirmation: 'observed',
           completedAt: new Date(), updatedAt: new Date() }).where(and(eq(mailChangeOperations.id, row.id),
           eq(mailChangeOperations.state, 'pending'))).returning();
-        if (observed) await audit(tx, 'mail_change_observed', observed.id);
+        if (observed) {
+          await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, itemId));
+          await audit(tx, 'mail_change_observed', observed.id);
+        }
         return observed ?? false;
       }
       const [updated] = await tx.update(mailChangeOperations).set({ state: 'in_flight', attemptCount: 1,
@@ -199,13 +202,16 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
           scopes: accounts.grantedScopes })
           .from(accounts).where(eq(accounts.id, accountId)).limit(1);
         const [item] = await tx.select({ id: items.id }).from(items).where(and(eq(items.id, itemId), eq(items.accountId, accountId),
-          isNull(items.deletedAt), visible(orbitId ?? null))).limit(1);
+          isNull(items.deletedAt), visible(orbitId ?? null))).for('update').limit(1);
         if (!account || account.revokedAt || account.generation !== credential.generation ||
           !account.scopes.includes(GMAIL_MODIFY_SCOPE) || !item) return null;
         const [saved] = await tx.update(mailChangeOperations).set({ state: 'succeeded', confirmation: 'provider',
           completedAt: new Date(), updatedAt: new Date() }).where(and(eq(mailChangeOperations.id, row.id),
           eq(mailChangeOperations.state, 'in_flight'))).returning();
-        if (saved) await audit(tx, 'mail_change_confirmed', saved.id);
+        if (saved) {
+          await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, itemId));
+          await audit(tx, 'mail_change_confirmed', saved.id);
+        }
         return saved;
       });
       return completed ? status(completed) : reply.code(202).send({ ...status(row), state: 'outcome_unknown',
@@ -318,7 +324,7 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
         revokedAt: accounts.revokedAt, scopes: accounts.grantedScopes }).from(accounts)
         .where(eq(accounts.id, row.accountId)).limit(1);
       const [item] = await tx.select({ externalId: items.externalId }).from(items).where(and(eq(items.id, row.itemId),
-        eq(items.accountId, row.accountId), isNull(items.deletedAt), visible(row.orbitId))).limit(1);
+        eq(items.accountId, row.accountId), isNull(items.deletedAt), visible(row.orbitId))).for('update').limit(1);
       if (!account || account.provider !== 'google' || account.revokedAt || account.generation !== credential.generation ||
         !account.scopes.includes(GMAIL_MODIFY_SCOPE) || !item || item.externalId !== row.externalId) return null;
       const [current] = await tx.select().from(mailChangeOperations).where(eq(mailChangeOperations.id, row.id)).for('update').limit(1);
@@ -330,7 +336,10 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
       const [saved] = await tx.update(mailChangeOperations).set(matches ? { state: 'succeeded', confirmation: 'observed',
         completedAt: new Date(), updatedAt: new Date() } : { state: 'outcome_unknown',
         lastError: 'desired_state_not_observed', updatedAt: new Date() }).where(eq(mailChangeOperations.id, current.id)).returning();
-      if (saved && matches) await audit(tx, 'mail_change_observed', saved.id);
+      if (saved && matches) {
+        await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, row.itemId));
+        await audit(tx, 'mail_change_observed', saved.id);
+      }
       else if (saved && current.state === 'in_flight') await audit(tx, 'mail_change_unknown', saved.id);
       return saved;
     });

@@ -190,6 +190,8 @@ try {
   assert.equal(concurrent.statusCode, 200, concurrent.body);
   assert.equal(first.json().id, concurrent.json().id);
   assert.equal(calls, 1);
+  const actionEpoch = async (itemId) => (await db.select({ epoch: items.actionEpoch }).from(items).where(eq(items.id, itemId)))[0].epoch;
+  assert.equal(await actionEpoch(itemA), 1, 'one confirmed action advances the epoch once, including idempotent replay');
   const blockedOptions = await request('GET', options(itemA));
   assert.equal(blockedOptions.statusCode, 200, blockedOptions.body);
   assert.equal(blockedOptions.json().blockedReason, 'awaiting_sync');
@@ -218,6 +220,7 @@ try {
   const unknown = await request('POST', endpoint(itemB), body('mark_read'), csrf);
   assert.equal(unknown.statusCode, 202, unknown.body);
   assert.equal(unknown.json().state, 'outcome_unknown');
+  assert.equal(await actionEpoch(itemB), 0, 'uncertain provider outcomes do not advance the epoch');
   await app.close();
   app = await makeApp();
   assert.equal((await request('GET', `/api/mail/changes/${unknown.json().id}?accountId=${accountA}&orbitId=${orbitA}`)).json().state,
@@ -238,6 +241,7 @@ try {
   assert.equal(reconcile.statusCode, 200, reconcile.body);
   assert.equal(reconcile.json().state, 'succeeded');
   assert.equal(reconcile.json().confirmation, 'observed');
+  assert.equal(await actionEpoch(itemB), 1, 'observed reconciliation advances the epoch');
   assert.equal(calls, 2);
   assert.equal((await db.select().from(items).where(eq(items.id, itemB)))[0].providerRevision, '7');
 
@@ -252,6 +256,7 @@ try {
   const racedReconcile = await request('POST', `/api/mail/changes/${unknownAfterSync.json().id}/reconcile?accountId=${accountA}&orbitId=${orbitA}`, {}, csrf);
   assert.equal(racedReconcile.statusCode, 404, racedReconcile.body);
   assert.equal((await db.select().from(mailChangeOperations).where(eq(mailChangeOperations.id, unknownAfterSync.json().id)))[0].state, 'outcome_unknown');
+  assert.equal(await actionEpoch(itemB), 1, 'a fenced reconciliation does not advance the epoch');
   credentialGeneration = 2;
   onInspect = async () => { await db.update(accounts).set({ credentialGeneration: 3 }).where(eq(accounts.id, accountA)); };
   const fence = await request('POST', endpoint(capItems[0]), body('add_label', id(), { labelId: labelA,
@@ -268,6 +273,7 @@ try {
     itemSequence: 2, itemRevision: '8' }), csrf);
   assert.equal(noOp.statusCode, 200, noOp.body);
   assert.equal(noOp.json().confirmation, 'observed');
+  assert.equal(await actionEpoch(itemA), 2, 'a zero-write observed no-op still requires a later provider read');
   assert.equal((await db.select().from(mailChangeOperations).where(eq(mailChangeOperations.id, noOp.json().id)))[0].attemptCount, 0);
   assert.equal(calls, 3);
   onCredential = async () => {
@@ -278,6 +284,7 @@ try {
     itemSequence: 2, itemRevision: '8' }), csrf);
   assert.equal(refreshed.statusCode, 200, refreshed.body);
   assert.equal(refreshed.json().confirmation, 'provider');
+  assert.equal(await actionEpoch(itemA), 3);
   onCredential = async () => {};
   let inspectStarted = 0;
   let releaseInspect;

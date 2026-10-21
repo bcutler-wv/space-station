@@ -49,6 +49,7 @@ The private file store was accepted after Ubuntu CI run `39477808140` (commit `8
 
 ## M2: Search
 
+- The first prerequisite is implemented and Astra-reviewed for version 0.35.0: durable causal provider-observation evidence, restrictive derived eligibility and bounded no-history mail refresh. Independent PostgreSQL race, policy-bound and contention probes passed. Its Ubuntu integration gate is pending. This does not yet index, purge or serve derived content; M2 acceptance remains pending the later consumers and their gates.
 - Meilisearch indexing, the operator parser, instant search in the top strip.
 - Attachment text with Tika and Tesseract.
 

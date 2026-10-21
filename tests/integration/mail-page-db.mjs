@@ -64,8 +64,8 @@ try {
     { id: secondOrbitId, name: 'Restricted', slug: 'fixture-restricted', colorSlot: 2, context: '', privacyDefaults: { index: 'exclude', ai: 'allow' } }]);
   await db.insert(settings).values({ key: 'first_orbit_setup_v1', value: { version: 1, orbitId, globalDefaults: allow, confirmedOrigin: origin } });
   await createAccount('one'); await createAccount('two');
-  const first = page('one', 0, [change('same', { parsed: parsed(fake('one'), { html: true, attachment: true }), providerSent: true,
-    labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] })]);
+  const first = page('one', 0, [{ ...change('same', { parsed: parsed(fake('one'), { html: true, attachment: true }), providerSent: true,
+    labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] }), observedActionEpoch: 0, observedCredentialGeneration: 1 }]);
   assert.equal(await applyMailPage(db, store, first), 'applied');
   const firstEvent = await readSyncEvents(db, 0);
   assert.deepEqual(firstEvent.rows.map(({ kind, accountId }) => [kind, accountId]), [['mail-changed', accountsByName.one]]);
@@ -73,6 +73,7 @@ try {
   assert.equal((await item('one', 'same')).directionProvenance, 'provider_sent_account');
   assert.equal((await item('one', 'same')).providerRevision, '900719925474099312345');
   assert.equal((await item('one', 'same')).messageId, '<fixture@example.com>');
+  assert.equal((await item('one', 'same')).observedActionEpoch, 0);
   assert.equal((await item('one', 'same')).inReplyTo, null);
   assert.equal((await item('one', 'same')).referencesHeader, null);
   assert.equal((await db.select().from(attachments))[0].filename, '.._evil_name_.txt');
@@ -82,6 +83,8 @@ try {
   assert.equal((await store.read((await db.select().from(attachments))[0].storagePath)).toString(), 'fixture bytes');
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canIndex, false);
   assert.equal(await applyMailPage(db, store, first), 'replayed');
+  await assert.rejects(applyMailPage(db, store, { ...first, changes: first.changes.map((entry) => ({ ...entry,
+    observedActionEpoch: null, observedCredentialGeneration: null })) }), /changed content or sequence/);
   const changedHeader = { ...first, changes: first.changes.map((entry) => ({ ...entry,
     parsed: { ...entry.parsed, mail: { ...entry.parsed.mail, messageId: '<changed@example.com>' } } })) };
   await assert.rejects(() => applyMailPage(db, store, changedHeader), /changed content or sequence/);

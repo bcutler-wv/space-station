@@ -3,7 +3,7 @@ export { loadRuntimeConfig, databaseUrl, type RuntimeConfig } from './config.js'
 export { migrateDatabase } from './migrate.js';
 export { openDatabase } from './connection.js';
 export { PrivateBlobStore } from './private-blob-store.js';
-export { applyMailPage, collectOrphanBlobs, evaluateStoredMailPrivacy, MailPageFenceError, type MailPage, type MailChange } from './mail-page.js';
+export { applyMailPage, collectOrphanBlobs, evaluateStoredMailPrivacy, evaluateDerivedMailEligibility, MailPageFenceError, type MailPage, type MailChange } from './mail-page.js';
 export { syncStates, syncPages, people, identities, threads, items, itemRecipients, labels, itemLabels, itemOrbits, attachments, blobIntents } from './schema.js';
 export { mailImageConsent, mailSenderImagePreferences } from './schema.js';
 export { drafts, draftAttachments, outboundOperations } from './schema.js';

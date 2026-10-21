@@ -243,6 +243,9 @@ export const items = pgTable('items', {
   collectionId: text('collection_id').notNull(), threadId: text('thread_id').notNull(),
   externalId: text('external_id').notNull(), providerRevision: text('provider_revision'),
   appliedSequence: integer('applied_sequence').notNull(), direction: text('direction').notNull(),
+  actionEpoch: integer('action_epoch').notNull().default(0),
+  observedActionEpoch: integer('observed_action_epoch'),
+  observedCredentialGeneration: integer('observed_credential_generation'),
   directionProvenance: text('direction_provenance').notNull(), fromPersonId: text('from_person_id'),
   senderIdentitiesComplete: boolean('sender_identities_complete').notNull().default(false),
   senderHeaderCount: integer('sender_header_count').notNull().default(0),
@@ -260,12 +263,16 @@ export const items = pgTable('items', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('items_source_unique').on(t.accountId, t.collectionId, t.externalId),
   index('items_reader_account_thread_live_idx').on(t.accountId, t.threadId, t.deletedAt, t.internalAt, t.id),
+  index('items_observation_refresh_idx').on(t.accountId, t.collectionId, t.id)
+    .where(sql`${t.deletedAt} is null and ${t.parseStatus} = 'supported'`),
   unique('items_id_account_unique').on(t.id, t.accountId),
   foreignKey({ columns: [t.threadId, t.accountId, t.collectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
   foreignKey({ columns: [t.fromPersonId, t.accountId], foreignColumns: [people.id, people.accountId] }),
   foreignKey({ columns: [t.bodyHtmlPath, t.accountId], foreignColumns: [blobIntents.key, blobIntents.accountId] }),
   check('items_direction', sql`${t.direction} in ('in', 'out')`),
   check('items_direction_provenance', sql`${t.directionProvenance} in ('incoming', 'provider_sent_account')`),
+  check('items_action_epoch', sql`${t.actionEpoch} >= 0 and (${t.observedActionEpoch} is null or (${t.observedActionEpoch} >= 0 and ${t.observedActionEpoch} <= ${t.actionEpoch}))`),
+  check('items_observation_pair', sql`(${t.observedActionEpoch} is null) = (${t.observedCredentialGeneration} is null)`),
   check('items_parse_status', sql`${t.parseStatus} in ('supported', 'unsupported', 'deleted')`),
   check('items_parse_failure_code', sql`${t.parseFailureCode} is null or ${t.parseFailureCode} in ('input_too_large', 'limit_exceeded', 'malformed')`)]);
 

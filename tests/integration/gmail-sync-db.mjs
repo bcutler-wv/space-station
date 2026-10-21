@@ -4,10 +4,10 @@ import console from 'node:console';
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { GmailReadError } from '../../packages/connectors/dist/index.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, items, itemLabels, labels, oauthApps, orbits, readSyncEvents,
-  settings, syncStates, users, evaluateStoredMailPrivacy, exclusionRules } from '../../packages/db/dist/index.js';
+  settings, syncStates, users, evaluateStoredMailPrivacy, evaluateDerivedMailEligibility, exclusionRules, mailChangeOperations, itemOrbits } from '../../packages/db/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const handle = openDatabase(databaseUrl(loadRuntimeConfig(process.env)));
@@ -28,6 +28,7 @@ let failB = true;
 let failReconcilePage = true;
 let failHistoryTail = true;
 let labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Work' }, { id: 'EMPTY', name: 'Empty label' }];
+let onRaw = async () => {};
 const calls = [];
 const providerTimes = [];
 const mark = () => { providerTimes.push(Date.now()); };
@@ -49,6 +50,7 @@ const reader = {
   async getMessageRaw(_accountId, id) {
     mark();
     calls.push(['raw', id]);
+    await onRaw(id);
     if (id === 'b' && failB) { failB = false; throw new GmailReadError('transient'); }
     const message = messages.get(id);
     if (!message) throw new GmailReadError('message_missing');
@@ -63,6 +65,7 @@ const reader = {
   async listHistory(_accountId, input) {
     mark();
     calls.push(['history', input.startHistoryId, input.pageToken ?? null]);
+    if (mode === 'steady') return { history: [], historyId: input.startHistoryId };
     if (input.startHistoryId === '20') throw new GmailReadError('history_expired');
     if (input.startHistoryId === '30' || input.startHistoryId === '31') return { history: [], historyId: '31' };
     if (input.pageToken === 'tail') {
@@ -75,7 +78,7 @@ const reader = {
 };
 const parsed = (raw) => ({ ok: true, mail: { subject: `Subject ${Buffer.from(raw).toString()}`, messageId: null,
   inReplyTo: null, references: null, date: null, from: { name: 'Sender', address: 'sender@example.com' },
-  senderIdentities: [{ name: 'Sender', address: 'sender@example.com' }], senderHeaderFieldCount: 1,
+  senderIdentities: [{ name: 'Sender', address: 'sender@example.com' }, { name: 'Alias', address: 'alias@example.com' }], senderHeaderFieldCount: 2,
   replyTo: [], replyToHeaderFieldCount: 0, to: [], cc: [], bcc: [],
   text: 'safe body', sanitizedHtml: null, attachments: [] } });
 const runner = new GmailSyncRunner(db, store, reader, origin, parsed, now);
@@ -132,6 +135,139 @@ try {
   assert.deepEqual((await rows()).map((row) => row.externalId).sort(), ['a', 'b', 'c']);
   assert.deepEqual(calls.filter((call) => call[0] === 'history').map((call) => call.slice(1)), [['10', null], ['10', 'tail'], ['10', 'tail']]);
   const a = (await rows()).find((row) => row.externalId === 'a');
+  const b = (await rows()).find((row) => row.externalId === 'b');
+  assert.deepEqual(await evaluateDerivedMailEligibility(db, b.id), { canIndex: true, canUseAi: true, canEmbed: true });
+  mode = 'steady';
+  // A settled no-op has no history event. The ready-stage refresh must read the
+  // actual provider item and persist an observation of the new action epoch.
+  await db.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, b.id));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  const rawBeforeNoop = calls.filter(([kind, id]) => kind === 'raw' && id === 'b').length;
+  await runner.run(accountId);
+  assert.equal(calls.filter(([kind, id]) => kind === 'raw' && id === 'b').length, rawBeforeNoop + 1);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+  assert.equal((await rows()).find((row) => row.externalId === 'b').observedActionEpoch, 1);
+
+  // The SDK read starts at epoch 2, then a second settlement commits before
+  // that read is persisted. A higher page sequence must not bless epoch 3.
+  await db.update(items).set({ actionEpoch: 2 }).where(eq(items.id, b.id));
+  let releaseRead; let readStarted;
+  const heldRead = new Promise((resolve) => { releaseRead = resolve; });
+  const startedRead = new Promise((resolve) => { readStarted = resolve; });
+  onRaw = async (id) => { if (id === 'b') { readStarted(); await heldRead; } };
+  const interleavedRun = runner.run(accountId);
+  await startedRead;
+  await db.update(items).set({ actionEpoch: 3 }).where(eq(items.id, b.id));
+  releaseRead();
+  await interleavedRun;
+  onRaw = async () => {};
+  assert.equal((await rows()).find((row) => row.externalId === 'b').observedActionEpoch, 2);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+
+  // A newly reserved operation denies eligibility even when a prior read was
+  // current. It also prevents a second refresh from racing the write.
+  const pendingId = randomUUID();
+  await db.insert(mailChangeOperations).values({ id: pendingId, ownerId, itemId: b.id,
+    externalId: 'b', accountId, orbitId, idempotencyKey: randomUUID(), requestDigest: 'fixture',
+    action: 'archive', removeLabels: ['INBOX'], itemRevision: '12', itemSequence: (await rows()).find((row) => row.id === b.id).appliedSequence });
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(mailChangeOperations).set({ state: 'outcome_unknown', attemptCount: 1 }).where(eq(mailChangeOperations.id, pendingId));
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false,
+    'an uncertain provider write never becomes eligible from a sync poll');
+  await db.transaction(async (tx) => {
+    await tx.update(mailChangeOperations).set({ state: 'succeeded', confirmation: 'observed', completedAt: new Date() }).where(eq(mailChangeOperations.id, pendingId));
+    await tx.update(items).set({ actionEpoch: 4 }).where(eq(items.id, b.id));
+  });
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+
+  // Cancellation after the provider request starts cannot commit observation.
+  await db.update(items).set({ actionEpoch: 5 }).where(eq(items.id, b.id));
+  let releaseAborted; let abortedStarted;
+  const abortedRead = new Promise((resolve) => { releaseAborted = resolve; });
+  const reachedAbortedRead = new Promise((resolve) => { abortedStarted = resolve; });
+  onRaw = async (id) => { if (id === 'b') { abortedStarted(); await abortedRead; } };
+  const controller = new globalThis.AbortController();
+  const abortedRun = runner.run(accountId, controller.signal);
+  await reachedAbortedRead;
+  controller.abort();
+  releaseAborted();
+  await abortedRun;
+  onRaw = async () => {};
+  assert.equal((await rows()).find((row) => row.id === b.id).observedActionEpoch, 4);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+
+  // The grant reflects current restrictive policy, including every sender,
+  // resolved label and Orbit. It is never a cached post-refresh permission.
+  const addRule = async (orbitIdForRule, kind, value, effect) => {
+    const id = randomUUID();
+    await db.insert(exclusionRules).values({ id, orbitId: orbitIdForRule, kind, value, effect });
+    return id;
+  };
+  const assertRule = async (orbitIdForRule, kind, value, effect, field) => {
+    const id = await addRule(orbitIdForRule, kind, value, effect);
+    assert.equal((await evaluateDerivedMailEligibility(db, b.id))[field], false);
+    await db.delete(exclusionRules).where(eq(exclusionRules.id, id));
+    assert.equal((await evaluateDerivedMailEligibility(db, b.id))[field], true);
+  };
+  await assertRule(null, 'account', 'owner@example.com', 'no_index', 'canIndex');
+  await assertRule(null, 'sender', 'alias@example.com', 'no_ai', 'canUseAi');
+  await assertRule(null, 'label', 'work', 'no_index', 'canIndex');
+  const restrictedOrbit = randomUUID();
+  await db.insert(orbits).values({ id: restrictedOrbit, name: 'Restricted', slug: 'm2-restricted', colorSlot: 2,
+    context: '', privacyDefaults: { index: 'exclude', ai: 'allow' } });
+  await db.insert(itemOrbits).values({ itemId: b.id, orbitId: restrictedOrbit, reason: 'rule' });
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(orbits).set({ privacyDefaults: { index: 'allow', ai: 'allow' } }).where(eq(orbits.id, restrictedOrbit));
+  await assertRule(restrictedOrbit, 'sender', 'sender@example.com', 'no_ai', 'canUseAi');
+  await db.delete(itemOrbits).where(eq(itemOrbits.orbitId, restrictedOrbit));
+  const workLabel = (await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK');
+  await db.update(labels).set({ name: '' }).where(eq(labels.id, workLabel.id));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(labels).set({ name: 'Work' }).where(eq(labels.id, workLabel.id));
+  await db.update(items).set({ deletedAt: new Date() }).where(eq(items.id, b.id));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(items).set({ deletedAt: null }).where(eq(items.id, b.id));
+  await db.update(items).set({ parseStatus: 'unsupported' }).where(eq(items.id, b.id));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(items).set({ parseStatus: 'supported' }).where(eq(items.id, b.id));
+  await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: origin,
+    globalDefaults: { index: 'exclude', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: origin,
+    globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+  await db.update(settings).set({ value: { globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: origin,
+    globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+  await db.update(accounts).set({ credentialGeneration: 2 }).where(eq(accounts.id, accountId));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  for (let attempt = 0; attempt < 3 && !(await evaluateDerivedMailEligibility(db, b.id)).canIndex; attempt++)
+    await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+  const fairnessRows = (await rows()).filter((row) => !row.deletedAt && row.parseStatus === 'supported')
+    .sort((left, right) => left.id.localeCompare(right.id)).slice(0, 2);
+  assert.equal(fairnessRows.length, 2);
+  for (const row of fairnessRows) await db.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, row.id));
+  const fairnessState = await state();
+  await db.update(syncStates).set({ cursor: { ...fairnessState.cursor, observationAfter: null } }).where(eq(syncStates.id, fairnessState.id));
+  onRaw = async (id) => { if (id === fairnessRows[0].externalId) throw new GmailReadError('transient'); };
+  await runner.run(accountId);
+  assert.equal((await state()).cursor.observationAfter, fairnessRows[0].id);
+  assert.equal((await state()).lastError, 'transient');
+  const failedRefresh = await state();
+  await db.update(syncStates).set({ cursor: { ...failedRefresh.cursor, retryAt: 0 } }).where(eq(syncStates.id, failedRefresh.id));
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, fairnessRows[1].id)).canIndex, true,
+    'a failed refresh does not starve the next stale item');
+  onRaw = async () => {};
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, fairnessRows[0].id)).canIndex, true);
+  mode = 'initial';
   assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').name, 'Work');
   assert.equal(a.direction, 'in');
   assert.equal((await db.select().from(items).where(eq(items.id, a.id)))[0].deletedAt, null);

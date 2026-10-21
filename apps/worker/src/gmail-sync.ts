@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { and, eq, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { GmailReadAdapter, GmailReadError, type GmailRawMessage, type GmailMessageMetadata, type GmailHistoryPage } from '@station/connectors';
 import { accounts, appendSyncEvent, applyMailPage, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
   MailPageFenceError, type MailChange } from '@station/db';
@@ -16,6 +16,7 @@ const COLLECTION = 'primary';
 const LEASE_MS = 180_000;
 const ID_BATCH = 10;
 const LABEL_BATCH = 100;
+const OBSERVATION_REFRESH_LIMIT = 5;
 const MAX_RUN_STEPS = 200;
 const MAX_RUN_MS = 720_000;
 const MAX_RETRY_MS = 15 * 60_000;
@@ -26,6 +27,7 @@ const cursorSchema = z.object({
   historyToken: z.string().nullable(), historyOffset: z.number().int().nonnegative(),
   scanStart: z.number().int().nonnegative(), retryAt: z.number().int().nonnegative(), failures: z.number().int().nonnegative(),
   nextCallAt: z.number().int().nonnegative().default(0), blockedGeneration: z.number().int().nonnegative().nullable().default(null),
+  observationAfter: z.string().uuid().nullable().default(null),
 });
 type Cursor = z.infer<typeof cursorSchema>;
 type State = typeof syncStates.$inferSelect;
@@ -40,7 +42,7 @@ function cutoffFor(backfill: string, now: Date): number {
 function initialCursor(account: Account, now: Date): Cursor {
   return { version: 1, phase: 'anchor', cutoff: cutoffFor(account.backfill!, now), anchor: null, historyStart: null,
     listToken: null, pending: [], offset: 0, historyToken: null, historyOffset: 0, scanStart: 0, retryAt: 0, failures: 0,
-    nextCallAt: 0, blockedGeneration: null };
+    nextCallAt: 0, blockedGeneration: null, observationAfter: null };
 }
 function cursorOf(state: State, account: Account, now: Date): Cursor {
   if (state.cursor === null) return initialCursor(account, now);
@@ -219,6 +221,16 @@ export class GmailSyncRunner {
 
   private async message(account: Account, id: string, names: Map<string, string>, cutoff: number, reader: Reader,
     signal: AbortSignal): Promise<MailChange | null> {
+    // Capture before the SDK read. A later action settlement advances the item epoch,
+    // so a read begun before settlement cannot clear its derived-data barrier.
+    const [prior] = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`set local statement_timeout = '3000ms'`);
+      await tx.execute(sql`set local lock_timeout = '750ms'`);
+      return tx.select({ epoch: items.actionEpoch }).from(items).where(and(
+        eq(items.accountId, account.id), eq(items.collectionId, COLLECTION), eq(items.externalId, id)));
+    }, { accessMode: 'read only' });
+    signal.throwIfAborted();
+    const observedEpoch = prior?.epoch ?? 0;
     let raw: GmailRawMessage;
     let parsed: ParseResult;
     try {
@@ -239,13 +251,13 @@ export class GmailSyncRunner {
         if (!meta) return this.tombstone(id);
         if (cutoff && !meta.internalDate) throw new GmailReadError('invalid_response');
         if (meta.internalDate && Number(meta.internalDate) < cutoff * 1000 && !await this.retained(account, id)) return null;
-        return this.change(meta, { ok: false, code: 'input_too_large' }, names);
+        return this.change(meta, { ok: false, code: 'input_too_large' }, names, observedEpoch, account.credentialGeneration);
       }
       throw error;
     }
     if (Number(raw.internalDate) < cutoff * 1000 && !await this.retained(account, id)) return null;
     if (Buffer.byteLength(JSON.stringify(parsed)) > 20 * 1024 * 1024) parsed = { ok: false, code: 'limit_exceeded' };
-    return this.change(raw, parsed, names);
+    return this.change(raw, parsed, names, observedEpoch, account.credentialGeneration);
   }
 
   private async retained(account: Account, id: string): Promise<boolean> {
@@ -257,12 +269,15 @@ export class GmailSyncRunner {
     return { externalId: id, threadExternalId: null, providerRevision: null, internalAt: null, receivedAt: null,
       snippet: null, flags: {}, labelRefs: [], providerSent: false, deleted: true, parsed: null, routedOrbitIds: [] };
   }
-  private change(meta: GmailRawMessage | GmailMessageMetadata, parsed: ParseResult, names: Map<string, string>): MailChange {
+  private change(meta: GmailRawMessage | GmailMessageMetadata, parsed: ParseResult, names: Map<string, string>,
+    observedEpoch: number, credentialGeneration: number): MailChange {
     return { externalId: meta.id, threadExternalId: meta.threadId, providerRevision: meta.historyId ?? null,
       internalAt: meta.internalDate ? new Date(Number(meta.internalDate)) : null, receivedAt: this.now(), snippet: null,
       flags: { read: !meta.labelIds.includes('UNREAD'), starred: meta.labelIds.includes('STARRED') },
       labelRefs: meta.labelIds.map((ref) => ({ ref, name: names.get(ref) ?? null })), providerSent: meta.trustedSent,
-      deleted: false, parsed, routedOrbitIds: [] };
+      deleted: false, parsed, routedOrbitIds: [],
+      observedActionEpoch: parsed.ok ? observedEpoch : null,
+      observedCredentialGeneration: parsed.ok ? credentialGeneration : null };
   }
 
   private historyIds(page: GmailHistoryPage): string[] {
@@ -392,6 +407,32 @@ export class GmailSyncRunner {
           }
         }
         if (steps % 20 === 19) names = await this.refreshLabels(account, state, reader, signal);
+      }
+      // Gmail may emit no history event for an already-matching no-op. Re-read a
+      // bounded set of stale supported items through the same paced SDK/parser,
+      // page fence and durable sequence path after normal history catch-up.
+      if (cursor.phase === 'ready') {
+        const stale = (after: string | null) => this.db.transaction(async (tx) => {
+          await tx.execute(sql`set local statement_timeout = '3000ms'`);
+          await tx.execute(sql`set local lock_timeout = '750ms'`);
+          return tx.select({ id: items.id, externalId: items.externalId }).from(items)
+            .where(and(eq(items.accountId, account.id), eq(items.collectionId, COLLECTION), isNull(items.deletedAt),
+              eq(items.parseStatus, 'supported'), after ? gt(items.id, after) : undefined,
+              sql`(${items.observedActionEpoch} is null or ${items.observedActionEpoch} <> ${items.actionEpoch} or
+                ${items.observedCredentialGeneration} is distinct from ${account.credentialGeneration})`,
+              sql`not exists (select 1 from mail_change_operations m where m.item_id = ${items.id}
+                and m.state in ('pending', 'in_flight', 'outcome_unknown'))`))
+            .orderBy(items.id).limit(OBSERVATION_REFRESH_LIMIT);
+        }, { accessMode: 'read only' });
+        let candidates = await stale(cursor.observationAfter);
+        if (!candidates.length && cursor.observationAfter) candidates = await stale(null);
+        for (const item of candidates) {
+          signal.throwIfAborted();
+          cursor = { ...cursor, observationAfter: item.id };
+          state = await this.checkpoint(state, account, cursor, signal);
+          const change = await this.message(account, item.externalId, names, cursor.cutoff, reader, signal);
+          if (change) state = await this.apply(state, account, cursor, change, signal);
+        }
       }
       signal.throwIfAborted();
       await this.db.transaction(async (tx) => {
