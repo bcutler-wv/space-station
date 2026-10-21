@@ -78,6 +78,13 @@
       "when": 1792543275243,
       "tag": "0010_gray_luminals",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792544247206,
+      "tag": "0011_tough_speed_demon",
+      "breakpoints": true
     }
   ]
 }

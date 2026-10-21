@@ -1,7 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
-import { accounts, drafts, identities, itemRecipients, items, orbits, threads } from '@station/db';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { accounts, draftAttachments, drafts, identities, itemRecipients, items, orbits, threads } from '@station/db';
 import { GmailReadAdapter, GmailReadError, GoogleCredentialService, GMAIL_MODIFY_SCOPE } from '@station/connectors';
 import { addressParser } from 'postal-mime';
 import { z } from 'zod';
@@ -328,13 +328,28 @@ export function registerDrafts(app: FastifyInstance, auth: AuthConfig,
       if (!row) return { status: 404 };
       if (discard && row.state === 'discarded' && (row.revision === revision || row.revision === revision + 1)) return { status: 200, row };
       if (row.state !== 'editing' || row.revision !== revision) return { status: 409 };
+      if (!discard && JSON.stringify((payload.data as typeof draftUpdateSchema._output).attachmentRefs) !== JSON.stringify(row.attachmentRefs))
+        return { status: 409 };
+      if (!discard) {
+        const refs = (payload.data as typeof draftUpdateSchema._output).attachmentRefs;
+        if (refs.length) {
+          const owned = await tx.select({ id: draftAttachments.id, size: draftAttachments.byteSize }).from(draftAttachments)
+            .where(and(eq(draftAttachments.draftId, id), eq(draftAttachments.accountId, scope.data.accountId),
+              eq(draftAttachments.state, 'ready'), inArray(draftAttachments.id, refs))).limit(65);
+          if (owned.length !== refs.length || new Set(refs).size !== refs.length ||
+            owned.reduce((sum, attachment) => sum + attachment.size, 0) > 8 * 1024 * 1024) return { status: 409 };
+        }
+      }
       const data = discard ? { state: 'discarded' } : payload.data as typeof draftUpdateSchema._output;
       const [updated] = await tx.update(drafts).set({ ...(!discard ? { to: (data as typeof draftUpdateSchema._output).to,
         cc: (data as typeof draftUpdateSchema._output).cc, bcc: (data as typeof draftUpdateSchema._output).bcc,
-        subject: (data as typeof draftUpdateSchema._output).subject, bodyText: (data as typeof draftUpdateSchema._output).bodyText } : { state: 'discarded' }),
+        subject: (data as typeof draftUpdateSchema._output).subject, bodyText: (data as typeof draftUpdateSchema._output).bodyText } : { state: 'discarded', attachmentRefs: [] }),
         revision: revision + 1, updatedAt: new Date() })
         .where(and(eq(drafts.id, id), eq(drafts.ownerId, OWNER), eq(drafts.accountId, scope.data.accountId),
           eq(drafts.revision, revision), eq(drafts.state, 'editing'))).returning();
+      if (updated && discard) await tx.update(draftAttachments).set({ state: 'delete_pending', updatedAt: new Date() })
+        .where(and(eq(draftAttachments.draftId, id), eq(draftAttachments.accountId, scope.data.accountId),
+          eq(draftAttachments.state, 'ready')));
       return updated ? { status: 200, row: updated } : { status: 409 };
     });
     return result.row ? sendDraft(reply, result.row) : reply.code(result.status).send(result.status === 404 ? unavailable : conflict);

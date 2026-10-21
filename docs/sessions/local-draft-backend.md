@@ -9,3 +9,5 @@ Local checks passed 67 unit tests, lint, typecheck, build, colors and licenses. 
 This slice does not send mail, create provider drafts, expose a compose UI or accept attachment uploads. Legacy rows without complete stored reply headers remain unavailable until the required bounded metadata-repair follow-up. Draft attachment ownership/upload/cleanup is also required before compose is complete. Both gaps remain open before M1 acceptance. No production deployment occurred.
 
 The next bounded slice adds on-demand legacy reply metadata repair. It stores a separate validated reply snapshot without changing normalized identity or privacy evidence. It is under Astra review; the original local draft backend acceptance and remaining attachment/send work are unchanged.
+
+Full Ubuntu integration run `39522612572` passed at `9203432` (0.24.0), accepting the local draft backend with PostgreSQL 16/Compose and browser gates. The legacy metadata follow-up is separately tracked in [its session record](reply-metadata-repair.md).

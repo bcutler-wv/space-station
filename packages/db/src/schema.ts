@@ -357,3 +357,24 @@ export const drafts = pgTable('drafts', {
   check('drafts_revision_positive', sql`${t.revision} > 0`),
   check('drafts_state', sql`${t.state} in ('editing', 'discarded')`),
 ]);
+
+// Draft-owned blobs have no sync page or provider lease. A pending row is a
+// durable reservation; publication and collection serialize on this row.
+export const draftAttachments = pgTable('draft_attachments', {
+  id: text('id').primaryKey(),
+  draftId: text('draft_id').notNull().references(() => drafts.id),
+  accountId: text('account_id').notNull().references(() => accounts.id),
+  blobKey: text('blob_key').notNull().unique(),
+  uploadKey: text('upload_key').notNull(),
+  digest: text('digest').notNull(),
+  filename: text('filename').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  state: text('state').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('draft_attachments_upload_unique').on(t.draftId, t.uploadKey),
+  index('draft_attachments_collect_idx').on(t.state, t.updatedAt),
+  check('draft_attachments_state', sql`${t.state} in ('pending', 'ready', 'delete_pending')`),
+  check('draft_attachments_size', sql`${t.byteSize} >= 0 and ${t.byteSize} <= 8388608`),
+]);

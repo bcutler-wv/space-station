@@ -1,0 +1,9 @@
+# Draft attachment ownership
+
+Draft uploads need an ownership and cleanup lifecycle independent of Gmail sync pages. A browser may autosave from an old tab while another tab removes a file.
+
+Use a dedicated `draft_attachments` relation with committed pending reservations, random immutable blob keys, per-draft UUID upload keys and a ready state. The raw octet-stream upload route accepts a safe display name and expected draft revision in headers. It checks the fixed owner/account/optional verified Orbit, consumes no more than 8 MiB, permits four active handlers, and locks the draft row while reserving the 64-file and 8 MiB aggregate quota. The writer locks the intent through blob publication; a separate transaction checks the revision and attaches the ready ID. A stale revision leaves a collectible intent. The worker locks old pending or detached intents before unlinking, and checks draft references. No sync state or page is invented.
+
+Attachment removal advances the revision and detaches its ID. Text autosave must echo the current ID list exactly; it cannot create attachment references. This prevents stale autosave from resurrecting a removed file. Discard detaches every file for cleanup. Downloads require ready owned IDs and return only private octet-stream attachments. The later send task must freeze owned ready IDs and extend the collector's reference check before allowing outbound operations to outlive a draft.
+
+Each active handler retains an 8 MiB upload allocation and may temporarily hold another 8 MiB plus one byte while verifying the published blob. Four handlers therefore use about 64 MiB plus transient incoming chunks at peak. A 30-second timer aborts the stream and signals cooperative file cancellation; the concurrency slot is released only when the handler settles.

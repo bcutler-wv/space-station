@@ -13,7 +13,7 @@ const contents = z.object({
   to: recipients, cc: recipients, bcc: recipients,
   subject: z.string().max(4096).refine(noControls),
   bodyText: z.string().max(4_194_304).refine((value) => new TextEncoder().encode(value).byteLength <= 4_194_304),
-  attachmentRefs: z.array(z.never()).max(0),
+  attachmentRefs: z.array(id).max(64),
 }).strict().superRefine((value, context) => {
   if (value.to.length + value.cc.length + value.bcc.length > 100)
     context.addIssue({ code: 'custom', message: 'Too many recipients' });
@@ -22,7 +22,7 @@ const contents = z.object({
 });
 export const draftCreateSchema = contents.safeExtend({
   id, creationKey: id, accountId: id, orbitId: id.optional(), parentItemId: id.optional(),
-});
+}).refine((value) => value.attachmentRefs.length === 0);
 export const draftUpdateSchema = contents.safeExtend({ revision: z.number().int().min(1).max(2_147_483_646) });
 export const draftDiscardSchema = z.object({ revision: z.number().int().min(1).max(2_147_483_646) }).strict();
 export const draftQuerySchema = z.object({ accountId: id, orbitId: id.optional(),
@@ -44,3 +44,17 @@ export const draftSummarySchema = z.object({ id, accountId: id, orbitId: id.null
   parentItemId: id.nullable(), subject: z.string().max(4096), revision: z.number().int().positive(),
   state: z.literal('editing'), updatedAt: z.iso.datetime() }).strict();
 export const draftSummaryPageSchema = z.object({ drafts: z.array(draftSummarySchema).max(30), nextCursor: z.string().nullable() }).strict();
+
+export const draftAttachmentQuerySchema = draftScopeSchema;
+export const draftAttachmentUploadHeadersSchema = z.object({
+  'x-attachment-name': z.string().min(1).max(512),
+  'x-upload-key': id,
+  'x-draft-revision': z.coerce.number().int().min(1).max(2_147_483_646),
+  'content-type': z.literal('application/octet-stream'),
+}).strict();
+export const draftAttachmentSchema = z.object({ id, filename: z.string().min(1).max(180), byteSize: z.number().int().min(0).max(8_388_608),
+  status: z.enum(['pending', 'ready', 'unavailable']) }).strict();
+export const draftAttachmentListSchema = z.object({ attachments: z.array(draftAttachmentSchema).max(64), revision: z.number().int().positive() }).strict();
+export const draftAttachmentMutationSchema = z.object({ attachment: draftAttachmentSchema, revision: z.number().int().positive() }).strict();
+export const draftAttachmentRevisionSchema = z.object({ revision: z.number().int().positive() }).strict();
+export const draftAttachmentRemoveSchema = draftDiscardSchema;

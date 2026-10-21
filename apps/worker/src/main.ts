@@ -1,7 +1,7 @@
-import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore } from '@station/db';
+import { collectDraftAttachmentBlobs, databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore } from '@station/db';
 import { GmailReadAdapter, GoogleCredentialService } from '@station/connectors';
 import { GmailSyncRunner } from './gmail-sync.js';
-import { makeBoss, PROBE_QUEUE, GMAIL_DISCOVER_QUEUE, GMAIL_SYNC_QUEUE, MAIL_BLOB_CLEANUP_QUEUE } from './queue.js';
+import { makeBoss, PROBE_QUEUE, GMAIL_DISCOVER_QUEUE, GMAIL_SYNC_QUEUE, MAIL_BLOB_CLEANUP_QUEUE, DRAFT_BLOB_CLEANUP_QUEUE } from './queue.js';
 
 const config = loadRuntimeConfig(process.env);
 const connectionString = databaseUrl(config);
@@ -42,7 +42,12 @@ await boss.work(MAIL_BLOB_CLEANUP_QUEUE, async () => {
   try { await sync.collect(); }
   catch { throw new Error('Mail blob cleanup failed'); }
 });
+await boss.work(DRAFT_BLOB_CLEANUP_QUEUE, async () => {
+  try { await collectDraftAttachmentBlobs(database.db, new PrivateBlobStore('/var/lib/station/blobs')); }
+  catch { throw new Error('Draft blob cleanup failed'); }
+});
 await boss.schedule(GMAIL_DISCOVER_QUEUE, '* * * * *', {}, { singletonKey: 'discovery' });
 await boss.schedule(MAIL_BLOB_CLEANUP_QUEUE, '*/5 * * * *', {}, { singletonKey: 'cleanup' });
+await boss.schedule(DRAFT_BLOB_CLEANUP_QUEUE, '*/5 * * * *', {}, { singletonKey: 'cleanup' });
 await boss.send(GMAIL_DISCOVER_QUEUE, {}, { singletonKey: 'discovery' });
 console.info('Runtime probe worker ready.');

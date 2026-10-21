@@ -8,6 +8,7 @@ import { registerGoogle } from './google.js';
 import { registerSync } from './sync.js';
 import { registerMailReader } from './mail-reader.js';
 import { registerDrafts } from './drafts.js';
+import { registerDraftAttachments } from './draft-attachments.js';
 import type { GmailReadAdapter } from '@station/connectors';
 import { registerMailImages, type MailImageProxyConfig } from './mail-images.js';
 import type { PrivateBlobStore } from '@station/db';
@@ -31,6 +32,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     await registerSync(instance, auth);
     registerMailReader(instance, auth, mailBlobStore);
     registerDrafts(instance, auth, replyReader);
+    if (mailBlobStore) registerDraftAttachments(instance, auth, mailBlobStore);
     if (mailBlobStore && mailImageProxy) registerMailImages(instance, auth, mailBlobStore, mailImageProxy);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));
