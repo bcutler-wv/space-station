@@ -1,18 +1,22 @@
 import { Buffer } from 'node:buffer';
 import console from 'node:console';
+import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import process from 'node:process';
 import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, settings } from '../../packages/db/dist/index.js';
-import { GmailReadAdapter, GmailSendAdapter, GoogleCredentialService } from '../../packages/connectors/dist/index.js';
+import { GmailReadAdapter, GmailSendAdapter, GmailChangeAdapter, GoogleCredentialService } from '../../packages/connectors/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 import { makeBoss, GMAIL_DISCOVER_QUEUE, GMAIL_SYNC_QUEUE } from '../../apps/worker/dist/queue.js';
 import { parseMail } from '../../apps/worker/dist/mail-parser-client.js';
 import { createMailParserServer } from '../../apps/worker/dist/mail-parser-service.js';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore } from '../../apps/server/dist/auth-store.js';
+import { databaseAppearanceStore } from '../../apps/server/dist/appearance-store.js';
+import { registerWebStatic } from '../../apps/server/dist/web-static.js';
 
 const fetch = globalThis.fetch;
 const Request = globalThis.Request;
+const AbortSignal = globalThis.AbortSignal;
 const role = process.argv[2];
 const config = loadRuntimeConfig(process.env);
 const providerPort = Number(process.env.FIXTURE_PROVIDER_PORT);
@@ -68,12 +72,30 @@ if (role === 'parser') {
   await boss.send(GMAIL_DISCOVER_QUEUE, {}, { singletonKey: 'discovery' });
   console.log('worker ready');
   process.on('SIGTERM', () => { void stop(null, boss); });
-} else if (role === 'app') {
+} else if (role === 'app' || role === 'browser-app') {
   const provider = new GmailSendAdapter(credentials, relay);
-  const app = buildApp(async () => { await dbHandle.db.select().from(settings).limit(1); }, undefined,
-    { db: dbHandle.db, origin: config.APP_ORIGIN, masterKey: Buffer.from(config.STATION_MASTER_KEY, 'base64'), store: authStore(dbHandle.db) },
-    { trustedProxyIp: '127.0.0.1' }, blobs, undefined, undefined, provider);
-  await app.listen({ host: '127.0.0.1', port: Number(process.env.FIXTURE_APP_PORT) });
+  const browser = role === 'browser-app';
+  const oauthTransport = { interceptors: { request: { add() {} }, response: { add() {} } }, async request(options) {
+    const url = new URL(options.url);
+    if (!['oauth2.googleapis.com', 'gmail.googleapis.com'].includes(url.hostname) ||
+        !['/token', '/gmail/v1/users/me/profile'].includes(url.pathname)) throw new Error('Unexpected OAuth fixture request');
+    const response = await fetch(`http://127.0.0.1:${providerPort}/fixture/oauth`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: url.href, data: options.data }), signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) throw new Error('OAuth fixture failed');
+    return { data: await response.json() };
+  } };
+  const app = buildApp(async () => { await dbHandle.db.select().from(settings).limit(1); },
+    browser ? databaseAppearanceStore(dbHandle.db) : undefined,
+    { db: dbHandle.db, origin: config.APP_ORIGIN, masterKey: Buffer.from(config.STATION_MASTER_KEY, 'base64'),
+      store: authStore(dbHandle.db), ...(browser ? { googleTransport: oauthTransport } : {}) },
+    browser ? { key: readFileSync(config.APP_TLS_KEY_PATH), cert: readFileSync(config.APP_TLS_CERT_PATH) } : { trustedProxyIp: '127.0.0.1' },
+    blobs, browser ? { signingKey: process.env.GOCAMO_HMAC || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      origin: 'http://go-camo:8080' } : undefined,
+    new GmailReadAdapter(credentials, relay), provider, new GmailChangeAdapter(credentials, relay));
+  if (browser) await registerWebStatic(app, config.APP_ORIGIN);
+  await app.listen({ host: browser ? config.APP_HOST : '127.0.0.1', port: Number(process.env.FIXTURE_APP_PORT) });
   console.log('app ready');
   process.on('SIGTERM', () => { void app.close().then(() => dbHandle.close()); });
 } else throw new Error('Unknown fixture process role');

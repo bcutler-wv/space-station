@@ -5,13 +5,13 @@ OAuth callbacks can carry a short-lived authorization code and state in the quer
 ## Requirements
 
 - For the current development shell: a disposable Linux host or VM with Node.js 22.23.2 or newer in the Node 22 line, OpenSSL, Docker with the Compose plugin, and access to its running daemon.
-- For future account sync: about 4 GB of RAM for a single user with a few accounts, more for very large mailboxes. The embedding model and Tika are planned for later milestones.
-- For future account sync: disk for mail bodies, attachments, and indexes. Plan on 1.5 to 2 times the size of the mailboxes being synced.
+- For connected Gmail mailboxes: about 4 GB of RAM for a single user with a few accounts, more for very large mailboxes. The embedding model and Tika are planned for later milestones.
+- For connected Gmail mailboxes: disk for mail bodies and attachments. Plan on 1.5 to 2 times the size of the mailboxes being synced; later search indexes need additional capacity.
 - For a deployment beyond localhost: a hostname with HTTPS, served by your own reverse proxy.
 
 ## Development startup
 
-The current build is an authenticated theme and shell demo with sample data. After cloning the repository on a disposable Linux host, run this command from the repository root:
+The current build has a sample Mission Control shell and live Gmail Mail after owner setup, an explicit first-Orbit privacy choice, authorization with your own Google web client, and a saved backfill window. After cloning the repository on a disposable Linux host, run this command from the repository root:
 
 ```
 bash scripts/start-dev.sh
