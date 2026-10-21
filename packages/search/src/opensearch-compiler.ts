@@ -14,9 +14,9 @@ export const OPENSEARCH_MAPPING = deepFreeze({ dynamic: 'strict',
   hasAttachment: { type: 'boolean' }, unread: { type: 'boolean' }, starred: { type: 'boolean' },
   sentAt: { type: 'date', format: 'strict_date_time' },
   searchText: { type: 'text', analyzer: 'standard' },
-  subjectValues: { type: 'wildcard' }, fromValues: { type: 'wildcard' },
-  toValues: { type: 'wildcard' }, ccValues: { type: 'wildcard' },
-  filenameValues: { type: 'wildcard' },
+  subjectValues: { type: 'wildcard', doc_values: true }, fromValues: { type: 'wildcard', doc_values: true },
+  toValues: { type: 'wildcard', doc_values: true }, ccValues: { type: 'wildcard', doc_values: true },
+  filenameValues: { type: 'wildcard', doc_values: true },
 } } as const);
 export const OPENSEARCH_COMPILE_LIMITS = { accounts: 64, orbits: 256, names: 512,
   idBytes: 128, nameCodePoints: 256, dslBytes: 65_536, dslNodes: 1024 } as const;

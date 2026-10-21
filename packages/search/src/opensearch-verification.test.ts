@@ -130,6 +130,16 @@ test('full profile rejects semantic settings beyond engine metadata', () => {
   const mapping = profile();
   rejectedProfile({ [OPENSEARCH_PROFILE]: { ...mapping[OPENSEARCH_PROFILE],
     mappings: { ...OPENSEARCH_MAPPING, dynamic: 'false' } } }, 'mapping');
+  for (const altered of [false, undefined]) {
+    const body = structuredClone(profile());
+    const field = body[OPENSEARCH_PROFILE].mappings.properties.subjectValues as { doc_values?: boolean };
+    if (altered === undefined) delete field.doc_values;
+    else field.doc_values = altered;
+    rejectedProfile(body, 'mapping');
+  }
+  const extraMapping = structuredClone(profile());
+  (extraMapping[OPENSEARCH_PROFILE].mappings.properties.subjectValues as Record<string, unknown>).normalizer = 'keyword';
+  rejectedProfile(extraMapping, 'mapping');
 });
 
 test('search response rejects impossible totals, malformed hits and shards', () => {

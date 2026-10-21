@@ -26,6 +26,13 @@ The index profile explicitly pins `index.replication.type=DOCUMENT`, which
 OpenSearch 3.9.0 otherwise stamps from its cluster default during creation;
 retained verification requires that exact value alongside the other fixed
 settings and mapping.
+The five wildcard fields explicitly pin `doc_values=true`. The pinned
+[OpenSearch 3.9.0 wildcard mapper](https://github.com/opensearch-project/OpenSearch/blob/3.9.0/server/src/main/java/org/opensearch/index/mapper/WildcardFieldMapper.java#L106)
+serializes this default even when the create
+request omits it, so an exact retained mapping check must include it. This
+records the engine's existing field representation; it does not change the
+query or field behavior. Missing, false or additional mapping parameters
+still fail the complete profile comparison.
 
 `@station/search` wraps the official JavaScript SDK with fixed-index,
 role-specific methods. The wrapper enforces an absolute request deadline
