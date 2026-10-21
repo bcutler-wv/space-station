@@ -36,6 +36,14 @@ try {
 } catch (error) {
   if (error?.code !== 'EEXIST') throw error;
 }
+try {
+  const secret = await open('.cache/meilisearch.env', 'wx', 0o600);
+  try { await secret.writeFile(`MEILI_MASTER_KEY=${randomBytes(32).toString('base64url')}\n`); }
+  finally { await secret.close(); }
+  console.info('Created a dedicated private search-engine key.');
+} catch (error) {
+  if (error?.code !== 'EEXIST') throw error;
+}
 await chmod('.cache/tls', 0o700);
 let keyExists = true;
 let certExists = true;

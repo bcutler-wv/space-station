@@ -40,6 +40,15 @@ Checked pinned package versions and repository links against npm metadata and op
 | pgvector/pgvector:0.8.7-pg16-bookworm | https://github.com/pgvector/pgvector | PostgreSQL; upstream LICENSE | PostgreSQL 16 and vector extension |
 | node:22.23.2-bookworm-slim | https://github.com/nodejs/docker-node | MIT for image build repo; Node and Debian component licenses also apply | Build and runtime base image |
 
+## Adopted in M2 engine foundation
+
+On 2026-10-21, verified the official Community release v1.55.0, its tagged MIT license and distinct Enterprise assets, the official Docker Hub Community image and immutable multi-platform index digest, and a checksum-verified Community Linux amd64 binary running with telemetry disabled. The exact SDK 0.62.0 npm tarball, installed MIT license, Node compatibility, named `Meilisearch` export and fixture APIs were inspected and exercised against that binary. The lockfile pins the SDK; the image digest pins the container. No source or index data is copied from upstream.
+
+| Package/image version | Upstream repository | License and integrity evidence | Use |
+|---|---|---|---|
+| getmeili/meilisearch CE v1.55.0 | https://github.com/meilisearch/meilisearch/tree/v1.55.0 | MIT [tagged license](https://github.com/meilisearch/meilisearch/blob/v1.55.0/LICENSE-MIT); Docker Hub image index `sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c`; official Linux amd64 Community binary SHA-256 `7e33f5889235f14290074a19a6d3574bd9b10fb2ee8731eabb7dafd0714b0513` | Private lexical engine foundation and fake contract gate; no live ingestion yet |
+| meilisearch JS SDK 0.62.0 | https://github.com/meilisearch/meilisearch-js/tree/v0.62.0 | MIT installed LICENSE SHA-256 prefix `f38718a82ebe`; npm tarball SHA-512 `fc44c35bb9a6588d8d7129ad25d4cf85b8ec21bb3755cb9aa6ccd7e57e8985d1c1d176ecccf3a1a9ddc40766c4ca52f41caedd83087fe19dcc772bb271655fe4` | Pinned client, bounded transport/bootstrap and fake engine fixture |
+
 ## Planned dependencies
 
 | Package | Use | License (verify when adding) |
@@ -52,7 +61,6 @@ Checked pinned package versions and repository links against npm metadata and op
 | @slack/bolt, @slack/web-api | Slack | MIT |
 | tsdav | CalDAV | MIT |
 | go-camo | Image proxy (container) | MIT |
-| Meilisearch Community Edition | Lexical search (container) | MIT |
 | pgvector | Vector search (Postgres extension) | PostgreSQL |
 | Apache Tika, Tesseract | Attachment text and OCR (containers) | Apache-2.0 |
 | @material/material-color-utilities | Theme generation | Apache-2.0 |

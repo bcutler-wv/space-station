@@ -5,7 +5,7 @@ Search has to be excellent. It runs in three layers that work together, plus CAP
 ## 1. Instant lexical search
 
 - Meilisearch, updated by the worker as items arrive only when the effective policy across all matching Orbits permits indexing.
-- Typo tolerance, prefix matching while typing, stemming, exact phrases in quotes.
+- Typo tolerance, prefix matching while typing, and ordered-token phrases in quotes. Automatic stemming is deferred: the pinned Community engine did not match `running` to stored `run` in its M2 contract probe.
 - Results appear as the user types, target under 100 ms.
 - Indexed fields: subject, body text, sender and recipient names and addresses, attachment filenames, attachment text, labels, Orbit, account, kind (email or chat).
 - Sent mail is indexed with the same weight as received mail.
@@ -29,6 +29,8 @@ Gmail-compatible syntax, parsed into Meilisearch filters before the text query r
 | `-` negation, `OR`, parentheses | `from:dana -label:archive` |
 
 The M2 operator parser lives in `packages/search` with a generated, build-time Peggy grammar and bounded unit fixtures. It currently emits an engine-independent Boolean AST only; the live subject filter remains the active search UI. Parser success does not authorize scope, indexing or serving, and no Meilisearch lowering is included yet.
+
+The next M2 foundation pins a private Community Meilisearch runtime and official SDK, with a fake-document engine fixture. It proves strict term matching only when `matchingStrategy: all` is supplied, substring filters after explicit experimental activation, negative keyword and phrase forms, and same-index federated query deduplication. It also proves that an unquoted eleventh query word is silently ignored even with `matchingStrategy: all`, while punctuation in quoted full-text phrases is tokenized (`"invoice.pdf"` also matches `invoice-pdf`). No live query compiler or source indexer is installed. The future lowerer must reject unsupported forms and guarantee that no query term is silently dropped before it can serve users; a safe word-count strategy remains unresolved. Structured field filters are the intended literal-substring route, subject to the pinned experimental `CONTAINS` behavior and later scope checks. See [the runtime decision](decisions/0014-meili-runtime-contract.md).
 
 This is the listed Gmail-like subset, not every Gmail operator. Uppercase `OR` has lower precedence than whitespace AND; prefix `-` binds to one term/filter or parenthesized group. Parentheses group expressions. `AND` and Gmail brace OR syntax are not implemented; uppercase `AND` is an error. Unknown `name:value` operators, unsupported values and malformed dates are errors, never ignored. Text and known-field values accept quotes, escaped punctuation and Unicode. An unescaped colon in a bare term is treated as an operator attempt; a known field value may contain additional colons. `is:needs-reply` is parsed for a future field but does not infer or call a model now.
 

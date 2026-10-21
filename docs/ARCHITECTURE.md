@@ -73,7 +73,7 @@ connector sync
   -> Tier 1 rules (deterministic labels, bulk mail detection, Orbit routing)
   -> compute effective privacy across all matching Orbits
   -> commit normalized page and cursor atomically
-  -> index in Meilisearch
+  -> index in Meilisearch (planned M2 consumer; the current private engine foundation has no source ingestion)
   -> embed into pgvector
   -> Tier 2 extraction (if not bulk and not excluded)
   -> derived records: proposals, promises, entities, task updates

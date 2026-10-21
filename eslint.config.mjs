@@ -9,5 +9,6 @@ export default tseslint.config(
   { files: ['tests/integration/mail-parser.mjs'], languageOptions: { globals: { Buffer: 'readonly', fetch: 'readonly', console: 'readonly', process: 'readonly', setTimeout: 'readonly', Response: 'readonly', ReadableStream: 'readonly', Uint8Array: 'readonly', URL: 'readonly', AbortController: 'readonly' } } },
   { files: ['tests/integration/mail-sanitize.mjs'], languageOptions: { globals: { Buffer: 'readonly', console: 'readonly', setTimeout: 'readonly' } } },
   { files: ['tests/integration/node-version.mjs'], languageOptions: { globals: { process: 'readonly' } } },
+  { files: ['tests/integration/meili-contract.mjs'], languageOptions: { globals: { process: 'readonly', console: 'readonly' } } },
   { files: ['tests/fixtures/mail-child.mjs'], languageOptions: { globals: { Buffer: 'readonly', process: 'readonly', setInterval: 'readonly' } } },
 );
