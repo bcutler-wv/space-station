@@ -12,11 +12,11 @@ export class GmailChangeError extends Error {
   constructor(readonly code: 'invalid_response' | 'provider_failed') { super(code); }
 }
 
-function boundedFetch(fetchImpl: typeof fetch, signal: AbortSignal): typeof fetch {
+function boundedFetch(fetchImpl: typeof fetch, signal: AbortSignal, limit = 64 * 1024): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin !== 'https://gmail.googleapis.com' ||
-      !/^\/gmail\/v1\/users\/me\/(?:messages|labels)\//.test(url.pathname)) throw new GmailChangeError('invalid_response');
+      !/^\/gmail\/v1\/users\/me\/(?:messages\/[^/]+(?:\/modify)?|labels(?:\/[^/]+)?)$/.test(url.pathname)) throw new GmailChangeError('invalid_response');
     const response = await fetchImpl(input, { ...init, signal, redirect: 'error' });
     const reader = response.body?.getReader();
     if (!reader) return response;
@@ -27,7 +27,7 @@ function boundedFetch(fetchImpl: typeof fetch, signal: AbortSignal): typeof fetc
         const part = await reader.read();
         if (part.done) break;
         size += part.value.byteLength;
-        if (size > 64 * 1024) throw new GmailChangeError('invalid_response');
+        if (size > limit) throw new GmailChangeError('invalid_response');
         chunks.push(part.value);
       }
     } catch (error) { await reader.cancel().catch(() => undefined); throw error; }
@@ -76,6 +76,35 @@ export class GmailChangeAdapter {
     const parsed = label.safeParse(response.data);
     if (!parsed.success || parsed.data.id !== labelId) throw new GmailChangeError('invalid_response');
     return parsed.data;
+  }
+
+  /** One credential and one deadline cover both presentation reads. */
+  async inspectOptions(accessToken: string, messageId: string, signal?: AbortSignal) {
+    if (!id.safeParse(messageId).success) throw new GmailChangeError('invalid_response');
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
+    const timer = setTimeout(abort, this.timeoutMs);
+    try {
+      const transport = new OAuth2Client({ transporterOptions: {
+        fetchImplementation: boundedFetch(this.fetchImpl, controller.signal, 512 * 1024),
+      } }).transporter;
+      const auth = new OAuth2Client({ transporter: transport } as OAuth2ClientOptions);
+      auth.setCredentials({ access_token: accessToken, expiry_date: Date.now() + 3_600_000 });
+      const api = gmail({ version: 'v1', auth });
+      const options = { timeout: this.timeoutMs, retry: false as const, retryConfig: { retry: 0 }, signal: controller.signal };
+      if (controller.signal.aborted) throw new GmailChangeError('provider_failed');
+      const messageResult = await api.users.messages.get({ userId: 'me', id: messageId, format: 'minimal', fields: 'id,labelIds' }, options);
+      const parsedMessage = message.safeParse(messageResult.data);
+      if (!parsedMessage.success || parsedMessage.data.id !== messageId) throw new GmailChangeError('invalid_response');
+      if (controller.signal.aborted) throw new GmailChangeError('provider_failed');
+      const labelResult = await api.users.labels.list({ userId: 'me', fields: 'labels(id,type,name)' }, options);
+      const parsedLabels = z.object({ labels: z.array(z.object({ id, type: z.enum(['user', 'system']).optional(),
+        name: z.string().min(1).max(1024).optional() })).max(500).refine((rows) => new Set(rows.map((row) => row.id)).size === rows.length).default([]) }).safeParse(labelResult.data);
+      if (!parsedLabels.success) throw new GmailChangeError('invalid_response');
+      return { labelIds: parsedMessage.data.labelIds, labels: parsedLabels.data.labels };
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
 
   async modify(accessToken: string, messageId: string, addLabels: string[], removeLabels: string[]) {

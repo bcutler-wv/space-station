@@ -11,6 +11,7 @@ import { registerDrafts } from './drafts.js';
 import { registerDraftAttachments } from './draft-attachments.js';
 import { registerSend } from './send.js';
 import { registerMailChange } from './mail-change.js';
+import { registerMailActionOptions } from './mail-action-options.js';
 import type { GmailReadAdapter, GmailSendAdapter, GmailChangeAdapter } from '@station/connectors';
 import { registerMailImages, type MailImageProxyConfig } from './mail-images.js';
 import type { PrivateBlobStore } from '@station/db';
@@ -18,7 +19,7 @@ import type { PrivateBlobStore } from '@station/db';
 export function buildApp(checkDatabase: () => Promise<void> = async () => {}, appearanceStore?: AppearanceStore, auth?: AuthConfig, transport?: { key?: Buffer; cert?: Buffer; trustedProxyIp?: string }, mailBlobStore?: PrivateBlobStore, mailImageProxy?: MailImageProxyConfig,
   replyReader?: Pick<GmailReadAdapter, 'getReplyHeaders'>,
   sendProvider?: Pick<GmailSendAdapter, 'credential' | 'send' | 'findSent'>,
-  changeProvider?: Pick<GmailChangeAdapter, 'credential' | 'inspectMessage' | 'inspectUserLabel' | 'modify'>) {
+  changeProvider?: Pick<GmailChangeAdapter, 'credential' | 'inspectMessage' | 'inspectUserLabel' | 'modify' | 'inspectOptions'>) {
   const app = Fastify({
     ...(transport?.key && transport.cert ? { https: { key: transport.key, cert: transport.cert } } : {}),
     ...(transport?.trustedProxyIp ? { trustProxy: (address: string) => address === transport.trustedProxyIp } : {}),
@@ -39,6 +40,7 @@ export function buildApp(checkDatabase: () => Promise<void> = async () => {}, ap
     if (mailBlobStore) registerDraftAttachments(instance, auth, mailBlobStore);
     if (mailBlobStore) registerSend(instance, auth, mailBlobStore, sendProvider);
     registerMailChange(instance, auth, changeProvider);
+    registerMailActionOptions(instance, auth, changeProvider);
     if (mailBlobStore && mailImageProxy) registerMailImages(instance, auth, mailBlobStore, mailImageProxy);
   });
   app.get('/health', async () => healthResponseSchema.parse({ status: 'ok' }));

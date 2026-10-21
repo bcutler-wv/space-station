@@ -1,0 +1,11 @@
+# Read-only mail action options
+
+Version 0.30.0 supplies current Gmail action metadata for one exact live message/account/optional Orbit. The owner-only GET reads canonical unread/Inbox/DRAFT state and one bounded provider label list under one current credential. It presents existing local label UUIDs only when Gmail verifies user type and a current name. Stored system labels do not trigger incomplete-label warnings; missing or untyped mappings do. The route rechecks live scope, item revision/sequence, connection generation and label mappings after provider I/O.
+
+The response distinguishes unresolved actions, confirmed actions waiting for sync, and provider drafts. It returns a blocking operation's original nullable Orbit so recovery uses the correct historical scope even when the message is opened elsewhere. Options never write provider or normalized local content, clear unknown outcomes, replace the POST preflight, or establish M2 derived-data eligibility.
+
+Sol implemented the bounded slice and Astra reviewed it. Review corrected false sync warnings caused by system labels and missing original Orbit recovery context. Full local lint, typecheck, 85 unit tests, build, color and license checks passed. Fresh PostgreSQL 15 HTTP fixtures passed scope/generation/removal, current label names, incomplete mappings, timeout and cross-Orbit recovery cases. Independent Astra review reran all eight official-SDK tests and a fresh database fixture with held reads: two handlers retained their slots after cooperative abort until settlement, a third stayed refused, and no modify occurred. The disposable database server was stopped.
+
+The route limits two active reads, uses bounded read-only database transactions, and signals cancellation after 20 seconds or client close. Credential work has its own deadline; the signal is not a hard total response deadline. Both SDK reads share a ten-second deadline, fixed host, zero retries, bounded streamed responses and 500-label limit. Final responses are limited to 128 KiB. No dependency or migration was added. ADR 0012 documents these presentation limits.
+
+Ubuntu PostgreSQL 16/Compose validation of this exact diff remains pending. The existing mail-change CI fixture includes the new assertions. Browser controls and integrated M1 acceptance follow; no production deployment was performed.

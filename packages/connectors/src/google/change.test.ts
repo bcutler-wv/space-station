@@ -7,6 +7,47 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 });
 
 describe('Gmail change adapter', () => {
+  it('reads exact message state and explicit label types through the SDK with one deadline', async () => {
+    const calls: string[] = [];
+    const adapter = new GmailChangeAdapter(service as never, async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      calls.push(url.pathname);
+      if (url.pathname.endsWith('/labels')) return json({ labels: [
+        { id: 'Label_1', type: 'user' }, { id: 'INBOX', type: 'system' }, { id: 'Label_2' },
+      ] });
+      return json({ id: 'msg_1', labelIds: ['INBOX', 'UNREAD', 'Label_1'] });
+    });
+    expect(await adapter.inspectOptions('fixture-access', 'msg_1')).toEqual({
+      labelIds: ['INBOX', 'UNREAD', 'Label_1'], labels: [
+        { id: 'Label_1', type: 'user' }, { id: 'INBOX', type: 'system' }, { id: 'Label_2' },
+      ],
+    });
+    expect(calls).toEqual(['/gmail/v1/users/me/messages/msg_1', '/gmail/v1/users/me/labels']);
+  });
+
+  it('rejects malformed, excessive and aborted options reads', async () => {
+    for (const value of [{ labels: 'bad' }, { labels: [{ id: 'Label_1', type: 'user' }, { id: 'Label_1', type: 'system' }] },
+      { labels: Array.from({ length: 501 }, (_, n) => ({ id: `Label_${n}`, type: 'user' })) }]) {
+      const adapter = new GmailChangeAdapter(service as never, async (input) =>
+        json(String(input).includes('/labels') ? value : { id: 'msg_1', labelIds: [] }));
+      await expect(adapter.inspectOptions('fixture-access', 'msg_1')).rejects.toMatchObject({ code: 'invalid_response' });
+    }
+    const controller = new AbortController();
+    const adapter = new GmailChangeAdapter(service as never, (_input, init) => new Promise((_resolve, reject) => {
+      if (init?.signal?.aborted) { reject(new Error('aborted')); return; }
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }), 100);
+    const read = adapter.inspectOptions('fixture-access', 'msg_1', controller.signal);
+    controller.abort();
+    await expect(read).rejects.toBeInstanceOf(Error);
+    let calls = 0;
+    const timed = new GmailChangeAdapter(service as never, (_input, init) => new Promise((_resolve, reject) => {
+      calls++;
+      init?.signal?.addEventListener('abort', () => reject(new Error('deadline')), { once: true });
+    }), 25);
+    await expect(timed.inspectOptions('fixture-access', 'msg_1')).rejects.toBeInstanceOf(Error);
+    expect(calls).toBe(1);
+  });
   it('uses exact users/me message and label reads, then one official SDK modify', async () => {
     const calls: { url: string; method: string; body: unknown }[] = [];
     const adapter = new GmailChangeAdapter(service as never, async (input, init) => {

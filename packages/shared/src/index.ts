@@ -10,6 +10,7 @@ export { sendRequestSchema, sendScopeSchema, sendDraftStatusQuerySchema, sendOpe
   sendDiscoveryQuerySchema, sendDiscoveryPageSchema } from './send.js';
 export { mailChangeScopeSchema, mailChangeRequestSchema, mailChangeCurrentStatusQuerySchema, mailChangeOperationSchema,
   mailChangeDiscoveryQuerySchema, mailChangeDiscoveryPageSchema } from './mail-change.js';
+export { mailActionOptionsQuerySchema, mailActionOptionsSchema } from './mail-action-options.js';
 export { MAIL_HTML_POLICY_VERSION, MAIL_HTML_LIMITS, MAIL_HTML_TAGS, MAIL_HTML_ATTRIBUTES, safeMailLink, safeMailImage } from './mail-html-policy.js';
 export { readerIdSchema, mailNavigationSearchSchema, mailContextSchema, conversationQuerySchema, threadQuerySchema, itemQuerySchema, labelQuerySchema,
   readerAttachmentSchema, readerMessageSchema, readerConversationSchema, conversationPageSchema,

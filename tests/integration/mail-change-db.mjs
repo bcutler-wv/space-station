@@ -24,6 +24,7 @@ let credentialGeneration = 0;
 let onCredential = async () => {};
 let onInspect = async () => {};
 let onModify = async () => {};
+let onOptions = async () => {};
 const provider = {
   async credential() { await onCredential(); return { accessToken: 'fixture', expiresAt: null, generation: credentialGeneration }; },
   async inspectUserLabel(_token, labelId) {
@@ -32,6 +33,12 @@ const provider = {
   },
   async inspectMessage(_token, messageId) { inspectReads++; await onInspect(); return { id: messageId,
     labelIds: mode === 'draft' ? ['DRAFT'] : mode === 'observed_read' ? ['INBOX'] : ['INBOX', 'UNREAD'] }; },
+  async inspectOptions(_token, _messageId, signal) { inspectReads++; await onOptions(signal); return {
+    labelIds: mode === 'draft' ? ['DRAFT'] : ['INBOX', 'UNREAD', 'Label_1'],
+    labels: [{ id: 'Label_1', type: 'user', name: 'Renamed in Gmail' },
+      { id: 'Label_system', type: 'system', name: 'Fake user label' },
+      { id: 'Label_unknown', name: 'Unknown type' }],
+  }; },
   async modify(_token, messageId, add, remove) {
     calls++;
     await onModify();
@@ -87,7 +94,54 @@ try {
     providerRevision: '7', appliedSequence: 1, direction: 'in', directionProvenance: 'incoming',
     parseStatus: 'supported', flags: {}, ...(itemId === tombstone ? { deletedAt: new Date() } : {}) })));
   await db.insert(itemOrbits).values([itemA, itemB, ...capItems].map((itemId) => ({ itemId, orbitId: orbitA, reason: 'account' })));
-  await db.insert(labels).values({ id: labelA, accountId: accountA, providerRef: 'Label_1', name: 'Example label' });
+  await db.insert(labels).values([{ id: labelA, accountId: accountA, providerRef: 'Label_1', name: 'Example label' },
+    { id: id(), accountId: accountA, providerRef: 'Label_system', name: 'Stored system' },
+    { id: id(), accountId: accountA, providerRef: 'Label_unknown', name: 'Stored unknown' }]);
+  const options = (itemId, accountId = accountA, orbitId = orbitA) =>
+    `/api/mail/items/${itemId}/action-options?accountId=${accountId}&orbitId=${orbitId}`;
+  assert.equal((await request('GET', options(itemA, accountB))).statusCode, 404);
+  assert.equal((await request('GET', options(itemA, accountA, orbitB))).statusCode, 404);
+  assert.equal((await request('GET', options(tombstone))).statusCode, 404);
+  const beforeOptions = await request('GET', options(itemA));
+  assert.equal(beforeOptions.statusCode, 200, beforeOptions.body);
+  assert.equal(beforeOptions.json().itemSequence, 1);
+  assert.equal(beforeOptions.json().itemRevision, '7');
+  assert.equal(beforeOptions.json().labels[0].name, 'Renamed in Gmail');
+  assert.equal(beforeOptions.json().labels[0].canRemove, true);
+  assert.equal(beforeOptions.json().labels.length, 1);
+  assert.equal(beforeOptions.json().labelsIncomplete, true);
+  await db.delete(labels).where(eq(labels.providerRef, 'Label_unknown'));
+  const syncedOptions = await request('GET', options(itemA));
+  assert.equal(syncedOptions.statusCode, 200, syncedOptions.body);
+  assert.equal(syncedOptions.json().labelsIncomplete, false);
+  assert.equal(syncedOptions.json().labels.length, 1);
+  assert.equal(beforeOptions.json().canMarkRead, true);
+  assert.equal(beforeOptions.json().canArchive, true);
+  onOptions = (signal) => new Promise((_resolve, reject) => {
+    if (signal.aborted) { reject(new Error('fixture deadline')); return; }
+    signal.addEventListener('abort', () => reject(new Error('fixture deadline')), { once: true });
+  });
+  const timedOptions = await request('GET', options(itemA));
+  assert.equal(timedOptions.statusCode, 503, timedOptions.body);
+  onOptions = async () => {};
+  assert.equal((await request('GET', options(itemA))).statusCode, 200);
+  mode = 'draft';
+  assert.equal((await request('GET', options(itemA))).json().blockedReason, 'draft');
+  mode = 'success';
+  onOptions = async () => { await db.update(accounts).set({ credentialGeneration: 4 }).where(eq(accounts.id, accountA)); };
+  assert.equal((await request('GET', options(itemA))).statusCode, 409);
+  onOptions = async () => {};
+  credentialGeneration = 4;
+  onOptions = async () => { await db.delete(itemOrbits).where(eq(itemOrbits.itemId, itemA)); };
+  assert.equal((await request('GET', options(itemA))).statusCode, 409);
+  await db.insert(itemOrbits).values({ itemId: itemA, orbitId: orbitA, reason: 'account' });
+  onOptions = async () => {};
+  onOptions = async () => { await db.update(items).set({ deletedAt: new Date() }).where(eq(items.id, itemA)); };
+  assert.equal((await request('GET', options(itemA))).statusCode, 409);
+  await db.update(items).set({ deletedAt: null }).where(eq(items.id, itemA));
+  onOptions = async () => {};
+  await db.update(accounts).set({ credentialGeneration: 0 }).where(eq(accounts.id, accountA));
+  credentialGeneration = 0;
   const endpoint = (itemId, accountId = accountA, orbitId = orbitA) =>
     `/api/mail/items/${itemId}/change?accountId=${accountId}&orbitId=${orbitId}`;
   const body = (action, key = id(), extra = {}) => ({ idempotencyKey: key, action,
@@ -111,6 +165,16 @@ try {
   assert.equal(concurrent.statusCode, 200, concurrent.body);
   assert.equal(first.json().id, concurrent.json().id);
   assert.equal(calls, 1);
+  const blockedOptions = await request('GET', options(itemA));
+  assert.equal(blockedOptions.statusCode, 200, blockedOptions.body);
+  assert.equal(blockedOptions.json().blockedReason, 'awaiting_sync');
+  assert.equal(blockedOptions.json().canArchive, false);
+  await db.insert(itemOrbits).values({ itemId: itemA, orbitId: orbitB, reason: 'account' });
+  const crossOrbitOptions = await request('GET', options(itemA, accountA, orbitB));
+  assert.equal(crossOrbitOptions.statusCode, 200, crossOrbitOptions.body);
+  assert.equal(crossOrbitOptions.json().blockingOperationId, first.json().id);
+  assert.equal(crossOrbitOptions.json().blockingOrbitId, orbitA);
+  await db.delete(itemOrbits).where(eq(itemOrbits.orbitId, orbitB));
   const keyed = (itemId, accountId, orbitId, idempotencyKey) =>
     `/api/mail/items/${itemId}/change?accountId=${accountId}&orbitId=${orbitId}&idempotencyKey=${idempotencyKey}`;
   assert.equal((await request('GET', keyed(itemA, accountA, orbitA, key))).json().id, first.json().id);
