@@ -25,6 +25,40 @@ jobs:
       - run: pnpm test:e2e
       - run: pnpm exec playwright test --config playwright.mail-body-dev.config.ts
 
+  process-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: scaffold
+    env:
+      APP_UID: '1001'
+      APP_GID: '1001'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/init-env.mjs
+      - run: docker compose up -d --wait postgres
+      - run: docker compose run --rm -T --no-deps blob-init
+      - run: docker compose run --rm -T migrate
+      - run: docker compose exec -T postgres createdb -U station station_process_recovery_test
+      - run: docker compose run --rm -T -e DB_NAME=station_process_recovery_test migrate
+      - run: mkdir -p .cache/results/process-recovery
+      - run: docker compose run --rm -T --no-deps -e DB_NAME=station_process_recovery_test -e STATION_TEST_BLOB_ROOT=/var/lib/station/blobs/process-recovery-fixture -e PROCESS_RECOVERY_ARTIFACT_ROOT=/run/process-results -v "$PWD/.cache/results/process-recovery:/run/process-results" app node tests/integration/process-recovery.mjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-recovery-logs
+          path: .cache/results/process-recovery/*.log
+          if-no-files-found: ignore
+      - if: always()
+        run: docker compose down -v --remove-orphans
+
   runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 30
