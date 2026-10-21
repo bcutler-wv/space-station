@@ -595,7 +595,7 @@ function OrbitView({
   );
 }
 
-function App({ active, thread }: { active: 'mission' | OrbitId | 'mail'; thread?: { accountId: string; threadId: string } }) {
+function App({ active, thread, draftRoute }: { active: 'mission' | OrbitId | 'mail'; thread?: { accountId: string; threadId: string }; draftRoute?: { accountId: string; draftId: string } }) {
   const navigate = useNavigate();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [capcomOpen, setCapcomOpen] = useState(false);
@@ -809,7 +809,7 @@ function App({ active, thread }: { active: 'mission' | OrbitId | 'mail'; thread?
         </div>
       </header>
       <main className="interior">
-        {active === 'mail' ? <MailScreen {...(thread ? { thread } : {})} /> : <>
+        {active === 'mail' ? <MailScreen {...(thread ? { thread } : {})} {...(draftRoute ? { draftRoute } : {})} /> : <>
         <div className="sample-setup-link"><a href="/setup">Set up your first Orbit</a><span>Sample Mission Control</span></div>
         {blackout && (
           <div className="blackout-note">
@@ -1050,13 +1050,17 @@ const mailThreadRoute = createRoute({ getParentRoute: () => rootRoute, path: '/m
   const { accountId, threadId } = mailThreadRoute.useParams();
   return <App active="mail" thread={{ accountId, threadId }} />;
 } });
+const mailDraftRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail/draft/$accountId/$draftId', component: () => {
+  const { accountId, draftId } = mailDraftRoute.useParams();
+  return <App active="mail" draftRoute={{ accountId, draftId }} />;
+} });
 const mailBodyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mail/body/$accountId/$itemId', component: () => {
   const { accountId, itemId } = mailBodyRoute.useParams();
   const search = useLocation({ select: (location) => location.searchStr });
   const orbitId = new URLSearchParams(search).get('orbitId') ?? undefined;
   return <MailBody accountId={accountId} itemId={itemId} {...(orbitId ? { orbitId } : {})} />;
 } });
-const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute, mailRoute, mailThreadRoute, mailBodyRoute]) });
+const router = createRouter({ routeTree: rootRoute.addChildren([missionRoute, setupRoute, googleRoute, googleContinueRoute, orbitRoute, mailRoute, mailThreadRoute, mailDraftRoute, mailBodyRoute]) });
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

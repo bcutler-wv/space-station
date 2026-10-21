@@ -11,3 +11,5 @@ Local lint, typecheck, 68 unit tests, build, color and license checks passed. So
 Ubuntu PostgreSQL 16/Compose validation is wired using the application's private volume and configured UID/GID, and remains pending for this commit. Send, compose, provider actions and M1 integrated acceptance remain separate work.
 
 Version 0.26.1 repairs a fixture bootstrap failure in Ubuntu run `39525762004`: the fixture attempted to create `/app/.cache` even when CI supplied its writable private-volume root. Default directory creation is now conditional; container permissions and attachment assertions are unchanged. Sol ran the full PostgreSQL 15 fixture with an explicit root from a read-only working directory and with the repo-local default. Astra independently executed both setup branches and accepted the narrow repair. Full Ubuntu acceptance remains pending.
+
+Full Ubuntu run `39526973691` passed at `8de3f30` (0.26.1), accepting attachment storage and the fixture repair. The PostgreSQL 16 migration, application UID/GID private-volume fixture and remaining browser gates all passed.

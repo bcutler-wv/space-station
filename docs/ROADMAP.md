@@ -157,3 +157,9 @@ Legacy reply metadata repair was accepted after full Ubuntu run `39524137665` pa
 Attachment run `39525762004` failed during fixture directory creation, before attachment assertions. Version 0.26.1 makes repo-local artifact creation conditional when CI supplies a writable volume root; Astra accepted the narrow fix after explicit-root/read-only-cwd and default-root checks. Full integration remains pending.
 
 Durable Gmail send and reconciliation are implemented and Astra-reviewed for version 0.27.0, pending Ubuntu integration. Frozen MIME and a durable one-attempt claim prevent automatic resend after unknown outcomes. Independent review corrected credential database deadlines and verified provider evidence and crash recovery. See [the send record](sessions/gmail-send-backend.md). Compose UI and unresolved-send discovery are next.
+
+Draft attachment storage and its fixture repair were accepted after full Ubuntu run `39526973691` passed at `8de3f30` (0.26.1), including PostgreSQL 16 migration, configured private-volume permissions, HTTP/filesystem assertions and browser gates. Send integration is separately pending.
+
+Durable Gmail send and reconciliation were accepted after full Ubuntu run `39528557367` passed at `a99f6b8` (0.27.0), including PostgreSQL 16/Compose send, recovery and reconciliation fixtures and browser gates. Compose UI, provider-action controls and integrated M1 acceptance remain.
+
+Compose and reply UI are implemented and Astra-reviewed for version 0.28.0, pending Ubuntu integration. Server drafts, owned attachments, explicit send, current-attempt recovery and bounded unresolved-send discovery are integrated into Mail. Independent review corrected reconnect data loss, failed-send attachment visibility and out-of-order status responses. See [the compose record](sessions/mail-compose-ui.md). Explicit archive/read/label actions and final M1 acceptance remain.

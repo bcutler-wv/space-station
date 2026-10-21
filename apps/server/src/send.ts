@@ -1,11 +1,12 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { addressParser } from 'postal-mime';
 import { GmailSendAdapter, GoogleCredentialError, GoogleCredentialService, GMAIL_MODIFY_SCOPE, type SentEvidence } from '@station/connectors';
 import { accounts, auditLog, draftAttachments, drafts, identities, itemRecipients, items, outboundOperations, PrivateBlobStore, threads } from '@station/db';
-import { draftUpdateSchema, sendOperationSchema, sendRequestSchema, sendScopeSchema } from '@station/shared';
+import { draftUpdateSchema, sendOperationSchema, sendRequestSchema, sendScopeSchema, sendDraftStatusQuerySchema,
+  sendDiscoveryQuerySchema, sendDiscoveryPageSchema } from '@station/shared';
 import type { AuthConfig } from './auth.js';
 import { composeMime, MAX_MIME_BYTES, type Address, type FrozenAttachment } from './send-mime.js';
 import { storedReplyMetadata } from './drafts.js';
@@ -28,6 +29,26 @@ function message(row: Row) {
     'The send is being prepared or submitted.';
   return sendOperationSchema.parse({ id: row.id, draftId: row.draftId, accountId: row.accountId, orbitId: row.orbitId,
     state, providerResultId: row.providerResultId, updatedAt: row.updatedAt.toISOString(), message: detail });
+}
+
+function discoveryCursor(value: { at: string; id: string; accountId: string; orbitId: string | null }, key: Buffer) {
+  const body = Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${body}.${createHmac('sha256', key).update(body).digest('base64url')}`;
+}
+function readDiscoveryCursor(raw: string | undefined, accountId: string, orbitId: string | undefined, key: Buffer) {
+  if (!raw) return null;
+  const [body, mac, extra] = raw.split('.');
+  if (!body || !mac || extra || body.length > 400 || mac.length !== 43) return false;
+  const expected = createHmac('sha256', key).update(body).digest();
+  const actual = Buffer.from(mac, 'base64url');
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return false;
+  try {
+    const value = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Record<string, unknown>;
+    if (Object.keys(value).length !== 4 || value.accountId !== accountId || value.orbitId !== (orbitId ?? null) ||
+      !z.uuid().safeParse(value.id).success || typeof value.at !== 'string' ||
+      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/.test(value.at) || !Number.isFinite(Date.parse(value.at))) return false;
+    return { at: value.at, id: value.id as string };
+  } catch { return false; }
 }
 
 function addresses(value: unknown): Address[] | null {
@@ -95,6 +116,35 @@ export function registerSend(app: FastifyInstance, auth: AuthConfig, store: Priv
     await tx.update(drafts).set({ state: 'editing', updatedAt: new Date() })
       .where(and(eq(drafts.id, row.draftId), eq(drafts.state, 'sending')));
     await audit(tx, 'send_failed', row.id);
+  });
+
+  app.get('/api/mail/sends/unresolved', async (request, reply) => {
+    if (!readOrigin(request.headers)) return reply.code(403).send(absent);
+    const parsed = sendDiscoveryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send(absent);
+    const { accountId, orbitId, limit } = parsed.data;
+    const cursor = readDiscoveryCursor(parsed.data.cursor, accountId, orbitId, auth.masterKey);
+    if (cursor === false) return reply.code(400).send(absent);
+    const rows = await run(async (tx) => {
+      const [account] = await tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, accountId)).limit(1);
+      if (!account) return null;
+      return tx.select().from(outboundOperations).where(and(eq(outboundOperations.ownerId, OWNER),
+        eq(outboundOperations.accountId, accountId), orbitId ? eq(outboundOperations.orbitId, orbitId) : undefined,
+        sql`${outboundOperations.state} in ('pending', 'in_flight', 'outcome_unknown')`,
+        cursor ? or(sql`${outboundOperations.userActionAt} < ${cursor.at}::timestamptz`,
+          and(sql`${outboundOperations.userActionAt} = ${cursor.at}::timestamptz`, lt(outboundOperations.id, cursor.id))) : undefined))
+        .orderBy(sql`${outboundOperations.userActionAt} desc`, sql`${outboundOperations.id} desc`).limit(limit + 1);
+    }, true);
+    if (!rows) return reply.code(404).send(absent);
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor = rows.length > limit && last ? await run(async (tx) => {
+      const [time] = await tx.select({ at: sql<string>`to_char(${outboundOperations.userActionAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` })
+        .from(outboundOperations).where(eq(outboundOperations.id, last.id)).limit(1);
+      return time ? discoveryCursor({ at: time.at, id: last.id, accountId, orbitId: orbitId ?? null }, auth.masterKey) : null;
+    }, true) : null;
+    const result = sendDiscoveryPageSchema.parse({ operations: page.map(message), nextCursor });
+    return Buffer.byteLength(JSON.stringify(result)) <= 64 * 1024 ? result : reply.code(503).send({ error: 'This send page is too large.' });
   });
 
   app.post('/api/mail/drafts/:draftId/send', async (request, reply) => {
@@ -288,12 +338,13 @@ export function registerSend(app: FastifyInstance, auth: AuthConfig, store: Priv
   app.get('/api/mail/drafts/:draftId/send', async (request, reply) => {
     if (!readOrigin(request.headers)) return reply.code(403).send(absent);
     const draftId = (request.params as { draftId?: string }).draftId;
-    const scope = sendScopeSchema.safeParse(request.query);
+    const scope = sendDraftStatusQuerySchema.safeParse(request.query);
     if (!draftId || !z.uuid().safeParse(draftId).success || !scope.success) return reply.code(400).send(absent);
     const [row] = await run((tx) => tx.select().from(outboundOperations).where(and(
       eq(outboundOperations.draftId, draftId), eq(outboundOperations.ownerId, OWNER),
       eq(outboundOperations.accountId, scope.data.accountId), scope.data.orbitId ?
-        eq(outboundOperations.orbitId, scope.data.orbitId) : isNull(outboundOperations.orbitId)))
+        eq(outboundOperations.orbitId, scope.data.orbitId) : isNull(outboundOperations.orbitId),
+      scope.data.idempotencyKey ? eq(outboundOperations.idempotencyKey, scope.data.idempotencyKey) : undefined))
       .orderBy(sql`${outboundOperations.userActionAt} desc`).limit(1), true);
     return row ? message(row) : reply.code(404).send(absent);
   });

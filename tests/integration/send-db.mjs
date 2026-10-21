@@ -179,7 +179,8 @@ try {
   onCredential = () => { credentialCalls++; return credentialService.get(accountId); };
   const callsBeforeLockedSend = sends;
   const sendStarted = Date.now();
-  const blockedSend = await call('POST', scope(lockDraft, accountId), { idempotencyKey: id(), revision: 1 }, csrf);
+  const lockKey = id();
+  const blockedSend = await call('POST', scope(lockDraft, accountId), { idempotencyKey: lockKey, revision: 1 }, csrf);
   assert.equal(blockedSend.statusCode, 503, blockedSend.body);
   assert.ok(Date.now() - sendStarted < 3500, 'locked credential row cannot occupy a send slot indefinitely');
   assert.equal(credentialCalls, 1);
@@ -189,6 +190,14 @@ try {
   assert.equal(failedPreflight.state, 'failed');
   assert.equal(failedPreflight.lastError, 'credential_preflight');
   assert.equal(failedPreflight.blobReady, true);
+  const keyedStatus = await call('GET', `${scope(lockDraft, accountId)}&idempotencyKey=${lockKey}`);
+  assert.equal(keyedStatus.statusCode, 200, keyedStatus.body);
+  assert.equal(keyedStatus.json().id, failedPreflight.id);
+  assert.equal(keyedStatus.json().state, 'failed');
+  assert.equal((await call('GET', `${scope(lockDraft, accountId)}&idempotencyKey=${id()}`)).statusCode, 404);
+  assert.equal((await call('GET', `${scope(lockDraft, id())}&idempotencyKey=${lockKey}`)).statusCode, 404);
+  assert.equal((await call('GET', `${scope(lockDraft, accountId)}&orbitId=${orbitId}&idempotencyKey=${lockKey}`)).statusCode, 404);
+  assert.equal((await call('GET', `${scope(lockDraft, accountId)}&idempotencyKey=invalid`)).statusCode, 400);
   assert.deepEqual((await db.select({ action: auditLog.action }).from(auditLog)
     .where(eq(auditLog.targetId, failedPreflight.id))).map((row) => row.action).sort(), ['send_failed', 'send_requested']);
   onCredential = async () => {};
@@ -204,6 +213,45 @@ try {
   await app.close();
   app = await createApp();
   assert.equal((await call('GET', operation(unknown.json().id, accountId))).json().state, 'outcome_unknown');
+  assert.equal(sends, 3);
+  const discovery = `/api/mail/sends/unresolved?accountId=${accountId}`;
+  assert.equal((await call('GET', discovery, undefined, undefined, { origin: 'https://evil.example.com' })).statusCode, 403);
+  assert.equal((await call('GET', `/api/mail/sends/unresolved?accountId=${id()}`)).statusCode, 404);
+  assert.deepEqual((await call('GET', `${discovery}&orbitId=${orbitId}`)).json().operations, []);
+  const pageIds = [id(), id()];
+  for (const extra of pageIds) {
+    const extraDraft = id();
+    assert.equal((await call('POST', '/api/mail/drafts', draftInput(extraDraft, accountId), csrf)).statusCode, 201);
+    await db.insert(outboundOperations).values({ id: extra, ownerId: 'owner', draftId: extraDraft, accountId,
+      idempotencyKey: id(), requestDigest: 'discovery-fixture', draftRevision: 1,
+      blobKey: PrivateBlobStore.generateKey(), messageId: `<${id()}@example.com>`, fromAddress: 'owner@example.com',
+      recipientAddresses: { to: ['recipient@example.com'], cc: [], bcc: [] }, state: 'outcome_unknown' });
+    await db.update(drafts).set({ state: 'sending' }).where(eq(drafts.id, extraDraft));
+  }
+  await db.execute(sql`update outbound_operations set user_action_at = '2026-10-20T12:00:00.123456Z' where id = ${pageIds[0]}`);
+  await db.execute(sql`update outbound_operations set user_action_at = '2026-10-20T12:00:00.123455Z' where id = ${pageIds[1]}`);
+  const firstPage = await call('GET', `${discovery}&limit=1`);
+  assert.equal(firstPage.statusCode, 200, firstPage.body);
+  assert.equal(firstPage.json().operations.length, 1);
+  assert.ok(firstPage.json().nextCursor);
+  const secondPage = await call('GET', `${discovery}&limit=1&cursor=${encodeURIComponent(firstPage.json().nextCursor)}`);
+  assert.equal(secondPage.statusCode, 200, secondPage.body);
+  assert.equal(secondPage.json().operations.length, 1);
+  assert.notEqual(secondPage.json().operations[0].id, firstPage.json().operations[0].id);
+  const thirdPage = await call('GET', `${discovery}&limit=1&cursor=${encodeURIComponent(secondPage.json().nextCursor)}`);
+  assert.equal(thirdPage.statusCode, 200, thirdPage.body);
+  assert.deepEqual([secondPage.json().operations[0].id, thirdPage.json().operations[0].id], pageIds);
+  const orbitDraft = id(), orbitOperation = id();
+  assert.equal((await call('POST', '/api/mail/drafts', { ...draftInput(orbitDraft, accountId), orbitId }, csrf)).statusCode, 201);
+  await db.insert(outboundOperations).values({ id: orbitOperation, ownerId: 'owner', draftId: orbitDraft, accountId, orbitId,
+    idempotencyKey: id(), requestDigest: 'orbit-discovery-fixture', draftRevision: 1,
+    blobKey: PrivateBlobStore.generateKey(), messageId: `<${id()}@example.com>`, fromAddress: 'owner@example.com',
+    recipientAddresses: { to: ['recipient@example.com'], cc: [], bcc: [] }, state: 'outcome_unknown' });
+  await db.update(drafts).set({ state: 'sending' }).where(eq(drafts.id, orbitDraft));
+  assert.ok((await call('GET', `${discovery}&limit=20`)).json().operations.some((row) => row.id === orbitOperation && row.orbitId === orbitId));
+  assert.deepEqual((await call('GET', `${discovery}&orbitId=${orbitId}`)).json().operations.map((row) => row.id), [orbitOperation]);
+  assert.equal((await call('GET', `${discovery}&orbitId=${orbitId}&cursor=${encodeURIComponent(firstPage.json().nextCursor)}`)).statusCode, 400);
+  assert.equal((await call('GET', `${discovery}&cursor=forged`)).statusCode, 400);
   assert.equal(sends, 3);
   assert.equal((await call('POST', `${operation(unknown.json().id, accountId).replace('?', '/reconcile?')}`, {}, csrf)).json().state, 'outcome_unknown');
   found = [{ id: 'sent_recovered', threadId: 'thread_1', labelIds: ['SENT'], payload: { headers: [
