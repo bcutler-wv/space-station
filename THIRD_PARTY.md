@@ -49,6 +49,27 @@ On 2026-10-21, verified the official Community release v1.55.0, its tagged MIT l
 | getmeili/meilisearch CE v1.55.0 | https://github.com/meilisearch/meilisearch/tree/v1.55.0 | MIT [tagged license](https://github.com/meilisearch/meilisearch/blob/v1.55.0/LICENSE-MIT); Docker Hub image index `sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c`; official Linux amd64 Community binary SHA-256 `7e33f5889235f14290074a19a6d3574bd9b10fb2ee8731eabb7dafd0714b0513` | Private lexical engine foundation and fake contract gate; no live ingestion yet |
 | meilisearch JS SDK 0.62.0 | https://github.com/meilisearch/meilisearch-js/tree/v0.62.0 | MIT installed LICENSE SHA-256 prefix `f38718a82ebe`; npm tarball SHA-512 `fc44c35bb9a6588d8d7129ad25d4cf85b8ec21bb3755cb9aa6ccd7e57e8985d1c1d176ecccf3a1a9ddc40766c4ca52f41caedd83087fe19dcc772bb271655fe4` | Pinned client, bounded transport/bootstrap and fake engine fixture |
 
+## Test-only M2 OpenSearch comparison (pending manual Ubuntu proof)
+
+The official `@opensearch-project/opensearch` 3.9.0 client is a **root dev
+dependency used only by the manual fake-data proof**. Its published Apache-2.0
+`LICENSE.txt` SHA-256 is
+`43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1`;
+the committed pnpm lock pins npm integrity
+`sha512-ksIEi0wyIjVncfRwaxt5v6H4qL1aQO2eE3MxKyXGCLnR70YTSCDp+JGhdx2LpyMjtCFvr71DWtYQg9SK3pcNnA==`.
+The [official client release](https://github.com/opensearch-project/opensearch-js/releases/tag/3.9.0)
+and [tagged license](https://raw.githubusercontent.com/opensearch-project/opensearch-js/3.9.0/LICENSE.txt)
+were checked on 2026-10-21.
+
+The manual workflow pins the official OpenSearch 3.9.0 Linux image index
+`sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c`.
+Its [tagged release](https://github.com/opensearch-project/OpenSearch/releases/tag/3.9.0)
+and [Apache-2.0 license](https://raw.githubusercontent.com/opensearch-project/OpenSearch/3.9.0/LICENSE.txt)
+were checked on 2026-10-21. Its packaged image closure and resource behavior
+await the actual Ubuntu proof; no image is installed in Station or pulled on
+agent-dev. Neither the test client nor the engine is an adopted production
+search component at this stage.
+
 ## Planned dependencies
 
 | Package | Use | License (verify when adding) |
