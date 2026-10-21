@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { and, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { GmailReadAdapter, GmailReadError, type GmailRawMessage, type GmailMessageMetadata, type GmailHistoryPage } from '@station/connectors';
 import { accounts, appendSyncEvent, applyMailPage, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
   MailPageFenceError, type MailChange } from '@station/db';
@@ -15,6 +15,7 @@ const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 const COLLECTION = 'primary';
 const LEASE_MS = 180_000;
 const ID_BATCH = 10;
+const LABEL_BATCH = 100;
 const MAX_RUN_STEPS = 200;
 const MAX_RUN_MS = 720_000;
 const MAX_RETRY_MS = 15 * 60_000;
@@ -143,21 +144,61 @@ export class GmailSyncRunner {
   private async refreshLabels(account: Account, state: State, reader: Reader, signal: AbortSignal): Promise<Map<string, string>> {
     const page = await reader.listLabels(account.id);
     signal.throwIfAborted();
-    // A removed catalog entry is unresolved for policy evaluation until a current label name is known.
     const known = new Map(page.labels.map((label) => [label.id, label.name]));
-    const rows = await this.db.select().from(labels).where(eq(labels.accountId, account.id));
-    for (const row of rows) {
+    await this.db.transaction(async (tx) => {
       signal.throwIfAborted();
-      const name = known.get(row.providerRef) ?? '';
-      if (row.name !== name) await this.db.transaction(async (tx) => {
-        const [changed] = await tx.update(labels).set({ name, updatedAt: this.now() })
-          .where(and(eq(labels.id, row.id), sql`exists (select 1 from sync_state where id = ${state.id} and generation = ${state.generation} and lease_until > now())`,
-            sql`exists (select 1 from accounts where id = ${account.id} and credential_generation = ${account.credentialGeneration} and revoked_at is null)`,
-            sql`exists (select 1 from settings where key = 'first_orbit_setup_v1' and value ->> 'confirmedOrigin' = ${this.origin})`))
-          .returning({ id: labels.id });
-        if (changed) await appendSyncEvent(tx, 'mail-changed', account.id);
-      });
-    }
+      await tx.execute(sql`set local statement_timeout = '3000ms'`);
+      await tx.execute(sql`set local lock_timeout = '750ms'`);
+      const [currentAccount] = await tx.select().from(accounts).where(eq(accounts.id, account.id)).for('update');
+      const [currentState] = await tx.select().from(syncStates).where(eq(syncStates.id, state.id)).for('update');
+      const [setup] = await tx.select({ value: settings.value }).from(settings).where(eq(settings.key, 'first_orbit_setup_v1')).for('share');
+      const marker = z.object({ version: z.literal(1), orbitId: z.string().uuid(), confirmedOrigin: z.url(),
+        globalDefaults: privacyDefaultsSchema }).safeParse(setup?.value);
+      if (!currentAccount || !currentState || !eligible(currentAccount) ||
+          currentAccount.credentialGeneration !== account.credentialGeneration ||
+          currentState.accountId !== account.id || currentState.resource !== 'mail' || currentState.collectionId !== COLLECTION ||
+          currentState.generation !== state.generation || currentState.status !== 'running' ||
+          !currentState.leaseUntil || currentState.leaseUntil <= new Date() ||
+          !marker.success || marker.data.confirmedOrigin !== this.origin) throw new MailPageFenceError();
+      const refs = [...known.keys()];
+      const rows = refs.length ? await tx.select({ providerRef: labels.providerRef, name: labels.name })
+        .from(labels).where(and(eq(labels.accountId, account.id), inArray(labels.providerRef, refs))) : [];
+      const stored = new Map(rows.map((row) => [row.providerRef, row.name]));
+      let changed = false;
+      const current = [...known].filter(([ref, name]) => stored.get(ref) !== name);
+      for (let offset = 0; offset < current.length; offset += LABEL_BATCH) {
+        signal.throwIfAborted();
+        const batch = current.slice(offset, offset + LABEL_BATCH);
+        const updated = await tx.insert(labels).values(batch.map(([providerRef, name]) => ({
+          id: randomUUID(), accountId: account.id, providerRef, name,
+        }))).onConflictDoUpdate({ target: [labels.accountId, labels.providerRef],
+          set: { name: sql`excluded.name`, updatedAt: this.now() },
+          setWhere: sql`${labels.name} <> excluded.name` }).returning({ id: labels.id });
+        changed ||= updated.length > 0;
+      }
+      // Keep referenced IDs as unresolved privacy evidence. Unreferenced vanished labels
+      // are removed so they cannot accumulate as false incomplete-catalog warnings.
+      const absent = refs.length ? notInArray(labels.providerRef, refs) : undefined;
+      const [stale] = await tx.select({ id: labels.id }).from(labels)
+        .where(and(eq(labels.accountId, account.id), absent, or(sql`${labels.name} <> ''`,
+          sql`not exists (select 1 from item_labels where label_id = ${labels.id} and account_id = ${account.id})`))).limit(1);
+      if (stale) {
+        signal.throwIfAborted();
+        await tx.delete(labels).where(and(eq(labels.accountId, account.id), absent,
+          sql`not exists (select 1 from item_labels where label_id = ${labels.id} and account_id = ${account.id})`));
+        await tx.update(labels).set({ name: '', updatedAt: this.now() })
+          .where(and(eq(labels.accountId, account.id), absent, sql`${labels.name} <> ''`));
+        changed = true;
+      }
+      signal.throwIfAborted();
+      if (changed) await appendSyncEvent(tx, 'mail-changed', account.id);
+      signal.throwIfAborted();
+      const [live] = await tx.select({ id: syncStates.id }).from(syncStates).where(and(eq(syncStates.id, state.id),
+        eq(syncStates.generation, state.generation), eq(syncStates.status, 'running'),
+        sql`${syncStates.leaseUntil} > clock_timestamp()`));
+      if (!live) throw new MailPageFenceError();
+      signal.throwIfAborted();
+    });
     return known;
   }
 

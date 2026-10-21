@@ -27,7 +27,7 @@ let mode = 'initial';
 let failB = true;
 let failReconcilePage = true;
 let failHistoryTail = true;
-let labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Work' }];
+let labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Work' }, { id: 'EMPTY', name: 'Empty label' }];
 const calls = [];
 const providerTimes = [];
 const mark = () => { providerTimes.push(Date.now()); };
@@ -104,6 +104,10 @@ try {
   await runner.run(accountId);
   const runEvents = await readSyncEvents(db, discovered.head);
   assert.ok(runEvents.rows.some((event) => event.kind === 'mail-changed' && event.accountId === accountId));
+  const emptyLabel = (await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'EMPTY');
+  assert.ok(emptyLabel);
+  assert.equal(emptyLabel.name, 'Empty label');
+  assert.equal((await db.select().from(itemLabels).where(eq(itemLabels.labelId, emptyLabel.id))).length, 0);
   assert.ok(runEvents.rows.some((event) => event.kind === 'sync-progress' && event.accountId === accountId));
   assertPaced();
   assert.equal((await state()).lastError, 'transient');
@@ -114,6 +118,8 @@ try {
   await db.update(syncStates).set({ cursor: { ...interrupted.cursor, retryAt: 0 } }).where(eq(syncStates.id, interrupted.id));
   await runner.run(accountId);
   assertPaced(); // includes the first call after restart
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).filter((row) => row.providerRef === 'EMPTY').length, 1);
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'EMPTY').id, emptyLabel.id);
   assert.equal((await state()).cursor.phase, 'history');
   assert.equal((await state()).cursor.historyStart, '10');
   assert.equal((await state()).cursor.historyToken, 'tail');
@@ -141,14 +147,22 @@ try {
   assert.equal((await state()).cursor.phase, 'ready');
   assert.deepEqual((await rows()).filter((row) => row.deletedAt).map((row) => row.externalId).sort(), ['a', 'c']);
   assert.equal((await rows()).find((row) => row.externalId === 'b').deletedAt, null);
-  labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Renamed' }];
+  labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Renamed' }, { id: 'EMPTY', name: 'Renamed empty' }];
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'label', value: 'renamed', effect: 'no_ai' });
   await runner.run(accountId);
   assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').name, 'Renamed');
+  assert.deepEqual((await db.select().from(labels).where(eq(labels.id, emptyLabel.id))).map((row) => row.name), ['Renamed empty']);
   assert.equal((await evaluateStoredMailPrivacy(db, (await rows()).find((row) => row.externalId === 'b').id)).canUseAi, false);
   labelsNow = [{ id: 'INBOX', name: 'Inbox' }];
   await runner.run(accountId);
   assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').name, '');
+  assert.equal((await db.select().from(labels).where(eq(labels.id, emptyLabel.id))).length, 0);
+  const restricted = await evaluateStoredMailPrivacy(db, (await rows()).find((row) => row.externalId === 'b').id);
+  assert.equal(restricted.canIndex, false);
+  assert.equal(restricted.canUseAi, false);
+  const stableCatalogHead = (await readSyncEvents(db, 0)).head;
+  await runner.run(accountId);
+  assert.equal((await readSyncEvents(db, stableCatalogHead)).rows.filter((event) => event.kind === 'mail-changed').length, 0);
 
   // A crash after the final item commit left this exact old durable cursor: the
   // pending terminal batch is exhausted, with no next page. Neither scan relists.
@@ -185,7 +199,7 @@ try {
   let secondHistoryExpired = false;
   const secondReader = {
     async getProfile() { return { emailAddress: 'second@example.com', historyId: secondReconcile ? '50' : '40' }; },
-    async listLabels() { return { labels: [{ id: 'INBOX', name: 'Inbox' }] }; },
+    async listLabels() { return { labels: [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Second work' }] }; },
     async listMessageIds() { return { messages: (secondReconcile ? ['boundary', 'big', 'outage'] : ['old', 'boundary', 'big', 'malformed', 'outage'])
       .map((id) => ({ id, threadId: `t${id}` })) }; },
     async getMessageRaw(_id, id) {
@@ -216,6 +230,9 @@ try {
   assert.ok((await second.discover()).includes(secondId));
   cutoff = (await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0].cursor.cutoff;
   await second.run(secondId);
+  const secondWork = (await db.select().from(labels).where(eq(labels.accountId, secondId))).find((row) => row.providerRef === 'WORK');
+  assert.ok(secondWork);
+  assert.notEqual(secondWork.id, (await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').id);
   let secondRows = await db.select().from(items).where(eq(items.accountId, secondId));
   assert.deepEqual(secondRows.map((row) => row.externalId).sort(), ['big', 'boundary', 'malformed']);
   assert.equal(secondRows.find((row) => row.externalId === 'big').parseStatus, 'unsupported');
@@ -243,7 +260,8 @@ try {
   let entered;
   const blocked = new Promise((resolve) => { release = resolve; });
   const began = new Promise((resolve) => { entered = resolve; });
-  const blockedReader = { ...secondReader, async listLabels() { entered(); await blocked; return { labels: [{ id: 'INBOX', name: 'Inbox' }] }; } };
+  const blockedReader = { ...secondReader, async listLabels() { entered(); await blocked;
+    return { labels: [{ id: 'INBOX', name: 'Inbox' }, { id: 'STALE_LEASE', name: 'Stale lease' }] }; } };
   const staleRunner = new GmailSyncRunner(db, store, blockedReader, origin, secondParser, now);
   const stale = staleRunner.run(secondId);
   await began;
@@ -257,6 +275,45 @@ try {
   release();
   await stale;
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0].generation, taken.generation);
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, secondId))).some((row) => row.providerRef === 'STALE_LEASE'), false);
+
+  clockOffset += 60_000;
+  const reconnectedCatalog = new GmailSyncRunner(db, store, { ...secondReader, async listLabels() {
+    await db.update(accounts).set({ credentialGeneration: 2 }).where(eq(accounts.id, secondId));
+    return { labels: [{ id: 'STALE_CREDENTIAL', name: 'Stale credential' }] };
+  } }, origin, secondParser, now);
+  await reconnectedCatalog.run(secondId);
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, secondId))).some((row) => row.providerRef === 'STALE_CREDENTIAL'), false);
+  await db.update(accounts).set({ credentialGeneration: 1 }).where(eq(accounts.id, secondId));
+
+  clockOffset += 60_000;
+  const changedOriginCatalog = new GmailSyncRunner(db, store, { ...secondReader, async listLabels() {
+    await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: 'https://other.example.com',
+      globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+    return { labels: [{ id: 'STALE_ORIGIN', name: 'Stale origin' }] };
+  } }, origin, secondParser, now);
+  await changedOriginCatalog.run(secondId);
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, secondId))).some((row) => row.providerRef === 'STALE_ORIGIN'), false);
+  await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: origin,
+    globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
+
+  clockOffset += 60_000;
+  let catalogEntered;
+  let catalogRelease;
+  const catalogBegan = new Promise((resolve) => { catalogEntered = resolve; });
+  const catalogBlocked = new Promise((resolve) => { catalogRelease = resolve; });
+  const catalogAbort = new globalThis.AbortController();
+  const interruptedCatalog = new GmailSyncRunner(db, store, { ...secondReader, async listLabels() {
+    catalogEntered(); await catalogBlocked;
+    return { labels: [{ id: 'INTERRUPTED', name: 'Interrupted' }] };
+  } }, origin, secondParser, now).run(secondId, catalogAbort.signal);
+  await catalogBegan;
+  catalogAbort.abort(); catalogRelease();
+  await interruptedCatalog;
+  assert.equal((await db.select().from(labels).where(eq(labels.accountId, secondId))).some((row) => row.providerRef === 'INTERRUPTED'), false);
+  const afterCatalogFences = (await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0];
+  await db.update(syncStates).set({ cursor: { ...afterCatalogFences.cursor, failures: 0, retryAt: 0 } })
+    .where(eq(syncStates.id, afterCatalogFences.id));
 
   quotaNext = true;
   await second.run(secondId);

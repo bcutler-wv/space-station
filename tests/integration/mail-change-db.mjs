@@ -8,8 +8,9 @@ import { generate } from 'otplib';
 import { eq } from 'drizzle-orm';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
-import { accounts, auditLog, databaseUrl, itemOrbits, items, labels, loadRuntimeConfig,
-  mailChangeOperations, oauthApps, openDatabase, orbits, threads } from '../../packages/db/dist/index.js';
+import { accounts, auditLog, databaseUrl, itemOrbits, items, labels, loadRuntimeConfig, PrivateBlobStore,
+  mailChangeOperations, oauthApps, openDatabase, orbits, settings, threads } from '../../packages/db/dist/index.js';
+import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const config = loadRuntimeConfig(process.env);
 const handle = openDatabase(databaseUrl(config));
@@ -25,6 +26,7 @@ let onCredential = async () => {};
 let onInspect = async () => {};
 let onModify = async () => {};
 let onOptions = async () => {};
+let offerEmpty = false;
 const provider = {
   async credential() { await onCredential(); return { accessToken: 'fixture', expiresAt: null, generation: credentialGeneration }; },
   async inspectUserLabel(_token, labelId) {
@@ -36,6 +38,7 @@ const provider = {
   async inspectOptions(_token, _messageId, signal) { inspectReads++; await onOptions(signal); return {
     labelIds: mode === 'draft' ? ['DRAFT'] : ['INBOX', 'UNREAD', 'Label_1'],
     labels: [{ id: 'Label_1', type: 'user', name: 'Renamed in Gmail' },
+      ...(offerEmpty ? [{ id: 'Label_empty', type: 'user', name: 'Empty label' }] : []),
       { id: 'Label_system', type: 'system', name: 'Fake user label' },
       { id: 'Label_unknown', name: 'Unknown type' }],
   }; },
@@ -116,6 +119,27 @@ try {
   assert.equal(syncedOptions.statusCode, 200, syncedOptions.body);
   assert.equal(syncedOptions.json().labelsIncomplete, false);
   assert.equal(syncedOptions.json().labels.length, 1);
+  await db.insert(settings).values({ key: 'first_orbit_setup_v1', value: { version: 1, orbitId: orbitA,
+    confirmedOrigin: origin, globalDefaults: { index: 'exclude', ai: 'exclude' } } });
+  await db.update(accounts).set({ backfill: 'all' }).where(eq(accounts.id, accountA));
+  const catalogReader = {
+    async listLabels() { return { labels: [{ id: 'Label_1', name: 'Renamed in Gmail' },
+      { id: 'Label_system', name: 'Stored system' }, { id: 'Label_empty', name: 'Empty label' }] }; },
+    async getProfile() { return { emailAddress: 'a@example.com', historyId: '1' }; },
+    async listMessageIds() { return { messages: [] }; },
+    async listHistory() { return { history: [], historyId: '1' }; },
+  };
+  const catalogRunner = new GmailSyncRunner(db, new PrivateBlobStore(process.env.STATION_TEST_BLOB_ROOT ?? '/var/lib/station/blobs'),
+    catalogReader, origin);
+  assert.ok((await catalogRunner.discover()).includes(accountA));
+  await catalogRunner.run(accountA);
+  const mappedEmpty = (await db.select().from(labels).where(eq(labels.accountId, accountA))).find((label) => label.providerRef === 'Label_empty');
+  assert.ok(mappedEmpty);
+  offerEmpty = true;
+  const emptyOptions = await request('GET', options(itemA));
+  assert.equal(emptyOptions.statusCode, 200, emptyOptions.body);
+  assert.equal(emptyOptions.json().labels.find((label) => label.id === mappedEmpty.id)?.canAdd, true);
+  assert.equal(emptyOptions.json().labelsIncomplete, false);
   assert.equal(beforeOptions.json().canMarkRead, true);
   assert.equal(beforeOptions.json().canArchive, true);
   onOptions = (signal) => new Promise((_resolve, reject) => {
