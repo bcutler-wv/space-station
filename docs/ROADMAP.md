@@ -49,6 +49,8 @@ The private file store was accepted after Ubuntu CI run `39477808140` (commit `8
 
 ## M2: Search
 
+- Durable authorization evidence is Astra-reviewed in 0.41.0, pending Ubuntu validation. Ordinary unchanged-grant token refresh preserves completed observations; reconnect, scope changes and definitive denials invalidate them. Historical rows require bounded reread. Local migration, credential, sync, page, action/send and race fixtures passed; no live indexer or query route is enabled by this prerequisite.
+
 - The first prerequisite is accepted at `85ac39b` (0.35.0) after full Ubuntu run `39651102186` passed: durable causal provider-observation evidence, restrictive derived eligibility and bounded no-history mail refresh. Independent PostgreSQL race, policy-bound and contention probes also passed. This does not yet index, purge or serve derived content; M2 acceptance remains pending the later consumers and their gates.
 - The bounded operator parser is accepted at `a0dda44` (0.36.0) after full Ubuntu run `39653335355` passed. It preserves the full Boolean AST with generated Peggy code, pinned provenance and explicit resource limits. Independent AST, malformed-input, calendar and clean-build probes passed. It has no live consumer.
 - The pinned private Meilisearch Community runtime and official SDK foundation were accepted at `a6d8344` (0.37.0) after full Ubuntu run `39656394227` passed. Independent fake-engine, retained-document restart, transport and secret-handling checks passed. Its ten-word cutoff and noncomplementary fuzzy/prefix negation motivated the later engine comparison. The historical foundation remains optional; no live source index was enabled by it.

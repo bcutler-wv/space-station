@@ -139,6 +139,7 @@ export class GmailSyncRunner {
       .where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation), eq(syncStates.sequence, state.sequence),
         eq(syncStates.status, 'running'), eq(syncStates.cursor, state.cursor), sql`${syncStates.leaseUntil} > now()`,
         sql`exists (select 1 from accounts where id = ${account.id} and credential_generation = ${account.credentialGeneration}
+          and authorization_generation = ${account.authorizationGeneration}
           and revoked_at is null and backfill is not null and ${SCOPE} = any(granted_scopes))`,
         sql`exists (select 1 from settings where key = 'first_orbit_setup_v1' and value ->> 'confirmedOrigin' = ${this.origin})`))
       .returning();
@@ -164,6 +165,7 @@ export class GmailSyncRunner {
         globalDefaults: privacyDefaultsSchema }).safeParse(setup?.value);
       if (!currentAccount || !currentState || !eligible(currentAccount) ||
           currentAccount.credentialGeneration !== account.credentialGeneration ||
+          currentAccount.authorizationGeneration !== account.authorizationGeneration ||
           currentState.accountId !== account.id || currentState.resource !== 'mail' || currentState.collectionId !== COLLECTION ||
           currentState.generation !== state.generation || currentState.status !== 'running' ||
           !currentState.leaseUntil || currentState.leaseUntil <= new Date() ||
@@ -215,6 +217,7 @@ export class GmailSyncRunner {
     await applyMailPage(this.db, this.blobs, { accountId: account.id, stateId: state.id, collectionId: COLLECTION,
       pageId: `g${state.generation}-s${state.sequence + 1}`, configuredOrigin: this.origin,
       expectedLeaseGeneration: state.generation, expectedCredentialGeneration: account.credentialGeneration,
+      expectedAuthorizationGeneration: account.authorizationGeneration,
       expectedSequence: state.sequence, cursorAfter: cursor, changes: [change] }, signal);
     const [next] = await this.db.select().from(syncStates).where(eq(syncStates.id, state.id));
     if (!next || next.sequence !== state.sequence + 1) throw new MailPageFenceError();
@@ -229,12 +232,19 @@ export class GmailSyncRunner {
     signal: AbortSignal): Promise<MailChange | null> {
     // Capture before the SDK read. A later action settlement advances the item epoch,
     // so a read begun before settlement cannot clear its derived-data barrier.
-    const [prior] = await this.db.transaction(async (tx) => {
+    const prior = await this.db.transaction(async (tx) => {
       await tx.execute(sql`set local statement_timeout = '3000ms'`);
       await tx.execute(sql`set local lock_timeout = '750ms'`);
-      return tx.select({ epoch: items.actionEpoch }).from(items).where(and(
+      const [currentAccount] = await tx.select({ authorizationGeneration: accounts.authorizationGeneration,
+        credentialGeneration: accounts.credentialGeneration, revokedAt: accounts.revokedAt })
+        .from(accounts).where(eq(accounts.id, account.id));
+      if (!currentAccount || currentAccount.revokedAt ||
+          currentAccount.authorizationGeneration !== account.authorizationGeneration ||
+          currentAccount.credentialGeneration !== account.credentialGeneration) throw new MailPageFenceError();
+      const [currentItem] = await tx.select({ epoch: items.actionEpoch }).from(items).where(and(
         eq(items.accountId, account.id), eq(items.collectionId, COLLECTION), eq(items.externalId, id)));
-    }, { accessMode: 'read only' });
+      return currentItem;
+    }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
     signal.throwIfAborted();
     const observedEpoch = prior?.epoch ?? 0;
     let raw: GmailRawMessage;
@@ -257,13 +267,14 @@ export class GmailSyncRunner {
         if (!meta) return this.tombstone(id);
         if (cutoff && !meta.internalDate) throw new GmailReadError('invalid_response');
         if (meta.internalDate && Number(meta.internalDate) < cutoff * 1000 && !await this.retained(account, id)) return null;
-        return this.change(meta, { ok: false, code: 'input_too_large' }, names, observedEpoch, account.credentialGeneration);
+        return this.change(meta, { ok: false, code: 'input_too_large' }, names, observedEpoch,
+          account.credentialGeneration, account.authorizationGeneration);
       }
       throw error;
     }
     if (Number(raw.internalDate) < cutoff * 1000 && !await this.retained(account, id)) return null;
     if (Buffer.byteLength(JSON.stringify(parsed)) > 20 * 1024 * 1024) parsed = { ok: false, code: 'limit_exceeded' };
-    return this.change(raw, parsed, names, observedEpoch, account.credentialGeneration);
+    return this.change(raw, parsed, names, observedEpoch, account.credentialGeneration, account.authorizationGeneration);
   }
 
   private async retained(account: Account, id: string): Promise<boolean> {
@@ -276,14 +287,15 @@ export class GmailSyncRunner {
       snippet: null, flags: {}, labelRefs: [], providerSent: false, deleted: true, parsed: null, routedOrbitIds: [] };
   }
   private change(meta: GmailRawMessage | GmailMessageMetadata, parsed: ParseResult, names: Map<string, string>,
-    observedEpoch: number, credentialGeneration: number): MailChange {
+    observedEpoch: number, credentialGeneration: number, authorizationGeneration: number): MailChange {
     return { externalId: meta.id, threadExternalId: meta.threadId, providerRevision: meta.historyId ?? null,
       internalAt: meta.internalDate ? new Date(Number(meta.internalDate)) : null, receivedAt: this.now(), snippet: null,
       flags: { read: !meta.labelIds.includes('UNREAD'), starred: meta.labelIds.includes('STARRED') },
       labelRefs: meta.labelIds.map((ref) => ({ ref, name: names.get(ref) ?? null })), providerSent: meta.trustedSent,
       deleted: false, parsed, routedOrbitIds: [],
       observedActionEpoch: parsed.ok ? observedEpoch : null,
-      observedCredentialGeneration: parsed.ok ? credentialGeneration : null };
+      observedCredentialGeneration: parsed.ok ? credentialGeneration : null,
+      observedAuthorizationGeneration: parsed.ok ? authorizationGeneration : null };
   }
 
   private historyIds(page: GmailHistoryPage): string[] {
@@ -445,7 +457,7 @@ export class GmailSyncRunner {
             .where(and(eq(items.accountId, account.id), eq(items.collectionId, COLLECTION), isNull(items.deletedAt),
               eq(items.parseStatus, 'supported'), after ? gt(items.id, after) : undefined,
               sql`(${items.observedActionEpoch} is null or ${items.observedActionEpoch} <> ${items.actionEpoch} or
-                ${items.observedCredentialGeneration} is distinct from ${account.credentialGeneration})`,
+                ${items.observedAuthorizationGeneration} is distinct from ${account.authorizationGeneration})`,
               sql`not exists (select 1 from mail_change_operations m where m.item_id = ${items.id}
                 and m.state in ('pending', 'in_flight', 'outcome_unknown'))`))
             .orderBy(items.id).limit(OBSERVATION_REFRESH_LIMIT);
@@ -483,21 +495,50 @@ export class GmailSyncRunner {
         });
         return;
       }
-      const [current] = await this.db.select().from(syncStates).where(eq(syncStates.id, state.id));
-      if (current?.generation === state.generation) {
+      const permanent = error instanceof GmailReadError && ['needs_reconnect', 'permission_denied'].includes(error.code);
+      await this.db.transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '3000ms'`);
+        await tx.execute(sql`set local lock_timeout = '750ms'`);
+        // Serialize with reconnect and page/label commits in their account-then-sync order.
+        const [currentAccount] = await tx.select().from(accounts).where(eq(accounts.id, account.id)).for('update');
+        if (!currentAccount) return;
+        const [current] = await tx.select().from(syncStates).where(eq(syncStates.id, state.id)).for('update');
+        if (!current || current.generation !== state.generation || current.status !== 'running' ||
+            !current.leaseUntil || current.leaseUntil <= this.now()) return;
         const currentCursor = cursorSchema.safeParse(current.cursor);
+        if (currentAccount.revokedAt || currentAccount.credentialGeneration !== account.credentialGeneration ||
+            currentAccount.authorizationGeneration !== account.authorizationGeneration) {
+          // Release only this old lease. A new grant is never revoked or blocked
+          // by an error returned from its predecessor's provider request.
+          const [released] = await tx.update(syncStates).set({ status: 'idle', leaseUntil: null, lastError: 'stale_lease',
+            cursor: currentCursor.success ? { ...currentCursor.data,
+              nextCallAt: Math.max(currentCursor.data.nextCallAt, this.now().getTime() + 1_000) } : current.cursor,
+            updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation),
+            eq(syncStates.status, 'running'), sql`${syncStates.leaseUntil} > clock_timestamp()`))
+            .returning({ id: syncStates.id });
+          if (released) await appendSyncEvent(tx, 'sync-progress', account.id);
+          return;
+        }
         const failures = currentCursor.success ? currentCursor.data.failures + 1 : 1;
-        const permanent = error instanceof GmailReadError && ['needs_reconnect', 'permission_denied'].includes(error.code);
-        await this.db.transaction(async (tx) => {
+        if (permanent) {
+          const [revoked] = await tx.update(accounts).set({ revokedAt: this.now(),
+            authorizationGeneration: sql`${accounts.authorizationGeneration} + 1`,
+            credentialLeaseUntil: null, updatedAt: this.now() }).where(and(eq(accounts.id, account.id),
+            eq(accounts.credentialGeneration, account.credentialGeneration),
+            eq(accounts.authorizationGeneration, account.authorizationGeneration), isNull(accounts.revokedAt)))
+            .returning({ id: accounts.id });
+          if (!revoked) return;
+        }
         const [updated] = await tx.update(syncStates).set({ status: permanent ? 'blocked' : 'idle', leaseUntil: null, lastError: safeCode(error),
           cursor: currentCursor.success ? { ...currentCursor.data, failures,
             nextCallAt: Math.max(currentCursor.data.nextCallAt, this.now().getTime() + 1_000),
             retryAt: permanent ? 0 : retryTime(this.now().getTime(), failures, error),
             blockedGeneration: permanent ? account.credentialGeneration : null } : current.cursor,
-          updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation))).returning({ id: syncStates.id });
-        if (updated) await appendSyncEvent(tx, 'sync-progress', account.id);
-        });
-      }
+          updatedAt: this.now() }).where(and(eq(syncStates.id, state.id), eq(syncStates.generation, state.generation),
+            eq(syncStates.status, 'running'), sql`${syncStates.leaseUntil} > clock_timestamp()`)).returning({ id: syncStates.id });
+        if (!updated) throw new MailPageFenceError(); // Roll back a revocation if the lease expired while settling.
+        await appendSyncEvent(tx, 'sync-progress', account.id);
+      });
     }
   }
 

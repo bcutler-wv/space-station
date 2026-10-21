@@ -3,7 +3,7 @@ import { applyMailPage, MAIL_PAGE_LIMITS, type MailPage } from './mail-page.js';
 
 const base = (): MailPage => ({ accountId: '00000000-0000-4000-8000-000000000001', stateId: '00000000-0000-4000-8000-000000000002',
   collectionId: 'primary', pageId: 'fixture', configuredOrigin: 'https://example.com', expectedLeaseGeneration: 1,
-  expectedCredentialGeneration: 1, expectedSequence: 0, cursorAfter: {}, changes: [] });
+  expectedCredentialGeneration: 1, expectedAuthorizationGeneration: 1, expectedSequence: 0, cursorAfter: {}, changes: [] });
 function rejectBeforeDb(page: MailPage, pattern: RegExp) {
   return expect(applyMailPage(undefined as never, undefined as never, page)).rejects.toThrow(pattern);
 }

@@ -2,6 +2,8 @@ import { gmail } from '@googleapis/gmail';
 import { CodeChallengeMethod, OAuth2Client, type OAuth2ClientOptions } from 'google-auth-library';
 
 export const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+// OAuth scope order and duplicates do not change the effective grant.
+export const canonicalGoogleScopes = (scopes: readonly string[]): string[] => [...new Set(scopes)].sort();
 export type GoogleTransport = OAuth2ClientOptions['transporter'];
 
 /** A fresh SDK client is created for each request and never shares credentials globally. */

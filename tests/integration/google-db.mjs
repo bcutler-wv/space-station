@@ -8,9 +8,11 @@ import { generate } from 'otplib';
 import { eq } from 'drizzle-orm';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
-import { databaseUrl, loadRuntimeConfig, openDatabase, accounts, auditLog, oauthApps, oauthAttempts } from '../../packages/db/dist/index.js';
+import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, auditLog, oauthApps, oauthAttempts,
+  syncStates } from '../../packages/db/dist/index.js';
 import { databaseSetupStore } from '../../apps/server/dist/setup-store.js';
-import { GoogleCredentialService, GoogleCredentialError, openSecret } from '../../packages/connectors/dist/index.js';
+import { GmailReadAdapter, GoogleCredentialService, GoogleCredentialError, openSecret } from '../../packages/connectors/dist/index.js';
+import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const config = loadRuntimeConfig(process.env);
 const database = openDatabase(databaseUrl(config));
@@ -35,6 +37,9 @@ const transport = { interceptors: { request: { add() {} }, response: { add() {} 
       return { data: { access_token: `fixture-${providerMode}-access`,
         ...(providerMode === 'refresh_rotate' ? { refresh_token: 'fixture-rotated-refresh' } : {}),
         ...(providerMode === 'refresh_scope' ? { scope: 'https://www.googleapis.com/auth/gmail.readonly' } : {}),
+        ...(providerMode === 'refresh_expanded' ? { scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.readonly' } : {}),
+        ...(providerMode === 'refresh_reordered' ? { scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.modify' } : {}),
+        ...(providerMode === 'refresh_reduced' ? { scope: 'https://www.googleapis.com/auth/gmail.modify' } : {}),
         expires_in: 3600, token_type: 'Bearer' } };
     }
     return { data: { access_token: 'fixture-access',
@@ -199,6 +204,7 @@ try {
   assert.equal((await send('POST', '/api/google/confirm', {}, true, csrf)).statusCode, 409, 'confirmation is single-use');
   const [account] = await database.db.select().from(accounts);
   assert.equal(account.email, 'owner@example.com');
+  assert.equal(account.authorizationGeneration, 1);
   assert.equal(account.backfill, null, 'sync remains gated');
   assert.ok(account.encryptedRefreshToken.startsWith('v1.'));
   assert.equal(JSON.stringify(account).includes('fixture-refresh'), false);
@@ -217,6 +223,7 @@ try {
   providerMode = 'refresh_rotate';
   assert.equal((await credentials.get(account.id)).accessToken, 'fixture-refresh_rotate-access');
   let [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(refreshed.authorizationGeneration, 1, 'refresh-token rotation under the same grant preserves authorization');
   assert.equal(openSecret(refreshed.encryptedRefreshToken, key, `accounts/${account.id}/refresh`), 'fixture-rotated-refresh');
   const rejected = await credentials.get(account.id);
   const tokenCallsBeforeRejection = calls.length;
@@ -258,6 +265,27 @@ try {
   providerMode = 'refresh_transient';
   await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'transient');
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].revokedAt, null);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 1,
+    'transient refresh failure preserves authorization despite token lease generation');
+  await forceExpiry();
+  providerMode = 'refresh_expanded';
+  await credentials.get(account.id);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 2);
+  await forceExpiry();
+  providerMode = 'refresh_reordered';
+  await credentials.get(account.id);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 2,
+    'scope order and duplicate entries do not change the effective grant');
+  await forceExpiry();
+  providerMode = 'refresh_no_rotation';
+  await credentials.get(account.id);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 2,
+    'omitted scopes retain the existing effective set');
+  await forceExpiry();
+  providerMode = 'refresh_reduced';
+  await credentials.get(account.id);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 3,
+    'actual scope removal advances authorization');
   providerMode = 'ok';
   const reconnectPayload = { accountId: account.id, clientId: '123456-fixture.apps.googleusercontent.com', clientSecret: 'fixture-client-secret' };
   const reconnect = async () => {
@@ -270,6 +298,7 @@ try {
   assert.equal((await reconnect()).statusCode, 409, 'reconnect rejects a different mailbox');
   profileEmail = 'owner@example.com';
   const rejectedBeforeReconnect = await credentials.get(account.id);
+  const beforeReconnectAuthorization = (await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration;
   holdToken = true;
   providerMode = 'refresh_hold';
   const rejectedEntered = new Promise((resolve) => { tokenEntered = resolve; });
@@ -278,6 +307,8 @@ try {
   holdToken = false;
   providerMode = 'ok';
   assert.equal((await reconnect()).statusCode, 200);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration,
+    beforeReconnectAuthorization + 1, 'same-mailbox reconnect advances durable authorization');
   releaseToken();
   await assert.rejects(heldRejectedRefresh, (error) => error instanceof GoogleCredentialError && error.code === 'busy',
     'rejected-token refresh cannot overwrite reconnect');
@@ -300,11 +331,15 @@ try {
   assert.equal(refreshed.backfill, '30_days');
   assert.equal(refreshed.orbitId, account.orbitId);
   assert.equal(refreshed.revokedAt, null);
+  assert.equal(refreshed.authorizationGeneration, beforeReconnectAuthorization + 2);
   assert.equal((await database.db.select().from(auditLog)).filter((row) => row.action === 'reconnect_account').length, 2);
   assert.equal((await send('GET', '/api/google/status')).body.includes('fixture-rotated-refresh'), false, 'metadata response has no credentials');
   await forceExpiry();
   providerMode = 'refresh_scope';
   await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+  const [deniedGrant] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(deniedGrant.authorizationGeneration, refreshed.authorizationGeneration + 1,
+    'definitive missing scope advances authorization with revocation');
   assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
   providerMode = 'ok';
   assert.equal((await reconnect()).statusCode, 200, 'same account can recover from lost scope');
@@ -329,6 +364,7 @@ try {
     await assert.rejects(stale, (error) => error instanceof GoogleCredentialError && error.code === 'busy', `${mode} from an old generation is retryable`);
     const [afterStale] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
     assert.equal(afterStale.credentialGeneration, afterReconnect.credentialGeneration);
+    assert.equal(afterStale.authorizationGeneration, afterReconnect.authorizationGeneration);
     assert.equal(afterStale.encryptedRefreshToken, afterReconnect.encryptedRefreshToken);
     assert.equal(afterStale.encryptedAccessToken, afterReconnect.encryptedAccessToken);
     assert.equal(afterStale.revokedAt, null);
@@ -440,6 +476,52 @@ try {
   assert.equal(heldAttempt.status, 'failed');
   assert.equal(heldAttempt.encryptedCode, null);
   assert.equal(heldAttempt.encryptedVerifier, '');
+  holdToken = false;
+  // The actual credential service can revoke a grant while its SDK read is
+  // inside a runner. The runner must release only its own lease, without a
+  // second authorization increment or a provider data read.
+  const [syncAccount] = await database.db.select().from(accounts).where(eq(accounts.email, 'second@example.com'));
+  await database.db.update(accounts).set({ backfill: 'all', accessTokenExpiresAt: new Date(Date.now() - 1000) })
+    .where(eq(accounts.id, syncAccount.id));
+  providerMode = 'refresh_scope';
+  const secondCredentials = new GoogleCredentialService(database.db, key, transport);
+  let dataFetchCount = 0;
+  const noDataFetch = async () => { dataFetchCount++; throw new Error('Gmail data fetch followed revoked token'); };
+  const readAdapter = new GmailReadAdapter(secondCredentials, noDataFetch);
+  const syncRunner = new GmailSyncRunner(database.db,
+    new PrivateBlobStore(process.env.STATION_TEST_BLOB_ROOT ?? '/var/lib/station/blobs'), readAdapter, origin);
+  assert.ok((await syncRunner.discover()).includes(syncAccount.id),
+    'the target account is discoverable even when another account is also eligible');
+  const [beforeRunnerDenial] = await database.db.select().from(accounts).where(eq(accounts.id, syncAccount.id));
+  const [unaffectedBefore] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  await syncRunner.run(syncAccount.id);
+  const [afterRunnerDenial] = await database.db.select().from(accounts).where(eq(accounts.id, syncAccount.id));
+  const [settledState] = await database.db.select().from(syncStates).where(eq(syncStates.accountId, syncAccount.id));
+  assert.equal(dataFetchCount, 0, 'definitive credential denial precedes every Gmail data request');
+  assert.ok(afterRunnerDenial.revokedAt);
+  assert.equal(afterRunnerDenial.authorizationGeneration, beforeRunnerDenial.authorizationGeneration + 1);
+  assert.equal(settledState.status, 'idle');
+  assert.equal(settledState.leaseUntil, null);
+  assert.equal(settledState.lastError, 'stale_lease');
+  await syncRunner.run(syncAccount.id);
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, syncAccount.id)))[0].authorizationGeneration,
+    afterRunnerDenial.authorizationGeneration, 'duplicate permanent result cannot advance authorization again');
+  assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration,
+    unaffectedBefore.authorizationGeneration, 'a second account denial leaves the first grant intact');
+  // An effective scope change at the PostgreSQL integer ceiling must roll
+  // back its credential/scopes write rather than wrap or bless stale evidence.
+  await database.db.update(accounts).set({ authorizationGeneration: 2_147_483_647,
+    accessTokenExpiresAt: new Date(Date.now() - 1000) }).where(eq(accounts.id, account.id));
+  const [beforeOverflow] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  providerMode = 'refresh_expanded';
+  await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'transient');
+  const [afterOverflow] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
+  assert.equal(afterOverflow.authorizationGeneration, beforeOverflow.authorizationGeneration);
+  assert.deepEqual(afterOverflow.grantedScopes, beforeOverflow.grantedScopes);
+  assert.equal(afterOverflow.encryptedAccessToken, beforeOverflow.encryptedAccessToken);
+  assert.equal(afterOverflow.encryptedRefreshToken, beforeOverflow.encryptedRefreshToken);
+  assert.equal(afterOverflow.revokedAt, null);
+  assert.equal(afterOverflow.credentialLeaseUntil, null);
   process.stdout.write('Google strict-cookie callback, restart, single-use link, encrypted storage, and backfill fixture passed.\n');
 } finally {
   await app.close();

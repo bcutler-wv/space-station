@@ -48,7 +48,8 @@ function parsed(from = fake('sender'), opts = {}) {
 }
 function page(name, sequence, changes, suffix = String(sequence)) {
   return { accountId: accountsByName[name], stateId: statesByName[name], collectionId: 'primary', pageId: `${name}-${suffix}`,
-    configuredOrigin: origin, expectedLeaseGeneration: 1, expectedCredentialGeneration: 1, expectedSequence: sequence,
+    configuredOrigin: origin, expectedLeaseGeneration: 1, expectedCredentialGeneration: 1,
+    expectedAuthorizationGeneration: 1, expectedSequence: sequence,
     cursorAfter: { historyId: String(sequence + 1) }, changes };
 }
 function change(id, options = {}) {
@@ -65,7 +66,8 @@ try {
   await db.insert(settings).values({ key: 'first_orbit_setup_v1', value: { version: 1, orbitId, globalDefaults: allow, confirmedOrigin: origin } });
   await createAccount('one'); await createAccount('two');
   const first = page('one', 0, [{ ...change('same', { parsed: parsed(fake('one'), { html: true, attachment: true }), providerSent: true,
-    labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] }), observedActionEpoch: 0, observedCredentialGeneration: 1 }]);
+    labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] }), observedActionEpoch: 0,
+    observedCredentialGeneration: 1, observedAuthorizationGeneration: 1 }]);
   assert.equal(await applyMailPage(db, store, first), 'applied');
   const firstEvent = await readSyncEvents(db, 0);
   assert.deepEqual(firstEvent.rows.map(({ kind, accountId }) => [kind, accountId]), [['mail-changed', accountsByName.one]]);
@@ -84,7 +86,10 @@ try {
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canIndex, false);
   assert.equal(await applyMailPage(db, store, first), 'replayed');
   await assert.rejects(applyMailPage(db, store, { ...first, changes: first.changes.map((entry) => ({ ...entry,
-    observedActionEpoch: null, observedCredentialGeneration: null })) }), /changed content or sequence/);
+    observedActionEpoch: null, observedCredentialGeneration: null, observedAuthorizationGeneration: null })) }), /changed content or sequence/);
+  await assert.rejects(applyMailPage(db, store, { ...first, expectedAuthorizationGeneration: 2,
+    changes: first.changes.map((entry) => ({ ...entry, observedAuthorizationGeneration: 2 })) }),
+  MailPageFenceError, 'replay cannot adopt a different authorization generation');
   const changedHeader = { ...first, changes: first.changes.map((entry) => ({ ...entry,
     parsed: { ...entry.parsed, mail: { ...entry.parsed.mail, messageId: '<changed@example.com>' } } })) };
   await assert.rejects(() => applyMailPage(db, store, changedHeader), /changed content or sequence/);
@@ -243,6 +248,9 @@ try {
   await db.update(accounts).set({ backfill: 'all' }).where(eq(accounts.id, accountsByName.one));
   await applyMailPage(db, store, page('one', 7, [change('incomplete-sender', { parsed: parsed('invalid-address', { senders: [] }) })]));
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'incomplete-sender')).id)).canUseAi, false);
+  assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 8);
+  await db.update(accounts).set({ authorizationGeneration: 2 }).where(eq(accounts.id, accountsByName.one));
+  await assert.rejects(applyMailPage(db, store, page('one', 8, [change('old-grant-response')])), MailPageFenceError);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 8);
   console.log('Mail page database gate passed');
 } finally {

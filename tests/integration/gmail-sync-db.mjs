@@ -249,7 +249,47 @@ try {
   await db.update(settings).set({ value: { version: 1, orbitId, confirmedOrigin: origin,
     globalDefaults: { index: 'allow', ai: 'allow' } } }).where(eq(settings.key, 'first_orbit_setup_v1'));
   await db.update(accounts).set({ credentialGeneration: 2 }).where(eq(accounts.id, accountId));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true,
+    'token generation alone does not invalidate a completed provider observation');
+  const beforeTokenSweep = calls.filter(([kind]) => kind === 'raw').length;
+  await runner.run(accountId);
+  assert.equal(calls.filter(([kind]) => kind === 'raw').length, beforeTokenSweep,
+    'ordinary token rotation does not queue a mailbox-wide stale sweep');
+  await db.update(accounts).set({ authorizationGeneration: 2 }).where(eq(accounts.id, accountId));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false,
+    'a changed grant invalidates the old observation');
+  for (let attempt = 0; attempt < 3 && !(await evaluateDerivedMailEligibility(db, b.id)).canIndex; attempt++)
+    await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+  const observedAfterChange = (await rows()).find((row) => row.id === b.id).observedAuthorizationGeneration;
+  assert.equal(observedAfterChange, 2);
+  await db.update(accounts).set({ grantedScopes: [], authorizationGeneration: 3 }).where(eq(accounts.id, accountId));
   assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false);
+  await db.update(accounts).set({ grantedScopes: ['https://www.googleapis.com/auth/gmail.modify'],
+    authorizationGeneration: 4 }).where(eq(accounts.id, accountId));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false,
+    'restoring a removed scope cannot revive pre-removal evidence');
+  for (let attempt = 0; attempt < 3 && !(await evaluateDerivedMailEligibility(db, b.id)).canIndex; attempt++)
+    await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+  await db.update(items).set({ observedAuthorizationGeneration: null }).where(eq(items.id, b.id));
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false,
+    'historical or missing authorization evidence is denied');
+  await runner.run(accountId);
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
+  await db.update(items).set({ observedAuthorizationGeneration: null }).where(eq(items.id, b.id));
+  let grantReadStarted; let grantReadRelease;
+  const grantReadBegan = new Promise((resolve) => { grantReadStarted = resolve; });
+  const grantReadHeld = new Promise((resolve) => { grantReadRelease = resolve; });
+  onRaw = async (id) => { if (id === 'b') { grantReadStarted(); await grantReadHeld; } };
+  const grantRun = runner.run(accountId);
+  await grantReadBegan;
+  await db.update(accounts).set({ authorizationGeneration: 5 }).where(eq(accounts.id, accountId));
+  grantReadRelease(); await grantRun;
+  onRaw = async () => {};
+  assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, false,
+    'raw response begun before grant change cannot clear the new barrier');
+  await db.update(syncStates).set({ leaseUntil: new Date(Date.now() - 1) }).where(eq(syncStates.accountId, accountId));
   for (let attempt = 0; attempt < 3 && !(await evaluateDerivedMailEligibility(db, b.id)).canIndex; attempt++)
     await runner.run(accountId);
   assert.equal((await evaluateDerivedMailEligibility(db, b.id)).canIndex, true);
@@ -480,13 +520,40 @@ try {
   clockOffset += 60_000;
   await second.run(secondId);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0].cursor.phase, 'ready');
+  let staleErrorEntered; let staleErrorRelease;
+  const staleErrorBegan = new Promise((resolve) => { staleErrorEntered = resolve; });
+  const staleErrorHeld = new Promise((resolve) => { staleErrorRelease = resolve; });
+  const oldGrantRunner = new GmailSyncRunner(db, store, { ...secondReader, async listHistory() {
+    staleErrorEntered(); await staleErrorHeld; throw new GmailReadError('permission_denied');
+  } }, origin, secondParser, now);
+  const oldGrantRun = oldGrantRunner.run(secondId);
+  await staleErrorBegan;
+  const oldGrant = (await db.select().from(accounts).where(eq(accounts.id, secondId)))[0];
+  await db.update(accounts).set({ credentialGeneration: oldGrant.credentialGeneration + 1,
+    authorizationGeneration: oldGrant.authorizationGeneration + 1, revokedAt: null }).where(eq(accounts.id, secondId));
+  staleErrorRelease(); await oldGrantRun;
+  const afterOldError = (await db.select().from(accounts).where(eq(accounts.id, secondId)))[0];
+  assert.equal(afterOldError.authorizationGeneration, oldGrant.authorizationGeneration + 1,
+    'old worker denial cannot revoke a reconnected grant');
+  assert.equal(afterOldError.revokedAt, null);
+  await db.update(syncStates).set({ leaseUntil: new Date(Date.now() - 1) }).where(eq(syncStates.accountId, secondId));
   permissionNext = true;
   await second.run(secondId);
   const blockedState = (await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0];
   assert.equal(blockedState.status, 'blocked');
   assert.equal(blockedState.lastError, 'permission_denied');
+  const revokedGrant = (await db.select().from(accounts).where(eq(accounts.id, secondId)))[0];
+  assert.ok(revokedGrant.revokedAt);
+  assert.equal(revokedGrant.authorizationGeneration, afterOldError.authorizationGeneration + 1);
+  await second.run(secondId);
+  assert.equal((await db.select().from(accounts).where(eq(accounts.id, secondId)))[0].authorizationGeneration,
+    revokedGrant.authorizationGeneration, 'duplicate permanent error cannot advance grant twice');
   assert.ok(!(await second.discover()).includes(secondId));
-  await db.update(accounts).set({ credentialGeneration: 3 }).where(eq(accounts.id, secondId));
+  await db.update(accounts).set({ credentialGeneration: revokedGrant.credentialGeneration + 1,
+    authorizationGeneration: revokedGrant.authorizationGeneration + 1, revokedAt: null }).where(eq(accounts.id, secondId));
+  const boundary = (await db.select().from(items).where(eq(items.accountId, secondId))).find((row) => row.externalId === 'boundary');
+  assert.equal((await evaluateDerivedMailEligibility(db, boundary.id)).canIndex, false,
+    'reconnect cannot revive pre-denial item evidence');
   assert.ok((await second.discover()).includes(secondId));
 
   const secondState = async () => (await db.select().from(syncStates).where(eq(syncStates.accountId, secondId)))[0];

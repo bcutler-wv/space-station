@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { GoogleMailAuthorization } from '@station/connectors';
+import { GoogleMailAuthorization, canonicalGoogleScopes } from '@station/connectors';
 import { accounts, auditLog, oauthApps, oauthAttempts, orbits, sessions, settings, users } from '@station/db';
 import { googleBackfillSchema, googleCallbackSchema, googleOkSchema, googleReconnectStartSchema, googleStartResponseSchema, googleStartSchema, googleStatusSchema } from '@station/shared';
 import { digest, OWNER_ID } from './auth-store.js';
@@ -157,8 +157,9 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
           await tx.update(accounts).set({ appId: providerApp.id,
             encryptedRefreshToken: sealSecret(result.refreshToken, auth.masterKey, accountContext(target.id, 'refresh')),
             encryptedAccessToken: sealSecret(result.accessToken, auth.masterKey, accountContext(target.id, 'access')),
-            accessTokenExpiresAt: result.accessTokenExpiresAt, grantedScopes: result.scopes,
-            credentialGeneration: target.credentialGeneration + 1, credentialLeaseUntil: null,
+            accessTokenExpiresAt: result.accessTokenExpiresAt, grantedScopes: canonicalGoogleScopes(result.scopes),
+            credentialGeneration: target.credentialGeneration + 1,
+            authorizationGeneration: sql`${accounts.authorizationGeneration} + 1`, credentialLeaseUntil: null,
             revokedAt: null, updatedAt: new Date(),
           }).where(eq(accounts.id, target.id));
           await tx.insert(auditLog).values({ id: randomUUID(), actorId: OWNER_ID, action: 'reconnect_account', targetId: target.id });
@@ -170,7 +171,7 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
         await tx.insert(accounts).values({ id: accountId, provider: 'google', appId: providerApp.id, orbitId: orbit.id,
           email: result.email, encryptedRefreshToken: sealSecret(result.refreshToken, auth.masterKey, accountContext(accountId, 'refresh')),
           encryptedAccessToken: sealSecret(result.accessToken, auth.masterKey, accountContext(accountId, 'access')),
-          accessTokenExpiresAt: result.accessTokenExpiresAt, grantedScopes: result.scopes });
+          accessTokenExpiresAt: result.accessTokenExpiresAt, grantedScopes: canonicalGoogleScopes(result.scopes) });
         await tx.insert(auditLog).values({ id: randomUUID(), actorId: OWNER_ID, action: 'connect_account', targetId: accountId });
         await tx.update(oauthAttempts).set({ status: 'completed', encryptedCode: null, encryptedVerifier: '', updatedAt: new Date() }).where(eq(oauthAttempts.id, attempt.id));
         return 'connected';

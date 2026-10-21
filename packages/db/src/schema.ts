@@ -152,12 +152,14 @@ export const accounts = pgTable('accounts', {
   backfill: text('backfill'),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   credentialGeneration: integer('credential_generation').notNull().default(0),
+  authorizationGeneration: integer('authorization_generation').notNull().default(1),
   credentialLeaseUntil: timestamp('credential_lease_until', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('accounts_provider_email_unique').on(table.provider, sql`lower(${table.email})`),
   check('accounts_provider', sql`${table.provider} in ('google')`),
+  check('accounts_authorization_generation_positive', sql`${table.authorizationGeneration} > 0`),
   check('accounts_backfill_choice', sql`${table.backfill} is null or ${table.backfill} in ('30_days', '1_year', 'all')`),
 ]);
 
@@ -246,6 +248,7 @@ export const items = pgTable('items', {
   actionEpoch: integer('action_epoch').notNull().default(0),
   observedActionEpoch: integer('observed_action_epoch'),
   observedCredentialGeneration: integer('observed_credential_generation'),
+  observedAuthorizationGeneration: integer('observed_authorization_generation'),
   directionProvenance: text('direction_provenance').notNull(), fromPersonId: text('from_person_id'),
   senderIdentitiesComplete: boolean('sender_identities_complete').notNull().default(false),
   senderHeaderCount: integer('sender_header_count').notNull().default(0),
@@ -273,6 +276,9 @@ export const items = pgTable('items', {
   check('items_direction_provenance', sql`${t.directionProvenance} in ('incoming', 'provider_sent_account')`),
   check('items_action_epoch', sql`${t.actionEpoch} >= 0 and (${t.observedActionEpoch} is null or (${t.observedActionEpoch} >= 0 and ${t.observedActionEpoch} <= ${t.actionEpoch}))`),
   check('items_observation_pair', sql`(${t.observedActionEpoch} is null) = (${t.observedCredentialGeneration} is null)`),
+  // Historical observations remain NULL after migration; no old grant is inferred.
+  check('items_authorization_observation', sql`${t.observedAuthorizationGeneration} is null or
+    (${t.observedActionEpoch} is not null and ${t.observedCredentialGeneration} is not null)`),
   check('items_parse_status', sql`${t.parseStatus} in ('supported', 'unsupported', 'deleted')`),
   check('items_parse_failure_code', sql`${t.parseFailureCode} is null or ${t.parseFailureCode} in ('input_too_large', 'limit_exceeded', 'malformed')`)]);
 

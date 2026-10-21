@@ -1,7 +1,7 @@
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { accounts, oauthApps, type openDatabase } from '@station/db';
-import { GMAIL_MODIFY_SCOPE, type GoogleTransport } from './index.js';
+import { GMAIL_MODIFY_SCOPE, canonicalGoogleScopes, type GoogleTransport } from './index.js';
 import { openSecret, sealSecret } from './secret-envelope.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
@@ -155,10 +155,13 @@ export class GoogleCredentialService {
       } catch { throw new GoogleCredentialError('needs_reconnect'); }
       const fresh = await refreshGoogleGrant({ clientId: app.clientId, clientSecret, redirectUri: app.redirectUri,
         refreshToken, ...(this.transport ? { transport: this.transport } : {}) });
+      const scopes = canonicalGoogleScopes(fresh.scopes ?? account.grantedScopes);
+      const scopesChanged = JSON.stringify(scopes) !== JSON.stringify(canonicalGoogleScopes(account.grantedScopes));
       const [saved] = await this.bounded((tx) => tx.update(accounts).set({
         encryptedAccessToken: sealSecret(fresh.accessToken, this.masterKey, context(accountId, 'access')),
         encryptedRefreshToken: sealSecret(fresh.refreshToken, this.masterKey, context(accountId, 'refresh')),
-        accessTokenExpiresAt: fresh.expiresAt, grantedScopes: fresh.scopes ?? account.grantedScopes,
+        accessTokenExpiresAt: fresh.expiresAt, grantedScopes: scopes,
+        ...(scopesChanged ? { authorizationGeneration: sql`${accounts.authorizationGeneration} + 1` } : {}),
         credentialLeaseUntil: null, updatedAt: new Date(),
       }).where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, lease.generation), isNull(accounts.revokedAt)))
         .returning({ id: accounts.id }));
@@ -175,7 +178,8 @@ export class GoogleCredentialService {
   }
 
   private async markNeedsReconnect(accountId: string, generation: number): Promise<never> {
-    const [marked] = await this.bounded((tx) => tx.update(accounts).set({ revokedAt: new Date(), credentialLeaseUntil: null, updatedAt: new Date() })
+    const [marked] = await this.bounded((tx) => tx.update(accounts).set({ revokedAt: new Date(),
+      authorizationGeneration: sql`${accounts.authorizationGeneration} + 1`, credentialLeaseUntil: null, updatedAt: new Date() })
       .where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, generation), isNull(accounts.revokedAt)))
       .returning({ id: accounts.id }));
     throw new GoogleCredentialError(marked ? 'needs_reconnect' : 'busy', marked ? undefined : 1000);

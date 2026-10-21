@@ -19,13 +19,15 @@ export type MailChange = {
   providerSent: boolean; deleted: boolean; parsed: ParseResult | null;
   // Captured before the provider item read, never inferred from page commit time.
   observedActionEpoch?: number | null; observedCredentialGeneration?: number | null;
+  observedAuthorizationGeneration?: number | null;
   // Explicit routed membership is determined before application; the account Orbit is added here.
   routedOrbitIds: readonly string[];
 };
 export type MailPage = {
   accountId: string; stateId: string; collectionId: string; pageId: string;
   configuredOrigin: string;
-  expectedLeaseGeneration: number; expectedCredentialGeneration: number; expectedSequence: number;
+  expectedLeaseGeneration: number; expectedCredentialGeneration: number;
+  expectedAuthorizationGeneration: number; expectedSequence: number;
   cursorAfter: unknown; changes: readonly MailChange[];
 };
 export class MailPageFenceError extends Error { constructor() { super('Mail page lease, account, or cursor is stale'); } }
@@ -79,6 +81,7 @@ function preflightPage(page: MailPage): void {
 
 function digestPage(page: MailPage): string {
   const hash = createHash('sha256');
+  hash.update(JSON.stringify({ authorizationGeneration: page.expectedAuthorizationGeneration }));
   hash.update(JSON.stringify(page.cursorAfter));
   for (const change of page.changes) {
     let parsed = change.parsed;
@@ -114,7 +117,8 @@ function validPage(page: MailPage): void {
   const pageShape = z.object({ accountId: z.string().uuid(), stateId: z.string().uuid(), collectionId: z.string().min(1).max(1024),
     pageId: z.string().min(1).max(200), configuredOrigin: z.url().max(2048),
     expectedSequence: z.number().int().nonnegative(), expectedLeaseGeneration: z.number().int().nonnegative(),
-    expectedCredentialGeneration: z.number().int().nonnegative(), cursorAfter: z.json(),
+    expectedCredentialGeneration: z.number().int().nonnegative(),
+    expectedAuthorizationGeneration: z.number().int().positive(), cursorAfter: z.json(),
     changes: z.array(z.object({ externalId: z.string().min(1).max(1024), threadExternalId: z.string().min(1).max(1024).nullable(),
       providerRevision: z.string().max(1024).nullable(), internalAt: z.date().nullable(), receivedAt: z.date().nullable(),
       snippet: z.string().max(4096).nullable(), flags: z.record(z.string().max(64), z.boolean()),
@@ -122,17 +126,21 @@ function validPage(page: MailPage): void {
       providerSent: z.boolean(), deleted: z.boolean(), parsed: parseResultSchema.nullable(),
       observedActionEpoch: z.number().int().nonnegative().nullable().optional(),
       observedCredentialGeneration: z.number().int().nonnegative().nullable().optional(),
+      observedAuthorizationGeneration: z.number().int().positive().nullable().optional(),
       routedOrbitIds: z.array(z.string().uuid()).max(32), })).max(500) }).strict();
   pageShape.parse(page);
-  if (!Number.isSafeInteger(page.expectedSequence) || !Number.isSafeInteger(page.expectedLeaseGeneration) || !Number.isSafeInteger(page.expectedCredentialGeneration)) throw new Error('Invalid mail page fence');
+  if (!Number.isSafeInteger(page.expectedSequence) || !Number.isSafeInteger(page.expectedLeaseGeneration) ||
+      !Number.isSafeInteger(page.expectedCredentialGeneration) || !Number.isSafeInteger(page.expectedAuthorizationGeneration)) throw new Error('Invalid mail page fence');
   const keys = new Set<string>();
   for (const change of page.changes) {
     if (!change.externalId || change.externalId.length > 1024 || (!change.deleted && !change.threadExternalId) || keys.has(change.externalId)) throw new Error('Invalid or duplicate item key');
     keys.add(change.externalId);
     if (change.providerRevision !== null && change.providerRevision.length > 1024) throw new Error('Invalid provider revision');
     if (change.deleted && change.parsed !== null) throw new Error('Deleted item carries content');
-    if ((change.observedActionEpoch == null) !== (change.observedCredentialGeneration == null)) throw new Error('Incomplete provider observation');
+    if ((change.observedActionEpoch == null) !== (change.observedCredentialGeneration == null) ||
+        (change.observedActionEpoch == null) !== (change.observedAuthorizationGeneration == null)) throw new Error('Incomplete provider observation');
     if (change.observedCredentialGeneration != null && change.observedCredentialGeneration !== page.expectedCredentialGeneration) throw new Error('Observation credential changed');
+    if (change.observedAuthorizationGeneration != null && change.observedAuthorizationGeneration !== page.expectedAuthorizationGeneration) throw new Error('Observation authorization changed');
     if ((!change.parsed?.ok || change.deleted) && change.observedActionEpoch != null) throw new Error('Unsupported item has provider observation');
     if (!change.deleted && (!change.parsed || !parseResultSchema.safeParse(change.parsed).success)) throw new Error('Missing or invalid parse result');
     if (change.parsed && !change.parsed.ok && ['timeout', 'busy', 'service_unavailable'].includes(change.parsed.code)) throw new Error('Transient parser failure');
@@ -155,6 +163,7 @@ async function checkFence(db: Database | Transaction, page: MailPage, lock: bool
       !marker.success || marker.data.confirmedOrigin !== page.configuredOrigin ||
       state.accountId !== page.accountId || state.resource !== 'mail' || state.collectionId !== page.collectionId ||
       state.generation !== page.expectedLeaseGeneration || account.credentialGeneration !== page.expectedCredentialGeneration ||
+      account.authorizationGeneration !== page.expectedAuthorizationGeneration ||
       (checkSequence && state.sequence !== page.expectedSequence) || !state.leaseUntil || state.leaseUntil <= new Date() || state.status !== 'running') throw new MailPageFenceError();
   return true;
 }
@@ -256,6 +265,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           externalId: change.externalId, providerRevision: change.providerRevision, appliedSequence: page.expectedSequence + 1,
           observedActionEpoch: parsed ? change.observedActionEpoch ?? null : null,
           observedCredentialGeneration: parsed ? change.observedCredentialGeneration ?? null : null,
+          observedAuthorizationGeneration: parsed ? change.observedAuthorizationGeneration ?? null : null,
           direction, directionProvenance: direction === 'out' ? 'provider_sent_account' : 'incoming', fromPersonId: fromRow?.personId ?? null,
           senderIdentitiesComplete,
           senderHeaderCount: parsed?.senderIdentities.length ?? 0,
@@ -386,17 +396,17 @@ export async function evaluateDerivedMailEligibility(db: Database, itemId: strin
     const [item] = await tx.select({ accountId: items.accountId, deletedAt: items.deletedAt,
       parseStatus: items.parseStatus, actionEpoch: items.actionEpoch,
       observedActionEpoch: items.observedActionEpoch,
-      observedCredentialGeneration: items.observedCredentialGeneration })
+      observedAuthorizationGeneration: items.observedAuthorizationGeneration })
       .from(items).where(eq(items.id, itemId));
     if (!item || item.deletedAt || item.parseStatus !== 'supported' ||
       item.observedActionEpoch === null || item.observedActionEpoch !== item.actionEpoch ||
-      item.observedCredentialGeneration === null) return DENIED;
+      item.observedAuthorizationGeneration === null) return DENIED;
     const [account] = await tx.select({ provider: accounts.provider, revokedAt: accounts.revokedAt,
       backfill: accounts.backfill, grantedScopes: accounts.grantedScopes,
-      credentialGeneration: accounts.credentialGeneration }).from(accounts).where(eq(accounts.id, item.accountId));
+      authorizationGeneration: accounts.authorizationGeneration }).from(accounts).where(eq(accounts.id, item.accountId));
     if (!account || account.provider !== 'google' || account.revokedAt || !account.backfill ||
       !account.grantedScopes.includes(GMAIL_SCOPE) ||
-      account.credentialGeneration !== item.observedCredentialGeneration) return DENIED;
+      account.authorizationGeneration !== item.observedAuthorizationGeneration) return DENIED;
     const [unresolved] = await tx.select({ id: mailChangeOperations.id }).from(mailChangeOperations)
       .where(and(eq(mailChangeOperations.itemId, itemId),
         sql`${mailChangeOperations.state} in ('pending', 'in_flight', 'outcome_unknown')`)).limit(1);
