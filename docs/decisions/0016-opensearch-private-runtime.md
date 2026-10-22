@@ -1,6 +1,6 @@
 # 0016: Private OpenSearch runtime foundation
 
-**Status:** source accepted after independent Astra review; Ubuntu container gate pending (2026-10-21).
+**Status:** accepted at `721e462` (0.41.2) after independent Astra review and full Ubuntu run `39706724818`.
 
 ## Decision
 
@@ -45,8 +45,9 @@ future live publication needs source eligibility, version and deletion fences.
 
 The manual fake OpenSearch semantics/resource proof passed Ubuntu run
 [`39667416208`](https://github.com/bcutler-wv/space-station/actions/runs/39667416208).
-The separate private-image gate described here has not run on Ubuntu yet.
-Local checks cover certificate create-only behavior and actual SDK loopback
-fault transport; they cannot prove image entrypoint, security-role action
-names, read-only mount compatibility or retained index behavior. No live
-indexer, search API, serving permission or M2 acceptance is implied.
+The separate private-image gate passed
+[`39706724818`](https://github.com/bcutler-wv/space-station/actions/runs/39706724818)
+at `721e462` (0.41.2): security-enabled startup, isolation, mTLS role
+restrictions, initial and retained fake-data contracts, restart, and rejection
+of settings, action-group and role drift. No live indexer, search API, serving
+permission or M2 acceptance is implied.

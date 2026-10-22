@@ -109,6 +109,45 @@ export const searchEpochs = pgTable('search_epochs', {
   check('search_epochs_scope_bound', sql`length(${t.scope}) <= 64`),
 ]);
 
+// Permanent disabled gate. Future publisher phases lock this row before epochs.
+export const searchGenerationControl = pgTable('search_generation_control', {
+  singleton: integer('singleton').primaryKey().default(1),
+  revision: integer('revision').notNull().default(1),
+  stage: text('stage').notNull().default('disabled'),
+  transitionToken: text('transition_token'),
+  generationToken: text('generation_token'),
+  physicalIndex: text('physical_index'),
+  indexUuid: text('index_uuid'),
+  profileId: text('profile_id'),
+  publicationEnabled: boolean('publication_enabled').notNull().default(false),
+  servingReady: boolean('serving_ready').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check('search_generation_singleton', sql`${t.singleton} = 1`),
+  check('search_generation_revision_positive', sql`${t.revision} > 0`),
+  check('search_generation_disabled_p1', sql`${t.publicationEnabled} = false and ${t.servingReady} = false`),
+  check('search_generation_stage', sql`${t.stage} in ('disabled', 'disabled_intent', 'unavailable')`),
+  check('search_generation_identity_pair', sql`(${t.generationToken} is null and ${t.physicalIndex} is null and ${t.profileId} is null and ${t.indexUuid} is null) or
+    (${t.generationToken} is not null and ${t.physicalIndex} is not null and ${t.profileId} is not null and ${t.profileId} = 'station-mail-v2')`),
+  check('search_generation_intent_bound', sql`${t.stage} <> 'disabled_intent' or
+    (${t.transitionToken} is not null and ${t.generationToken} is not null and ${t.physicalIndex} is not null)`),
+  check('search_generation_identity_bounds', sql`(${t.transitionToken} is null or length(${t.transitionToken}) between 1 and 128) and
+    (${t.generationToken} is null or length(${t.generationToken}) between 1 and 128) and
+    (${t.physicalIndex} is null or length(${t.physicalIndex}) between 1 and 128) and
+    (${t.indexUuid} is null or length(${t.indexUuid}) between 1 and 128)`),
+]);
+
+// Names and tokens remain reserved after abort or retirement.
+export const searchGenerationHistory = pgTable('search_generation_history', {
+  generationToken: text('generation_token').primaryKey(),
+  physicalIndex: text('physical_index').notNull().unique(),
+  profileId: text('profile_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check('search_generation_history_profile', sql`${t.profileId} = 'station-mail-v2'`),
+  check('search_generation_history_bounds', sql`length(${t.generationToken}) between 1 and 128 and length(${t.physicalIndex}) between 1 and 128`),
+]);
+
 export const searchDocuments = pgTable('search_documents', {
   accountId: text('account_id').notNull(),
   itemId: text('item_id').notNull(),
@@ -127,6 +166,8 @@ export const searchDocuments = pgTable('search_documents', {
   acknowledgedRevision: integer('acknowledged_revision'),
   acknowledgedGlobalEpoch: integer('acknowledged_global_epoch'),
   acknowledgedAccountEpoch: integer('acknowledged_account_epoch'),
+  acknowledgedGenerationToken: text('acknowledged_generation_token'),
+  acknowledgedDisposition: text('acknowledged_disposition'),
   claimToken: text('claim_token'),
   claimUntil: timestamp('claim_until', { withTimezone: true }),
   retryCount: integer('retry_count').notNull().default(0),
@@ -137,6 +178,11 @@ export const searchDocuments = pgTable('search_documents', {
   uniqueIndex('search_documents_document_id_unique').on(t.documentId),
   index('search_documents_dirty_idx').on(t.desiredState, t.accountId, t.itemId),
   check('search_documents_revision_positive', sql`${t.desiredRevision} > 0 and (${t.acknowledgedRevision} is null or ${t.acknowledgedRevision} > 0 and ${t.acknowledgedRevision} <= ${t.desiredRevision})`),
+  check('search_documents_ack_complete', sql`(${t.acknowledgedRevision} is null and ${t.acknowledgedGlobalEpoch} is null and ${t.acknowledgedAccountEpoch} is null and ${t.acknowledgedGenerationToken} is null and ${t.acknowledgedDisposition} is null) or
+    (${t.acknowledgedRevision} is not null and ${t.acknowledgedGlobalEpoch} is not null and ${t.acknowledgedGlobalEpoch} > 0 and
+      ${t.acknowledgedAccountEpoch} is not null and ${t.acknowledgedAccountEpoch} > 0 and ${t.acknowledgedGenerationToken} is not null and
+      ${t.acknowledgedDisposition} is not null and ${t.acknowledgedDisposition} in ('live', 'fence'))`),
+  check('search_documents_ack_token_bound', sql`${t.acknowledgedGenerationToken} is null or length(${t.acknowledgedGenerationToken}) between 1 and 128`),
   check('search_documents_state', sql`${t.desiredState} in ('dirty', 'eligible', 'purge')`),
   check('search_documents_retry_nonnegative', sql`${t.retryCount} >= 0`),
   check('search_documents_operational_bounds', sql`length(${t.accountId}) <= 64 and length(${t.itemId}) <= 64 and length(${t.documentId}) <= 128 and (${t.errorCode} is null or length(${t.errorCode}) <= 32) and (${t.claimToken} is null or length(${t.claimToken}) <= 128)`),

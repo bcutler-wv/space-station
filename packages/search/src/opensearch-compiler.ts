@@ -1,6 +1,7 @@
 import { parseSearchQuery, type SearchNode } from './parser.js';
 
 export const OPENSEARCH_PROFILE = 'station-mail-v1' as const;
+export const OPENSEARCH_PROFILE_V2 = 'station-mail-v2' as const;
 function deepFreeze<T extends object>(value: T): Readonly<T> {
   for (const child of Object.values(value)) if (child && typeof child === 'object') deepFreeze(child as object);
   return Object.freeze(value);
@@ -18,6 +19,13 @@ export const OPENSEARCH_MAPPING = deepFreeze({ dynamic: 'strict',
   toValues: { type: 'wildcard', doc_values: true }, ccValues: { type: 'wildcard', doc_values: true },
   filenameValues: { type: 'wildcard', doc_values: true },
 } } as const);
+export const OPENSEARCH_MAPPING_V2 = deepFreeze({ dynamic: 'strict',
+  _meta: { stationProfile: OPENSEARCH_PROFILE_V2 },
+  properties: { ...OPENSEARCH_MAPPING.properties,
+    live: { type: 'boolean' }, revision: { type: 'long' },
+    profileId: { type: 'keyword' }, generationToken: { type: 'keyword' },
+  },
+} as const);
 export const OPENSEARCH_COMPILE_LIMITS = { accounts: 64, orbits: 256, names: 512,
   idBytes: 128, nameCodePoints: 256, dslBytes: 65_536, dslNodes: 1024 } as const;
 
@@ -42,6 +50,8 @@ export type SearchCompileResult =
   | { status: 'ok'; profile: typeof OPENSEARCH_PROFILE; query: OpenSearchDsl }
   | { status: 'empty' }
   | { status: 'error'; code: 'scope' | 'resolution' | 'unsupported' | 'limit' | 'invalid' | 'incomplete' | 'unknown_operator' | 'invalid_value'; message: string };
+export type V2SearchCompileResult = Exclude<SearchCompileResult, { status: 'ok' }> |
+  { status: 'ok'; profile: typeof OPENSEARCH_PROFILE_V2; query: OpenSearchDsl };
 
 class CompileIssue extends Error {
   constructor(readonly code: Extract<SearchCompileResult, { status: 'error' }>['code']) { super(code); }
@@ -170,7 +180,9 @@ function compileNode(node: SearchNode, context: AuthorizedSearchContext,
 }
 
 /** Pure plan only. Future writer/reader must independently revalidate policy and scope. */
-export function compileSearchQuery(input: string, context: AuthorizedSearchContext): SearchCompileResult {
+function compileForProfile<P extends typeof OPENSEARCH_PROFILE | typeof OPENSEARCH_PROFILE_V2>(
+  input: string, context: AuthorizedSearchContext, profile: P,
+): Exclude<SearchCompileResult, { status: 'ok' }> | { status: 'ok'; profile: P; query: OpenSearchDsl } {
   try {
     if (typeof input !== 'string') throw new CompileIssue('invalid');
     const valid = validateContext(context);
@@ -178,12 +190,13 @@ export function compileSearchQuery(input: string, context: AuthorizedSearchConte
     if (parsed.status === 'empty') return { status: 'empty' };
     if (parsed.status === 'error') return { status: 'error', code: parsed.code, message: parsed.message };
     const filters = [term('ownerId', context.ownerId), terms('accountId', valid.accounts)];
+    if (profile === OPENSEARCH_PROFILE_V2) filters.push(term('live', true));
     if (context.scope === 'selected-orbits') filters.push(terms('orbitIds', valid.selected));
     const budget = { nodes: filters.length + 1 };
     const query = { bool: { filter: filters, must: [compileNode(parsed.ast, context, valid, budget)] } };
     if (Buffer.byteLength(JSON.stringify(query), 'utf8') > OPENSEARCH_COMPILE_LIMITS.dslBytes)
       throw new CompileIssue('limit');
-    return { status: 'ok', profile: OPENSEARCH_PROFILE, query };
+    return { status: 'ok', profile, query };
   } catch (error) {
     if (!(error instanceof CompileIssue)) throw error;
     return { status: 'error', code: error.code, message: error.code === 'resolution' ?
@@ -191,4 +204,14 @@ export function compileSearchQuery(input: string, context: AuthorizedSearchConte
         'This search operator is not available yet.' : error.code === 'scope' ?
           'Search scope is unavailable.' : 'Search is outside supported limits.' };
   }
+}
+
+/** Retained v1 compiler contract. */
+export function compileSearchQuery(input: string, context: AuthorizedSearchContext): SearchCompileResult {
+  return compileForProfile(input, context, OPENSEARCH_PROFILE);
+}
+
+/** Pure v2 plan; a future serving path must revalidate each candidate in PostgreSQL. */
+export function compileSearchQueryV2(input: string, context: AuthorizedSearchContext): V2SearchCompileResult {
+  return compileForProfile(input, context, OPENSEARCH_PROFILE_V2);
 }
