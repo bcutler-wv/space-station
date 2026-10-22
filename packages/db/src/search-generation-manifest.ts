@@ -29,8 +29,10 @@ export function searchGenerationDispatchSpec(row: History, operation: SearchGene
   if (!target || (operation.endsWith('_mapping') && !principal))
     throw new Error('Incomplete generation dispatch identity');
   const identity = { operation, target, index: manifest.index, profile: manifest.profile,
-    principal, actions: operation === 'writer_role' ? ['indices:data/read/get', 'indices:data/write/index'] :
-      operation === 'query_role' ? ['indices:data/read/get', 'indices:data/read/search'] : null };
+    principal, actions: operation === 'query_role' ?
+      ['indices:data/read/get', 'indices:data/read/search'] : null,
+    ...(operation === 'writer_role' ? { clusterActions: ['indices:data/write/bulk'],
+      indexActions: ['indices:data/write/index', 'indices:data/read/get', 'indices:data/write/bulk[s]'] } : {}) };
   return { target, bodyIdentity: createHash('sha256').update(JSON.stringify(identity)).digest('hex') };
 }
 

@@ -44,6 +44,24 @@ async function locked(tx: Transaction, expected: GenerationExpected): Promise<Co
   if (!same(row, expected)) return null;
   if (row.publicationEnabled || row.servingReady) throw new Error('Search generation enabled');
   if (row.revision >= MAX) throw new Error('Search generation revision exhausted');
+  // A completed operation remains evidence for every later stage and rotation.
+  // Inspect only the control row's candidate and source (at most two immutable
+  // v2 generations); legacy-v1 has no P2 dispatch.
+  for (const token of new Set([row.generationToken, row.sourceGenerationToken])) {
+    if (!token || token === 'legacy-v1') continue;
+    const [history] = await tx.select().from(searchGenerationHistory)
+      .where(eq(searchGenerationHistory.generationToken, token));
+    if (!history) throw new Error('Missing registered generation');
+    const dispatches = await tx.select().from(searchGenerationDispatch)
+      .where(eq(searchGenerationDispatch.generationToken, token)).limit(6);
+    if (dispatches.length > 5) throw new Error('Invalid generation dispatch count');
+    for (const dispatch of dispatches) {
+      const spec = searchGenerationDispatchSpec(history,
+        dispatch.operation as Parameters<typeof searchGenerationDispatchSpec>[1]);
+      if (dispatch.target !== spec.target || dispatch.bodyIdentity !== spec.bodyIdentity)
+        throw new Error('Stale generation dispatch intent');
+    }
+  }
   return row;
 }
 async function bump(tx: Transaction, set: Partial<Control>): Promise<Control> {
@@ -122,6 +140,9 @@ export async function advanceSearchGeneration(tx: Transaction, expected: Generat
       eq(searchGenerationDispatch.operation, operation)));
     if (!dispatch || !['response_confirmed', 'quiesced'].includes(dispatch.state))
       throw new Error('Unresolved generation dispatch');
+    const spec = searchGenerationDispatchSpec(history, operation);
+    if (dispatch.target !== spec.target || dispatch.bodyIdentity !== spec.bodyIdentity)
+      throw new Error('Stale generation dispatch intent');
   }
   const set: Partial<Control> = { stage: targetStage };
   if (targetStage === 'uuid_bound') {
@@ -189,8 +210,14 @@ export async function updateSearchGenerationDispatch(tx: Transaction, expected: 
   if (stageOperation[row.stage] !== input.operation || !row.generationToken)
     throw new Error('Wrong generation dispatch stage');
   const [dispatch] = await tx.select().from(searchGenerationDispatch).where(and(
-    eq(searchGenerationDispatch.generationToken, row.generationToken),
-    eq(searchGenerationDispatch.operation, input.operation))).for('update');
+      eq(searchGenerationDispatch.generationToken, row.generationToken),
+      eq(searchGenerationDispatch.operation, input.operation))).for('update');
+  const [history] = await tx.select().from(searchGenerationHistory)
+    .where(eq(searchGenerationHistory.generationToken, row.generationToken));
+  if (!history) throw new Error('Missing candidate reservation');
+  const spec = searchGenerationDispatchSpec(history, input.operation);
+  if (dispatch && (dispatch.target !== spec.target || dispatch.bodyIdentity !== spec.bodyIdentity))
+    throw new Error('Stale generation dispatch intent');
   if (!dispatch || dispatch.dispatchId !== input.dispatchId || dispatch.ownerId !== input.ownerId ||
       !(dispatch.state === 'armed' && input.state === 'sent_unknown' ||
         dispatch.state === 'sent_unknown' && input.state !== 'sent_unknown'))

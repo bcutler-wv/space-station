@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import console from 'node:console';
+import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import process from 'node:process';
 import { URL } from 'node:url';
@@ -54,9 +55,9 @@ const sdk = (clientValue, invoke, cap = 32_768) => boundedSearchSdkRequest(
 const path = (clientValue, method, uri, body, cap = 32_768) => sdk(clientValue,
   (c, options) => c.transport.request({ method, path: uri, ...(body === undefined ? {} : { body }) }, options), cap);
 const role = (index, kind, hidden = false) => ({ ...(hidden ? { hidden: true } : {}),
-  cluster_permissions: [], tenant_permissions: [],
+  cluster_permissions: kind === 'writer' ? ['indices:data/write/bulk'] : [], tenant_permissions: [],
   index_permissions: [{ index_patterns: [index], allowed_actions: kind === 'writer' ?
-    ['indices:data/write/index', 'indices:data/read/get'] :
+    ['indices:data/write/index', 'indices:data/read/get', 'indices:data/write/bulk[s]'] :
     ['indices:data/read/search', 'indices:data/read/get'] }] });
 const mapping = (principal, hidden = false) => ({ ...(hidden ? { hidden: true } : {}),
   users: [principal], backend_roles: [], hosts: [] });
@@ -91,6 +92,7 @@ const collection = async admin => Promise.all([
   path(admin, 'GET', '/_plugins/_security/api/rolesmapping', undefined, 128_000),
 ]);
 async function denied(work, category) {
+  phase = category.replaceAll(' ', '_');
   try { await work(); }
   catch (error) {
     assert.ok(error instanceof SearchEngineError && [401, 403].includes(error.statusCode),
@@ -105,11 +107,17 @@ async function assertMissing(adminClient, index) {
     error => error instanceof SearchEngineError && error.kind === 'status' && error.statusCode === 404,
     'implicit target must remain absent');
 }
-async function deniedBulk(work) {
+async function assertDocMissing(adminClient, index, id) {
+  await assert.rejects(sdk(adminClient, (c, options) => c.get({ index, id }, options)),
+    error => error instanceof SearchEngineError && error.kind === 'status' && error.statusCode === 404,
+    'bulk forbidden document must remain absent');
+}
+async function deniedBulk(work, action, category) {
+  phase = category.replaceAll(' ', '_');
   try {
     const result = await work();
     assert.equal(result.errors, true, 'bulk must report item denial');
-    assert.ok(result.items?.length === 1 && [401, 403].includes(result.items[0]?.index?.status),
+    assert.ok(result.items?.length === 1 && [401, 403].includes(result.items[0]?.[action]?.status),
       'bulk item must be forbidden');
   } catch (error) {
     if (error instanceof SearchEngineError && [401, 403].includes(error.statusCode)) return;
@@ -119,7 +127,7 @@ async function deniedBulk(work) {
 const identity = (g, item, revision) => {
   const accountId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const stableId = item === 'first' ? 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' :
-    'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    item === 'second' ? 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' : randomUUID();
   return { id: `mail:${accountId}:${stableId}`, stableId, accountId, generationToken: g.token, revision };
 };
 const fence = (g, item, revision = 1) => {
@@ -223,6 +231,7 @@ try {
   for (const g of generations) {
     const i = g.slot, other = generations[1 - i], item = i === 0 ? 'first' : 'second';
     const liveDoc = live(g, item), doc = fence(g, item, 2);
+    phase = `generation_${i}_external_live`;
     const liveWrite = await sdk(writer[i], (c, options) => c.index({ index: g.index, id: doc.id,
       body: liveDoc, version: 1, version_type: 'external', refresh: 'wait_for' }, options));
     assert.equal(liveWrite.result, 'created', 'strict external live created');
@@ -234,6 +243,7 @@ try {
       allow_partial_search_results: false, body: { query: { term: { live: true } }, size: 10 } }, options));
     assert.equal(liveFound._shards?.failed, 0);
     assert.ok(liveFound.hits?.hits?.some(hit => hit._id === doc.id), 'query sees live external document');
+    phase = `generation_${i}_external_fence`;
     const fenceWrite = await sdk(writer[i], (c, options) => c.index({ index: g.index, id: doc.id,
       body: doc, version: 2, version_type: 'external', refresh: 'wait_for' }, options));
     assert.equal(fenceWrite.result, 'updated', 'strict external fence updated');
@@ -249,6 +259,45 @@ try {
     const filtered = await sdk(query[i], (c, options) => c.search({ index: g.index,
       allow_partial_search_results: false, body: { query: { term: { live: true } }, size: 10 } }, options));
     assert.ok(!filtered.hits?.hits?.some(hit => hit._id === doc.id), 'fence excludes live search');
+
+    phase = `generation_${i}_own_bulk_index`;
+    const bulkDocs = [fence(g, 'bulk-index-one'), fence(g, 'bulk-index-two')];
+    const indexed = await sdk(writer[i], (c, options) => c.bulk({ refresh: 'wait_for',
+      body: bulkDocs.flatMap(value => [{ index: { _index: g.index, _id: value.id } }, value]) }, options));
+    assert.equal(indexed.errors, false, 'own bulk INDEX succeeds');
+    assert.equal(indexed.items?.length, 2, 'own bulk INDEX returns every item');
+    for (let n = 0; n < bulkDocs.length; n++) {
+      assert.equal(indexed.items[n]?.index?.status, 201, 'own bulk INDEX item created');
+      assert.equal(indexed.items[n]?.index?._version, 1, 'own bulk INDEX item version');
+      const stored = await sdk(admin, (c, options) => c.get({ index: g.index, id: bulkDocs[n].id }, options));
+      assert.equal(stored._version, 1);
+      assert.deepEqual(stored._source, bulkDocs[n], 'own bulk INDEX source');
+    }
+    phase = `generation_${i}_own_bulk_create`;
+    const createdDoc = live(g, 'bulk-create');
+    const created = await sdk(writer[i], (c, options) => c.bulk({ refresh: 'wait_for',
+      body: [{ create: { _index: g.index, _id: createdDoc.id } }, createdDoc] }, options));
+    assert.equal(created.errors, false, 'own bulk CREATE succeeds');
+    assert.equal(created.items?.length, 1);
+    assert.equal(created.items[0]?.create?.status, 201);
+    const createdStored = await sdk(admin, (c, options) => c.get({ index: g.index, id: createdDoc.id }, options));
+    assert.equal(createdStored._version, 1);
+    assert.deepEqual(createdStored._source, createdDoc, 'own bulk CREATE source');
+
+    await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
+      { delete: { _index: g.index, _id: doc.id } }] }, options)),
+    'delete', `generation ${i} own bulk DELETE`);
+    await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
+      { update: { _index: g.index, _id: doc.id } }, { doc: { live: true } }] }, options)),
+    'update', `generation ${i} own bulk UPDATE`);
+    const unchanged = await sdk(admin, (c, options) => c.get({ index: g.index, id: doc.id }, options));
+    assert.equal(unchanged._version, 2, 'forbidden bulk mutation retained version');
+    assert.deepEqual(unchanged._source, doc, 'forbidden bulk mutation retained source');
+
+    await deniedBulk(() => sdk(query[i], (c, options) => c.bulk({ body: [
+      { index: { _index: g.index, _id: `query-bulk-${i}` } }, doc] }, options)),
+    'index', `generation ${i} query bulk INDEX`);
+    await assertDocMissing(admin, g.index, `query-bulk-${i}`);
     await denied(() => sdk(query[i], (c, options) => c.index({ index: g.index, id: 'query-write',
       body: doc }, options)), 'query write');
     await denied(() => sdk(writer[i], (c, options) => c.search({ index: g.index,
@@ -279,8 +328,50 @@ try {
     await denied(() => sdk(v1Query, (c, options) => c.search({ index: g.index,
       body: { query: { match_all: {} } } }, options)), 'v1 query v2 search');
 
+    const foreignDoc = fence(other, 'foreign-bulk');
     await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
-      { index: { _index: g.index, _id: `bulk-${i}` } }, doc] }, options)));
+      { index: { _index: other.index, _id: foreignDoc.id } }, foreignDoc] }, options)),
+    'index', `generation ${i} pure foreign bulk INDEX`);
+    await assertDocMissing(admin, other.index, foreignDoc.id);
+    const v1ForeignId = `v1-foreign-bulk-${i}`;
+    await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
+      { index: { _index: 'station-mail-v1', _id: v1ForeignId } }, doc] }, options)),
+    'index', `generation ${i} v1 foreign bulk INDEX`);
+    await assertDocMissing(admin, 'station-mail-v1', v1ForeignId);
+    await deniedBulk(() => sdk(v1Writer, (c, options) => c.bulk({ body: [
+      { index: { _index: g.index, _id: `v1-to-v2-bulk-${i}` } }, doc] }, options)),
+    'index', `v1 writer generation ${i} bulk INDEX`);
+    await assertDocMissing(admin, g.index, `v1-to-v2-bulk-${i}`);
+    phase = `generation_${i}_mixed_bulk`;
+    const mixedOwn = fence(g, 'mixed-own'), mixedForeign = fence(other, 'mixed-foreign');
+    let mixed, wholeRequestDenied = false;
+    try {
+      mixed = await sdk(writer[i], (c, options) => c.bulk({ refresh: 'wait_for', body: [
+        { index: { _index: g.index, _id: mixedOwn.id } }, mixedOwn,
+        { index: { _index: other.index, _id: mixedForeign.id } }, mixedForeign] }, options));
+    } catch (error) {
+      if (!(error instanceof SearchEngineError && [401, 403].includes(error.statusCode))) throw error;
+      // The plugin may reject the whole mixed request before individual items.
+      // Accept that only when neither requested effect exists.
+      await assertDocMissing(admin, g.index, mixedOwn.id);
+      await assertDocMissing(admin, other.index, mixedForeign.id);
+      wholeRequestDenied = true;
+    }
+    if (!wholeRequestDenied) {
+      assert.ok(mixed && typeof mixed === 'object' && !Array.isArray(mixed),
+        'mixed bulk successful response must be an object');
+      assert.equal(mixed.items?.length, 2, 'mixed bulk reports both items');
+      assert.ok([401, 403].includes(mixed.items[1]?.index?.status), 'mixed foreign item denied');
+      assert.equal(mixed.errors, true, 'mixed bulk reports forbidden item');
+      const ownStatus = mixed.items[0]?.index?.status;
+      assert.ok([201, 401, 403].includes(ownStatus), 'mixed own item has explicit bounded outcome');
+      if (ownStatus === 201) {
+        const stored = await sdk(admin, (c, options) => c.get({ index: g.index, id: mixedOwn.id }, options));
+        assert.deepEqual(stored._source, mixedOwn, 'mixed allowed own item effect');
+        assert.equal(stored._version, 1);
+      } else await assertDocMissing(admin, g.index, mixedOwn.id);
+      await assertDocMissing(admin, other.index, mixedForeign.id);
+    }
   }
   phase = 'missing granted literal and implicit-create denial';
   for (const g of generations) {
@@ -297,6 +388,16 @@ try {
         id: `${category}-${i}`, body, ...extra }, options)), `implicit create ${category}`);
       await assertMissing(admin, g.index);
     }
+    const bulkIndexDoc = fence(g, 'missing-bulk-index');
+    await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
+      { index: { _index: g.index, _id: bulkIndexDoc.id } }, bulkIndexDoc] }, options)),
+    'index', `missing granted literal generation ${i} bulk INDEX`);
+    await assertMissing(admin, g.index);
+    const bulkCreateDoc = live(g, 'missing-bulk-create');
+    await deniedBulk(() => sdk(writer[i], (c, options) => c.bulk({ body: [
+      { create: { _index: g.index, _id: bulkCreateDoc.id } }, bulkCreateDoc] }, options)),
+    'create', `missing granted literal generation ${i} bulk CREATE`);
+    await assertMissing(admin, g.index);
   }
   console.info('Pinned two-generation permissions, complete hidden collections and immutable-role separation passed.');
 } catch (error) {

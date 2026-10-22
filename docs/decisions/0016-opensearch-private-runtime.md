@@ -51,3 +51,14 @@ at `721e462` (0.41.2): security-enabled startup, isolation, mTLS role
 restrictions, initial and retained fake-data contracts, restart, and rejection
 of settings, action-group and role drift. No live indexer, search API, serving
 permission or M2 acceptance is implied.
+
+The later, separate v2 generation proof does not change this frozen v1 runtime.
+Its first exact index/get writer grant failed on the pinned engine because even
+a single-document index request traverses the bulk transport action. The
+reviewed v2 candidate therefore adds only exact cluster
+`indices:data/write/bulk` and literal-index `indices:data/write/bulk[s]`.
+This permits a raw generation writer to attempt own-index bulk INDEX/CREATE
+documents; the future application's strict-external single-document protocol
+is not an engine-level restriction on that credential. Cross-generation,
+physical index creation, delete, update and administration denials remain
+required pinned-engine acceptance gates before any live use.

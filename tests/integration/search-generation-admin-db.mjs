@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import console from 'node:console';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import process from 'node:process';
 import { URL } from 'node:url';
@@ -30,12 +30,13 @@ const tx = (work) => db.transaction(async (trx) => {
 const proposal = () => ({ transitionToken: randomUUID(), generationToken: randomUUID(),
   physicalIndex: `station-mail-v2-g${randomUUID().replaceAll('-', '')}` });
 const fingerprint = 'a'.repeat(64);
+let oldWriterBodyIdentity, writerDispatchId;
 const snapshot = async () => ({ control: await current(),
   history: await db.select().from(searchGenerationHistory).orderBy(searchGenerationHistory.generationToken),
   dispatch: await db.select().from(searchGenerationDispatch).orderBy(searchGenerationDispatch.generationToken) });
 async function denyAndPreserve(work, message, cause) {
   const before = await snapshot();
-  await assert.rejects(tx(work), (error) => cause.test(error.cause?.message ?? ''), message);
+  await assert.rejects(tx(work), (error) => cause.test(error.cause?.message ?? error.message ?? ''), message);
   assert.deepEqual(await snapshot(), before, `${message}: failed transaction preserves complete state`);
 }
 
@@ -45,13 +46,49 @@ async function dispatch(row, operation) {
     .where(eq(searchGenerationHistory.generationToken, row.generationToken));
   const input = { operation, dispatchId: id, ownerId: owner,
     ...searchGenerationDispatchSpec(history, operation) };
+  let staleWriterHash;
+  if (operation === 'writer_role') {
+    const identity = { operation, target: history.writerRole, index: history.physicalIndex,
+      profile: history.profileId, principal: null, actions: null,
+      clusterActions: ['indices:data/write/bulk'],
+      indexActions: ['indices:data/write/index', 'indices:data/read/get', 'indices:data/write/bulk[s]'] };
+    assert.equal(input.bodyIdentity, createHash('sha256').update(JSON.stringify(identity)).digest('hex'),
+      'writer intent independently binds exact cluster and index action arrays');
+    const oldIdentity = { operation, target: history.writerRole, index: history.physicalIndex,
+      profile: history.profileId, principal: null,
+      actions: ['indices:data/read/get', 'indices:data/write/index'] };
+    staleWriterHash = createHash('sha256').update(JSON.stringify(oldIdentity)).digest('hex');
+    oldWriterBodyIdentity = staleWriterHash;
+    writerDispatchId = id;
+    assert.notEqual(input.bodyIdentity, staleWriterHash, 'old writer intent is incompatible');
+    await assert.rejects(tx(trx => armSearchGenerationDispatch(trx, expect(row),
+      { ...input, bodyIdentity: staleWriterHash })), /Invalid dispatch target or body identity/,
+    'old writer intent cannot be armed');
+  }
   const armed = await tx((trx) => armSearchGenerationDispatch(trx, expect(row), input));
   assert.equal(armed.revision, row.revision + 1);
+  if (staleWriterHash) await denyAndPreserve(async trx => {
+    await trx.execute(sql`alter table search_generation_dispatch disable trigger user`);
+    await trx.update(searchGenerationDispatch).set({ bodyIdentity: staleWriterHash })
+      .where(eq(searchGenerationDispatch.dispatchId, id));
+    await updateSearchGenerationDispatch(trx, expect(armed),
+      { operation, dispatchId: id, ownerId: owner, state: 'sent_unknown' });
+  }, 'stored old writer intent cannot settle', /Stale generation dispatch intent/);
   await assert.rejects(tx((trx) => armSearchGenerationDispatch(trx, expect(armed),
     { ...input, dispatchId: randomUUID(), ownerId: randomUUID() })),
   (error) => error.cause?.code === '23505', 'a second owner cannot dispatch');
   const sent = await tx((trx) => updateSearchGenerationDispatch(trx, expect(armed),
     { operation, dispatchId: id, ownerId: owner, state: 'sent_unknown' }));
+  if (staleWriterHash) for (const state of ['response_confirmed', 'quiesced']) {
+    await denyAndPreserve(async trx => {
+      await trx.execute(sql`alter table search_generation_dispatch disable trigger user`);
+      await trx.update(searchGenerationDispatch).set({ bodyIdentity: staleWriterHash })
+        .where(eq(searchGenerationDispatch.dispatchId, id));
+      await updateSearchGenerationDispatch(trx, expect(sent),
+        { operation, dispatchId: id, ownerId: owner, state });
+    }, `stored old writer intent cannot settle sent_unknown to ${state}`,
+    /Stale generation dispatch intent/);
+  }
   await assert.rejects(tx((trx) => updateSearchGenerationDispatch(trx, expect(sent),
     { operation, dispatchId: id, ownerId: randomUUID(), state: 'response_confirmed' })),
   /owner or transition mismatch/, 'stale/foreign completion is denied');
@@ -60,8 +97,15 @@ async function dispatch(row, operation) {
       writer_mapping: 'writer_attested', query_role: 'query_role_attested',
       query_mapping: 'roles_attested' }[operation], operation === 'create_index' ? 'fakeUuid1' : undefined)),
   /Unresolved generation dispatch/, 'unknown outcome cannot advance');
-  return tx((trx) => updateSearchGenerationDispatch(trx, expect(sent),
+  const confirmed = await tx((trx) => updateSearchGenerationDispatch(trx, expect(sent),
     { operation, dispatchId: id, ownerId: owner, state: 'response_confirmed' }));
+  if (staleWriterHash) await denyAndPreserve(async trx => {
+    await trx.execute(sql`alter table search_generation_dispatch disable trigger user`);
+    await trx.update(searchGenerationDispatch).set({ bodyIdentity: staleWriterHash })
+      .where(eq(searchGenerationDispatch.dispatchId, id));
+    await advanceSearchGeneration(trx, expect(confirmed), 'writer_role_attested');
+  }, 'stored old writer intent cannot advance', /Stale generation dispatch intent/);
+  return confirmed;
 }
 
 try {
@@ -209,10 +253,22 @@ try {
     row = await tx((trx) => advanceSearchGeneration(trx, expect(row), requested));
     row = await dispatch(row, operation);
     row = await tx((trx) => advanceSearchGeneration(trx, expect(row), completed));
+    if (operation === 'writer_role') await denyAndPreserve(async trx => {
+      await trx.execute(sql`alter table search_generation_dispatch disable trigger user`);
+      await trx.update(searchGenerationDispatch).set({ bodyIdentity: oldWriterBodyIdentity })
+        .where(eq(searchGenerationDispatch.dispatchId, writerDispatchId));
+      await advanceSearchGeneration(trx, expect(row), 'writer_mapping_requested');
+    }, 'old writer intent after writer attestation blocks later stage', /Stale generation dispatch intent/);
     await assert.rejects(tx((trx) => casDisabledSearchGeneration(trx, row,
       { stage: 'disabled' })), /cannot alter P2 state/);
   }
   assert.equal(row.stage, 'roles_attested');
+  await denyAndPreserve(async trx => {
+    await trx.execute(sql`alter table search_generation_dispatch disable trigger user`);
+    await trx.update(searchGenerationDispatch).set({ bodyIdentity: oldWriterBodyIdentity })
+      .where(eq(searchGenerationDispatch.dispatchId, writerDispatchId));
+    await reserveSearchGeneration(trx, expect(row), proposal());
+  }, 'old writer intent in attested source blocks rotation', /Stale generation dispatch intent/);
   assert.equal(row.publicationEnabled, false);
   await assert.rejects(db.update(searchGenerationControl).set({ publicationEnabled: true,
     revision: row.revision + 1 }),
