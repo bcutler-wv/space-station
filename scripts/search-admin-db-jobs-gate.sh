@@ -24,9 +24,25 @@ backupdir=''
 pair_home=''
 pair_uid="$runner_uid"
 pair_gid="$runner_gid"
+ancestor_paths=()
+ancestor_modes=()
 original_cache_mode=$(stat -c '%a' .cache)
 phase=setup
 pair=none
+restore_ancestor_modes() {
+  local index failed=0
+  for ((index=${#ancestor_paths[@]}-1; index>=0; index--)); do
+    if ! sudo chmod "${ancestor_modes[index]}" -- "${ancestor_paths[index]}" >/dev/null 2>&1; then
+      failed=1
+    fi
+  done
+  if [[ "$failed" != 0 ]]; then
+    echo 'Compose probe: runner-owned ancestor mode restoration failed.' >&2
+    return 1
+  fi
+  ancestor_paths=()
+  ancestor_modes=()
+}
 cleanup() {
   local result=$?
   if [[ -n "$project" ]]; then
@@ -43,6 +59,7 @@ cleanup() {
   if [[ "$owned_bundle" == 1 ]]; then sudo rm -rf -- .cache/search-db; fi
   if [[ -n "$backupdir" ]]; then sudo rm -rf -- "$backupdir"; fi
   if [[ -n "$pair_home" ]]; then sudo rm -rf -- "$pair_home"; fi
+  if ! restore_ancestor_modes; then result=1; fi
   sudo chown "$runner_uid:$runner_gid" .env .cache/go-camo.env >/dev/null 2>&1 || true
   chmod "$original_cache_mode" .cache >/dev/null 2>&1 || true
   rm -f -- .env || true
@@ -50,6 +67,8 @@ cleanup() {
   rm -rf -- .cache/tls || true
   if [[ "$result" != 0 ]]; then
     echo "DB inspector fixture failed in $phase for $pair pair; private bounded log retained." >&2
+    trap - EXIT
+    exit "$result"
   fi
 }
 trap cleanup EXIT
@@ -92,6 +111,48 @@ run_as_pair() {
     timeout "${RUN_PAIR_TIMEOUT:-120}s" env HOME="$pair_home" DOCKER_CONFIG="$pair_home/.docker" \
       COMPOSE_PROJECT_NAME="$project" APP_UID="$pair_uid" APP_GID="$pair_gid" "$@"
   fi
+}
+
+numeric_mode_owner() {
+  local value
+  if value=$(sudo stat -c '%u:%g:%a' -- "$1" 2>> "$log") &&
+     [[ "$value" =~ ^[0-9]+:[0-9]+:[0-7]{3,4}$ ]]; then
+    printf '%s' "$value"
+  else
+    printf 'unavailable'
+  fi
+}
+
+repair_checkout_traversal() {
+  local physical_root current part depth=0 owner mode
+  physical_root=$(pwd -P)
+  [[ "$physical_root" == "$PWD" && "${GITHUB_ACTIONS:-}" == true ]] || {
+    echo 'Compose probe: checkout traversal repair is outside disposable CI.' >&2; return 1;
+  }
+  current=''
+  local -a parts
+  IFS=/ read -r -a parts <<< "${physical_root#/}"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" ]] || continue
+    current="$current/$part"
+    depth=$((depth + 1))
+    if run_as_pair test -x "$current" >/dev/null 2>&1; then continue; fi
+    owner=$(stat -c '%u' -- "$current")
+    mode=$(stat -c '%a' -- "$current")
+    if [[ "$owner" != "$runner_uid" || ! "$mode" =~ ^[0-7]{3,4}$ ||
+          ! -d "$current" || -L "$current" || "$(realpath -e -- "$current")" != "$current" ]]; then
+      echo "Compose probe: denied ancestor depth=$depth owner-mode=$(numeric_mode_owner "$current"); repair refused." >&2
+      return 1
+    fi
+    ancestor_paths+=("$current")
+    ancestor_modes+=("$mode")
+    sudo chmod o+x -- "$current" >> "$log" 2>&1
+    if ! run_as_pair test -x "$current" >/dev/null 2>&1; then
+      echo "Compose probe: denied ancestor depth=$depth owner-mode=$(numeric_mode_owner "$current"); repair failed." >&2
+      return 1
+    fi
+    echo "Compose probe: runner-owned ancestor depth=$depth traversal repaired from mode=$mode." >&2
+  done
 }
 
 compose_error_class() {
@@ -141,6 +202,9 @@ for pair in default runner; do
   sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
     "$compose_plugin" "$pair_home/.docker/cli-plugins/docker-compose"
   project="$candidate"
+  if [[ "$pair" == default ]] && ! run_as_pair test -x "$PWD" >/dev/null 2>&1; then
+    repair_checkout_traversal
+  fi
   # Image construction is outside the UID/password-delivery proof. Build
   # before handing fixture files to the pair; all credential and job commands
   # below still use the pair's separate private HOME and Docker configuration.
@@ -200,13 +264,22 @@ for pair in default runner; do
     docker_path_match=no
   fi
   echo "Compose probe: source=$source_location symlink=$source_link runner-version=$(public_version "$runner_compose_version") docker-path-match=$docker_path_match." >&2
-  for pair_path in "$pair_home" "$pair_home/.docker" "$pair_home/.docker/cli-plugins"; do
-    if ! run_as_pair test -r "$pair_path" || ! run_as_pair test -x "$pair_path"; then
-      echo 'Compose probe: pair directory read/execute denied.' >&2; exit 1
+  for pair_label in home config plugins; do
+    case "$pair_label" in
+      home) pair_path="$pair_home" ;;
+      config) pair_path="$pair_home/.docker" ;;
+      plugins) pair_path="$pair_home/.docker/cli-plugins" ;;
+    esac
+    if ! run_as_pair test -r "$pair_path" >/dev/null 2>&1 ||
+       ! run_as_pair test -x "$pair_path" >/dev/null 2>&1; then
+      echo "Compose probe: pair directory $pair_label read/execute denied; owner-mode=$(numeric_mode_owner "$pair_path") cache-owner-mode=$(numeric_mode_owner .cache)." >&2
+      exit 1
     fi
   done
-  if ! run_as_pair test -r "$pair_plugin" || ! run_as_pair test -x "$pair_plugin"; then
-    echo 'Compose probe: pair plugin read/execute denied.' >&2; exit 1
+  if ! run_as_pair test -r "$pair_plugin" >/dev/null 2>&1 ||
+     ! run_as_pair test -x "$pair_plugin" >/dev/null 2>&1; then
+    echo "Compose probe: pair plugin read/execute denied; owner-mode=$(numeric_mode_owner "$pair_plugin") cache-owner-mode=$(numeric_mode_owner .cache)." >&2
+    exit 1
   fi
   plugin_metadata="$scratch/compose-metadata-$pair.json"
   plugin_metadata_error="$scratch/compose-metadata-$pair.err"
@@ -322,6 +395,7 @@ for pair in default runner; do
   owned_bundle=0
   sudo rm -rf -- "$pair_home"
   pair_home=''
+  restore_ancestor_modes
   phase=ownership
   sudo chown "$runner_uid:$runner_gid" .env .cache/go-camo.env
 done
