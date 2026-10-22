@@ -61,6 +61,7 @@ jobs:
       - run: pnpm audit --audit-level high
       - run: pnpm check
       - run: node --test tests/support/search-attestor-pure.test.mjs
+      - run: node --test tests/support/search-attestor-command.test.mjs
       - run: node tests/integration/search-generation-identity.mjs
       - run: node tests/integration/mail-parser.mjs
       - run: node tests/integration/mail-sanitize.mjs
@@ -68,6 +69,21 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - run: pnpm exec playwright test --config playwright.mail-body-dev.config.ts
+
+  search-attestor-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: scaffold
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target search-attestor -t station-search-attestor-fixture .
+      - run: >-
+          docker run --rm --network none --read-only --cap-drop ALL
+          --security-opt no-new-privileges --user 1000:1000
+          --tmpfs /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
+          -e SEARCH_ATTESTOR_IMAGE_PROOF=1 -e SEARCH_ATTESTOR_TEST_SCRATCH=/tmp
+          station-search-attestor-fixture
+          node --test tests/support/search-attestor-command.test.mjs
 
   process-recovery:
     runs-on: ubuntu-latest
