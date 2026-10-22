@@ -7,12 +7,57 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
+      - search_admin_db
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U station -d station"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
+
+  search-db-verifier:
+    profiles: [search-admin-db]
+    build: .
+    command: ["node", "scripts/search-admin-db-inspector.mjs", "verifier"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - type: bind
+        source: ./.cache/search-db/initial-v1/verifier.password
+        target: /run/search-db/password
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [search_admin_db]
+    restart: "no"
+
+  search-db-transition:
+    profiles: [search-admin-db]
+    build: .
+    command: ["node", "scripts/search-admin-db-inspector.mjs", "transition"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - type: bind
+        source: ./.cache/search-db/initial-v1/transition.password
+        target: /run/search-db/password
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [search_admin_db]
+    restart: "no"
 
   migrate:
     build: .
@@ -307,6 +352,8 @@ services:
     restart: "no"
 
 networks:
+  search_admin_db:
+    internal: true
   mail_parser:
     internal: true
   camo_egress:

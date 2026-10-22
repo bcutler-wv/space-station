@@ -32,12 +32,19 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?fixture owner secret required}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - default
+      - search_admin_db
+networks:
+  search_admin_db:
+    internal: true
 volumes:
   pgdata: {}
 YAML
 test -z "$(docker compose ps -a -q)"
 if docker volume inspect "${project}_pgdata" >/dev/null 2>&1 ||
-   docker network inspect "${project}_default" >/dev/null 2>&1; then
+   docker network inspect "${project}_default" >/dev/null 2>&1 ||
+   docker network inspect "${project}_search_admin_db" >/dev/null 2>&1; then
   echo 'Disposable Compose project already owns resources.' >&2
   exit 1
 fi
@@ -57,6 +64,15 @@ uid=$(id -u)
 gid=$(id -g)
 test "$uid" -gt 0 && test "$gid" -gt 0
 node scripts/search-admin-credentials.mjs create --uid "$uid" --gid "$gid" >> "$fixture_log" 2>&1
+node scripts/search-admin-credentials.mjs verify --uid "$uid" --gid "$gid" >> "$fixture_log" 2>&1
+docker compose up -d --force-recreate postgres >> "$fixture_log" 2>&1
+id=$(docker compose ps -q postgres)
+test -n "$id"
+for attempt in {1..30}; do
+  if docker exec "$id" pg_isready -U station -d station >/dev/null 2>&1; then break; fi
+  if [[ "$attempt" == 30 ]]; then echo 'Recreated credential PG16 did not become ready.' >&2; exit 1; fi
+  sleep 1
+done
 node scripts/search-admin-credentials.mjs verify --uid "$uid" --gid "$gid" >> "$fixture_log" 2>&1
 docker exec -i "$id" psql -X -U station -d station -v ON_ERROR_STOP=1 \
   -c 'REVOKE SELECT ON search_generation_control FROM station_search_verifier' >> "$fixture_log" 2>&1

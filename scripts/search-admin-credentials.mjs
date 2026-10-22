@@ -61,14 +61,43 @@ async function createDockerAdapter(uid, gid) {
   if (ids.length !== 1 || !/^[0-9a-f]{12,64}$/.test(ids[0])) failed('compose service');
   const id = ids[0];
   const details = await checked('docker', ['inspect', '--format',
-    '{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}', id], '', 'container identity');
-  const [running, project, service, addresses] = details.split('|');
+    '{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}', id], '', 'container identity');
+  const [running, project, service] = details.split('|');
   if (running !== 'true' || service !== 'postgres' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(project ?? ''))
     failed('container identity');
-  const candidates = (addresses ?? '').split(',').filter(x => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(x) &&
-    !x.startsWith('127.') && x !== '0.0.0.0');
-  if (candidates.length !== 1 || candidates[0].split('.').some(x => Number(x) > 255)) failed('authentication endpoint');
-  const ip = candidates[0];
+  const networkTuples = async () => {
+    const lines = await checked('docker', ['inspect', '--format',
+      '{{range .NetworkSettings.Networks}}{{println .NetworkID "|" .IPAddress}}{{end}}', id], '', 'authentication endpoint');
+    const pairs = lines.split('\n').filter(Boolean).map(line => line.split(' | '));
+    if (pairs.length !== 2 || pairs.some(([networkId, address], index) =>
+      !/^[0-9a-f]{64}$/.test(networkId ?? '') ||
+      !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address ?? '') ||
+      address.split('.').some(x => Number(x) > 255) || address.startsWith('127.') || address === '0.0.0.0' ||
+      pairs.findIndex(x => x[0] === networkId || x[1] === address) !== index)) failed('authentication endpoint');
+    return pairs;
+  };
+  const pairs = await networkTuples();
+  const networkNames = new Map();
+  for (const [networkId] of pairs) {
+    const line = await checked('docker', ['network', 'inspect', '--format',
+      '{{.Id}}|{{.Internal}}|{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.network"}}', networkId], '', 'authentication endpoint');
+    const [observedId, internal, networkProject, networkName] = line.split('|');
+    if (observedId !== networkId || networkProject !== project ||
+        !['default', 'search_admin_db'].includes(networkName) ||
+        (networkName === 'search_admin_db' && internal !== 'true') ||
+        (networkName === 'default' && internal !== 'false') || networkNames.has(networkName))
+      failed('authentication endpoint');
+    networkNames.set(networkName, networkId);
+  }
+  if (networkNames.size !== 2) failed('authentication endpoint');
+  const adminId = networkNames.get('search_admin_db');
+  const ip = pairs.find(([networkId]) => networkId === adminId)[1];
+  const unchangedEndpoint = async () => {
+    const current = await networkTuples();
+    if (current.length !== pairs.length || current.some(([networkId, address]) =>
+      !pairs.some(([originalId, originalAddress]) => originalId === networkId && originalAddress === address)))
+      failed('authentication endpoint');
+  };
   const identitySql = `SELECT (pg_control_system()).system_identifier::text || '|' || d.oid::text || '|' || r.rolname
     FROM pg_database d JOIN pg_roles r ON r.oid=d.datdba WHERE d.datname=current_database();`;
   const identityLine = await psqlInput(id, identitySql, 'database identity');
@@ -121,9 +150,9 @@ async function createDockerAdapter(uid, gid) {
     const name = quoteFixed(role);
     await psqlInput(id, `ALTER ROLE ${name} ${enabled ? 'LOGIN' : 'NOLOGIN'};`, 'role login', true);
   };
-  const authAttempt = async (role, password) => command('docker', ['exec', '-i', id, ...cleanPsql,
+  const authAttempt = async (role, password) => { await unchangedEndpoint(); return command('docker', ['exec', '-i', id, ...cleanPsql,
     '-X', '-h', ip, '-p', '5432', '-U', quoteFixed(role), '-d', 'station', '-W', '-A', '-t',
-    '-v', 'ON_ERROR_STOP=1', '-c', 'SELECT session_user || \'|\' || current_user;'], `${password}\n`);
+    '-v', 'ON_ERROR_STOP=1', '-c', 'SELECT session_user || \'|\' || current_user;'], `${password}\n`); };
   const authenticate = async (role, password) => {
     await hba();
     const accepted = await authAttempt(role, password);
