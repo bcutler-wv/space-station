@@ -15,3 +15,5 @@ Version 0.56.0 adds the independently Astra-reviewed E0c1 complete, bounded read
 The shared-baseline engine proof passed in Ubuntu run `39861764148` at `62019c2`, job `120115511654`, and again with the bootstrap correction at `5004321`. The descendant bootstrap commit `5004321` passed all seven jobs in run `39861865730`, accepting this foundation; the redundant older policy workflow was cancelled while its runner was still installing browser dependencies.
 
 Reader review corrected PostgreSQL sub-millisecond timestamp loss and isolated the dispatch-drift fixture from unrelated history changes. Independent PG15 precision, restoration and timezone probes passed, together with the full local check. The extended actual PG16 role fixture remains pending.
+
+The complete reader is accepted through descendant commit `d82d66e` (0.57.0), whose Ubuntu run `39864769078` passed all seven jobs. Job `120125526444` included the extended actual PG16 reader/role fixture and credential rotation regressions. The redundant older reader workflow was cancelled after that full descendant success.

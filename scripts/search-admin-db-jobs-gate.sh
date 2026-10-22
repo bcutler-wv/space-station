@@ -312,16 +312,21 @@ for pair in default runner; do
   run_as_pair docker version --format '{{.Server.Version}}' >> "$log" 2>&1
   phase=compose-config
   run_as_pair docker compose --profile search-admin-db config --quiet >> "$log" 2>&1
-  phase=setup
+  phase=postgres-start
   run_as_pair docker compose up -d postgres >> "$log" 2>&1
+  phase=container-id
   id=$(run_as_pair docker compose ps -q postgres)
   [[ "$id" =~ ^[0-9a-f]{12,64}$ ]]
+  phase=readiness
   ready=0
   for attempt in {1..30}; do
-    if run_as_pair docker exec "$id" pg_isready -U station -d station >/dev/null 2>&1; then ready=1; break; fi
+    # The image's init server accepts Unix sockets before the final server
+    # listens on TCP. Only the latter is safe for the first migration.
+    if run_as_pair docker exec "$id" pg_isready -h 127.0.0.1 -U station -d station >/dev/null 2>&1; then ready=1; break; fi
     sleep 1
   done
   [[ "$ready" == 1 ]]
+  phase=migration
   for migration in packages/db/drizzle/[0-9]*.sql; do
     run_as_pair docker exec -i "$id" psql -X -U station -d station -v ON_ERROR_STOP=1 < "$migration" >> "$log" 2>&1
   done
