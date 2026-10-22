@@ -71,13 +71,20 @@ run_as_pair() {
 for pair in default runner; do
   if [[ "$pair" == default ]]; then pair_uid=1000; pair_gid=1000;
   else pair_uid="$runner_uid"; pair_gid="$runner_gid"; fi
+  phase=collision
   candidate="stationdbjobs$(openssl rand -hex 7)"
+  if ! collision_rows=$(COMPOSE_PROJECT_NAME="$candidate" docker compose ps -a -q 2>> "$log"); then
+    echo 'Disposable Compose collision check failed.' >&2; exit 1
+  fi
+  if [[ -n "$collision_rows" ]]; then
+    echo 'Disposable Compose project already has containers.' >&2; exit 1
+  fi
   if docker volume inspect "${candidate}_postgres_data" >/dev/null 2>&1 ||
      docker network inspect "${candidate}_default" >/dev/null 2>&1 ||
-     docker network inspect "${candidate}_search_admin_db" >/dev/null 2>&1 ||
-     [[ -n "$(COMPOSE_PROJECT_NAME="$candidate" docker compose ps -a -q)" ]]; then
+     docker network inspect "${candidate}_search_admin_db" >/dev/null 2>&1; then
     echo 'Disposable project collision.' >&2; exit 1
   fi
+  phase=setup
   pair_home=$(mktemp -d "$PWD/.cache/search-db-jobs-home.XXXXXXXX")
   sudo chown "$pair_uid:$pair_gid" "$pair_home"
   sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker"
@@ -173,6 +180,8 @@ for pair in default runner; do
   owned_bundle=0
   sudo rm -rf -- "$pair_home"
   pair_home=''
+  phase=ownership
+  sudo chown "$runner_uid:$runner_gid" .env .cache/go-camo.env
 done
 
 phase=complete
