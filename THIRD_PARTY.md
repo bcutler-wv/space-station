@@ -90,6 +90,10 @@ candidate is still awaiting actual Ubuntu isolation, security and retention
 validation. No image is pulled on agent-dev, and there is no live search
 consumer yet.
 
+## Host certificate tooling
+
+The offline generation certificate signer reuses the host `openssl` command already used for the v1 fake/private certificate fixture; it adds no package dependency or copied upstream code. The locally exercised binary is OpenSSL 3.0.20. Its explicit `x509 -set_serial` avoids a CA serial file, and `x509 -checkend` plus `verify -purpose sslclient` are documented in the official [OpenSSL 3.0 x509](https://docs.openssl.org/3.0/man1/openssl-x509/) and [verify](https://docs.openssl.org/3.0/man1/openssl-verify/) manuals. The [OpenSSL project](https://www.openssl-library.org/source/) states that 3.0 and later are Apache-2.0. Ubuntu CI must independently exercise the runner's OpenSSL binary; no OpenSSL binary is vendored or pinned by this repository.
+
 ## Planned dependencies
 
 | Package | Use | License (verify when adding) |
