@@ -3,7 +3,7 @@ import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { GmailChangeAdapter, GoogleCredentialService, GMAIL_MODIFY_SCOPE } from '@station/connectors';
-import { accounts, auditLog, items, labels, mailChangeOperations } from '@station/db';
+import { accounts, auditLog, dirtySearchItems, items, labels, mailChangeOperations } from '@station/db';
 import { mailChangeCurrentStatusQuerySchema, mailChangeDiscoveryPageSchema, mailChangeDiscoveryQuerySchema, mailChangeOperationSchema,
   mailChangeRequestSchema, mailChangeScopeSchema } from '@station/shared';
 import type { AuthConfig } from './auth.js';
@@ -78,14 +78,20 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
     const [row] = await tx.update(mailChangeOperations).set({ state: 'failed', lastError: error,
       updatedAt: new Date(), completedAt: new Date() }).where(and(eq(mailChangeOperations.id, id),
       eq(mailChangeOperations.state, 'pending'))).returning();
-    if (row) await audit(tx, 'mail_change_failed', row.id);
+    if (row) {
+      await audit(tx, 'mail_change_failed', row.id);
+      await dirtySearchItems(tx, row.accountId, [row.itemId]);
+    }
     return row;
   });
   const unknown = (id: string, error: string) => run(async (tx) => {
     const [row] = await tx.update(mailChangeOperations).set({ state: 'outcome_unknown', lastError: error,
       updatedAt: new Date() }).where(and(eq(mailChangeOperations.id, id),
       eq(mailChangeOperations.state, 'in_flight'))).returning();
-    if (row) await audit(tx, 'mail_change_unknown', row.id);
+    if (row) {
+      await audit(tx, 'mail_change_unknown', row.id);
+      await dirtySearchItems(tx, row.accountId, [row.itemId]);
+    }
     return row;
   });
 
@@ -141,6 +147,7 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
         itemId, externalId: item.externalId, accountId, orbitId: orbitId ?? null, idempotencyKey, requestDigest,
         action, addLabels, removeLabels, itemRevision, itemSequence }).returning();
       await audit(tx, 'mail_change_requested', row!.id);
+      await dirtySearchItems(tx, accountId, [itemId]);
       return { code: 201 as const, row: row!, providerLabel, accountEmail: account.email };
     });
     if (reservation.code === 200) return status(reservation.row);
@@ -181,12 +188,14 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
         if (observed) {
           await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, itemId));
           await audit(tx, 'mail_change_observed', observed.id);
+          await dirtySearchItems(tx, accountId, [itemId]);
         }
         return observed ?? false;
       }
       const [updated] = await tx.update(mailChangeOperations).set({ state: 'in_flight', attemptCount: 1,
         credentialGeneration: credential.generation, updatedAt: new Date() })
         .where(and(eq(mailChangeOperations.id, row.id), eq(mailChangeOperations.state, 'pending'))).returning();
+      if (updated) await dirtySearchItems(tx, accountId, [itemId]);
       return updated ?? false;
     });
     if (!claimed) {
@@ -211,6 +220,7 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
         if (saved) {
           await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, itemId));
           await audit(tx, 'mail_change_confirmed', saved.id);
+          await dirtySearchItems(tx, accountId, [itemId]);
         }
         return saved;
       });
@@ -339,8 +349,12 @@ export function registerMailChange(app: FastifyInstance, auth: AuthConfig,
       if (saved && matches) {
         await tx.update(items).set({ actionEpoch: sql`${items.actionEpoch} + 1` }).where(eq(items.id, row.itemId));
         await audit(tx, 'mail_change_observed', saved.id);
+        await dirtySearchItems(tx, row.accountId, [row.itemId]);
       }
-      else if (saved && current.state === 'in_flight') await audit(tx, 'mail_change_unknown', saved.id);
+      else if (saved && current.state === 'in_flight') {
+        await audit(tx, 'mail_change_unknown', saved.id);
+        await dirtySearchItems(tx, row.accountId, [row.itemId]);
+      }
       return saved;
     });
     return reconciled ? status(reconciled) : reply.code(404).send(unavailable);

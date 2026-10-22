@@ -2,7 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { GoogleMailAuthorization, canonicalGoogleScopes } from '@station/connectors';
-import { accounts, auditLog, oauthApps, oauthAttempts, orbits, sessions, settings, users } from '@station/db';
+import { accounts, auditLog, bumpSearchAccountEpoch, establishSearchAccountEpoch,
+  oauthApps, oauthAttempts, orbits, sessions, settings, users } from '@station/db';
 import { googleBackfillSchema, googleCallbackSchema, googleOkSchema, googleReconnectStartSchema, googleStartResponseSchema, googleStartSchema, googleStatusSchema } from '@station/shared';
 import { digest, OWNER_ID } from './auth-store.js';
 import type { AuthConfig } from './auth.js';
@@ -135,6 +136,8 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
           openSecret(attempt.encryptedVerifier, auth.masterKey, attemptContext(attempt.id, 'verifier')));
       const accountId = randomUUID();
       const linked = await db.transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '3000ms'`);
+        await tx.execute(sql`set local lock_timeout = '750ms'`);
         const [owner] = await tx.select({ generation: users.authGeneration }).from(users).where(eq(users.id, OWNER_ID)).for('update');
         const [liveSession] = await tx.select({ id: sessions.tokenHash, data: sessions.data }).from(sessions).where(and(
           eq(sessions.tokenHash, sessionHash(request.session.sessionId)), isNull(sessions.revokedAt),
@@ -164,6 +167,7 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
           }).where(eq(accounts.id, target.id));
           await tx.insert(auditLog).values({ id: randomUUID(), actorId: OWNER_ID, action: 'reconnect_account', targetId: target.id });
           await tx.update(oauthAttempts).set({ status: 'completed', encryptedCode: null, encryptedVerifier: '', updatedAt: new Date() }).where(eq(oauthAttempts.id, attempt.id));
+          await bumpSearchAccountEpoch(tx, target.id);
           return 'connected';
         }
         const [existing] = await tx.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.provider, 'google'), sql`lower(${accounts.email}) = ${result.email}`));
@@ -174,6 +178,7 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
           accessTokenExpiresAt: result.accessTokenExpiresAt, grantedScopes: canonicalGoogleScopes(result.scopes) });
         await tx.insert(auditLog).values({ id: randomUUID(), actorId: OWNER_ID, action: 'connect_account', targetId: accountId });
         await tx.update(oauthAttempts).set({ status: 'completed', encryptedCode: null, encryptedVerifier: '', updatedAt: new Date() }).where(eq(oauthAttempts.id, attempt.id));
+        await establishSearchAccountEpoch(tx, accountId);
         return 'connected';
       });
       if (linked !== 'connected') {
@@ -194,9 +199,15 @@ export function registerGoogle(app: FastifyInstance, auth: AuthConfig, setup: Se
     if (!(await ready())) return reply.code(409).send({ error: 'Confirm the configured HTTPS address again.' });
     const parsed = googleBackfillSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Choose 30 days, 1 year, or all mail.' });
-    const [saved] = await db.update(accounts).set({ backfill: parsed.data.window, updatedAt: new Date() }).where(and(
-      eq(accounts.id, parsed.data.accountId), eq(accounts.provider, 'google'), isNull(accounts.revokedAt), isNull(accounts.backfill),
-    )).returning({ id: accounts.id });
+    const [saved] = await db.transaction(async (tx) => {
+      await tx.execute(sql`set local statement_timeout = '3000ms'`);
+      await tx.execute(sql`set local lock_timeout = '750ms'`);
+      const rows = await tx.update(accounts).set({ backfill: parsed.data.window, updatedAt: new Date() }).where(and(
+        eq(accounts.id, parsed.data.accountId), eq(accounts.provider, 'google'), isNull(accounts.revokedAt), isNull(accounts.backfill),
+      )).returning({ id: accounts.id });
+      if (rows[0]) await bumpSearchAccountEpoch(tx, rows[0].id);
+      return rows;
+    });
     if (!saved) return reply.code(409).send({ error: 'This account already has a backfill choice or needs to reconnect.' });
     return googleOkSchema.parse({ ok: true });
   });

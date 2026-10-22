@@ -92,7 +92,7 @@ export const syncEvents = pgTable('sync_events', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [check('sync_events_kind', sql`${t.kind} in ('sync-progress', 'mail-changed')`)]);
 
-// Inactive M2 search foundation. Operational rows deliberately outlive source rows.
+// M2 search desired-state ledger. Operational rows deliberately outlive source rows.
 export const searchEpochs = pgTable('search_epochs', {
   scope: text('scope').primaryKey(),
   epoch: integer('epoch').notNull().default(1),

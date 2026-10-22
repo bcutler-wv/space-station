@@ -1,0 +1,7 @@
+# Atomic search ledger hooks
+
+Version 0.43.0 connects the desired-state ledger to current mail pages, message actions, label catalogs, durable Google authorization changes, account linking/backfill, and setup/origin confirmation. Source changes and invalidation commit together. Same-page and action replay, unchanged label catalogs, and routine token rotation do not invalidate completed observations. Future independent routing, privacy and identity editors must add their own atomic invalidation hooks.
+
+Astra reviewed every current mutation path and independently passed fresh PostgreSQL page, Google, action, sync and setup suites. Additional probes verified overflow rollback, retained account isolation, source-to-search-to-event lock order, and rollback when a page lease expires during a wait. The page transaction now has statement/lock bounds from entry and a final database-clock lease check. The worker denial path keeps its final lease predicate after epoch acquisition while updating an already locked sync row. These checks strengthen the existing lease contract without adding a new user-facing rule.
+
+The full local check passed. The preceding foundation passed full Ubuntu run `39805163315` at `24e5c8e` (0.42.0); a new Ubuntu run must validate these hooks. Historical rows still require bounded reconciliation, which remains callable and unscheduled. No engine publisher, acknowledgement protocol, search endpoint, attachment extraction or search UI is enabled by this slice. No production deployment was performed.

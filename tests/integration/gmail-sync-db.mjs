@@ -8,13 +8,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { eq, sql } from 'drizzle-orm';
 import { GmailReadError } from '../../packages/connectors/dist/index.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, items, itemLabels, labels, oauthApps, orbits, readSyncEvents,
-  settings, syncStates, users, evaluateStoredMailPrivacy, evaluateDerivedMailEligibility, exclusionRules, mailChangeOperations, itemOrbits } from '../../packages/db/dist/index.js';
+  settings, syncStates, users, evaluateStoredMailPrivacy, evaluateDerivedMailEligibility, exclusionRules,
+  mailChangeOperations, itemOrbits, searchEpochs } from '../../packages/db/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const handle = openDatabase(databaseUrl(loadRuntimeConfig(process.env)));
 const db = handle.db;
 const store = new PrivateBlobStore(process.env.STATION_TEST_BLOB_ROOT ?? '/var/lib/station/blobs');
 const origin = 'https://example.com';
+const searchEpoch = async (scope) => (await db.select({ epoch: searchEpochs.epoch })
+  .from(searchEpochs).where(eq(searchEpochs.scope, scope)))[0]?.epoch ?? 0;
 const accountId = randomUUID();
 let clockOffset = 0;
 const now = () => new Date(Date.now() + clockOffset);
@@ -328,13 +331,16 @@ try {
   assert.deepEqual((await rows()).filter((row) => row.deletedAt).map((row) => row.externalId).sort(), ['a', 'c']);
   assert.equal((await rows()).find((row) => row.externalId === 'b').deletedAt, null);
   labelsNow = [{ id: 'INBOX', name: 'Inbox' }, { id: 'WORK', name: 'Renamed' }, { id: 'EMPTY', name: 'Renamed empty' }];
+  const beforeRenameEpoch = await searchEpoch(accountId);
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'label', value: 'renamed', effect: 'no_ai' });
   await runner.run(accountId);
+  assert.equal(await searchEpoch(accountId), beforeRenameEpoch + 1, 'renamed label invalidates the account');
   assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').name, 'Renamed');
   assert.deepEqual((await db.select().from(labels).where(eq(labels.id, emptyLabel.id))).map((row) => row.name), ['Renamed empty']);
   assert.equal((await evaluateStoredMailPrivacy(db, (await rows()).find((row) => row.externalId === 'b').id)).canUseAi, false);
   labelsNow = [{ id: 'INBOX', name: 'Inbox' }];
   await runner.run(accountId);
+  assert.equal(await searchEpoch(accountId), beforeRenameEpoch + 2, 'removed referenced label invalidates the account');
   assert.equal((await db.select().from(labels).where(eq(labels.accountId, accountId))).find((row) => row.providerRef === 'WORK').name, '');
   assert.equal((await db.select().from(labels).where(eq(labels.id, emptyLabel.id))).length, 0);
   const restricted = await evaluateStoredMailPrivacy(db, (await rows()).find((row) => row.externalId === 'b').id);
@@ -342,6 +348,7 @@ try {
   assert.equal(restricted.canUseAi, false);
   const stableCatalogHead = (await readSyncEvents(db, 0)).head;
   await runner.run(accountId);
+  assert.equal(await searchEpoch(accountId), beforeRenameEpoch + 2, 'unchanged catalog does not churn');
   assert.equal((await readSyncEvents(db, stableCatalogHead)).rows.filter((event) => event.kind === 'mail-changed').length, 0);
 
   // A crash after the final item commit left this exact old durable cursor: the
@@ -529,6 +536,7 @@ try {
   const oldGrantRun = oldGrantRunner.run(secondId);
   await staleErrorBegan;
   const oldGrant = (await db.select().from(accounts).where(eq(accounts.id, secondId)))[0];
+  const beforeStaleErrorSearchEpoch = await searchEpoch(secondId);
   await db.update(accounts).set({ credentialGeneration: oldGrant.credentialGeneration + 1,
     authorizationGeneration: oldGrant.authorizationGeneration + 1, revokedAt: null }).where(eq(accounts.id, secondId));
   staleErrorRelease(); await oldGrantRun;
@@ -536,6 +544,7 @@ try {
   assert.equal(afterOldError.authorizationGeneration, oldGrant.authorizationGeneration + 1,
     'old worker denial cannot revoke a reconnected grant');
   assert.equal(afterOldError.revokedAt, null);
+  assert.equal(await searchEpoch(secondId), beforeStaleErrorSearchEpoch, 'obsolete worker denial does not invalidate search');
   await db.update(syncStates).set({ leaseUntil: new Date(Date.now() - 1) }).where(eq(syncStates.accountId, secondId));
   permissionNext = true;
   await second.run(secondId);
@@ -545,6 +554,7 @@ try {
   const revokedGrant = (await db.select().from(accounts).where(eq(accounts.id, secondId)))[0];
   assert.ok(revokedGrant.revokedAt);
   assert.equal(revokedGrant.authorizationGeneration, afterOldError.authorizationGeneration + 1);
+  assert.equal(await searchEpoch(secondId), beforeStaleErrorSearchEpoch + 1, 'current denial invalidates its account');
   await second.run(secondId);
   assert.equal((await db.select().from(accounts).where(eq(accounts.id, secondId)))[0].authorizationGeneration,
     revokedGrant.authorizationGeneration, 'duplicate permanent error cannot advance grant twice');

@@ -1,6 +1,6 @@
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
-import { accounts, oauthApps, type openDatabase } from '@station/db';
+import { accounts, bumpSearchAccountEpoch, oauthApps, type openDatabase } from '@station/db';
 import { GMAIL_MODIFY_SCOPE, canonicalGoogleScopes, type GoogleTransport } from './index.js';
 import { openSecret, sealSecret } from './secret-envelope.js';
 
@@ -157,14 +157,18 @@ export class GoogleCredentialService {
         refreshToken, ...(this.transport ? { transport: this.transport } : {}) });
       const scopes = canonicalGoogleScopes(fresh.scopes ?? account.grantedScopes);
       const scopesChanged = JSON.stringify(scopes) !== JSON.stringify(canonicalGoogleScopes(account.grantedScopes));
-      const [saved] = await this.bounded((tx) => tx.update(accounts).set({
-        encryptedAccessToken: sealSecret(fresh.accessToken, this.masterKey, context(accountId, 'access')),
-        encryptedRefreshToken: sealSecret(fresh.refreshToken, this.masterKey, context(accountId, 'refresh')),
-        accessTokenExpiresAt: fresh.expiresAt, grantedScopes: scopes,
-        ...(scopesChanged ? { authorizationGeneration: sql`${accounts.authorizationGeneration} + 1` } : {}),
-        credentialLeaseUntil: null, updatedAt: new Date(),
-      }).where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, lease.generation), isNull(accounts.revokedAt)))
-        .returning({ id: accounts.id }));
+      const [saved] = await this.bounded(async (tx) => {
+        const rows = await tx.update(accounts).set({
+          encryptedAccessToken: sealSecret(fresh.accessToken, this.masterKey, context(accountId, 'access')),
+          encryptedRefreshToken: sealSecret(fresh.refreshToken, this.masterKey, context(accountId, 'refresh')),
+          accessTokenExpiresAt: fresh.expiresAt, grantedScopes: scopes,
+          ...(scopesChanged ? { authorizationGeneration: sql`${accounts.authorizationGeneration} + 1` } : {}),
+          credentialLeaseUntil: null, updatedAt: new Date(),
+        }).where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, lease.generation), isNull(accounts.revokedAt)))
+          .returning({ id: accounts.id });
+        if (rows[0] && scopesChanged) await bumpSearchAccountEpoch(tx, accountId);
+        return rows;
+      });
       if (!saved) throw new GoogleCredentialError('busy', 1000);
       return { accessToken: fresh.accessToken, expiresAt: fresh.expiresAt, generation: lease.generation };
     } catch (error) {
@@ -178,10 +182,14 @@ export class GoogleCredentialService {
   }
 
   private async markNeedsReconnect(accountId: string, generation: number): Promise<never> {
-    const [marked] = await this.bounded((tx) => tx.update(accounts).set({ revokedAt: new Date(),
-      authorizationGeneration: sql`${accounts.authorizationGeneration} + 1`, credentialLeaseUntil: null, updatedAt: new Date() })
-      .where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, generation), isNull(accounts.revokedAt)))
-      .returning({ id: accounts.id }));
+    const [marked] = await this.bounded(async (tx) => {
+      const rows = await tx.update(accounts).set({ revokedAt: new Date(),
+        authorizationGeneration: sql`${accounts.authorizationGeneration} + 1`, credentialLeaseUntil: null, updatedAt: new Date() })
+        .where(and(eq(accounts.id, accountId), eq(accounts.credentialGeneration, generation), isNull(accounts.revokedAt)))
+        .returning({ id: accounts.id });
+      if (rows[0]) await bumpSearchAccountEpoch(tx, accountId);
+      return rows;
+    });
     throw new GoogleCredentialError(marked ? 'needs_reconnect' : 'busy', marked ? undefined : 1000);
   }
 

@@ -41,7 +41,16 @@ async function readSearchMetadata(tx: Transaction, accountId: string, itemId: st
     sourceParseStatus: source?.parseStatus ?? null, sourceDeleted: missing } };
 }
 
-/** These helpers are inactive until every source mutation is wired in Slice B. */
+/** Establish an epoch for a newly linked account without invalidating other accounts. */
+export async function establishSearchAccountEpoch(tx: Transaction, accountId: string): Promise<void> {
+  accountIdSchema.parse(accountId);
+  await ensureGlobal(tx);
+  const [global] = await tx.select({ epoch: searchEpochs.epoch }).from(searchEpochs)
+    .where(eq(searchEpochs.scope, 'global')).for('share');
+  if (!global) throw new Error('Missing search global epoch');
+  await ensureAccount(tx, accountId, global.epoch);
+}
+
 export async function bumpSearchGlobalEpoch(tx: Transaction): Promise<number> {
   await ensureGlobal(tx);
   const [row] = await tx.update(searchEpochs).set({ epoch: sql`${searchEpochs.epoch} + 1`,

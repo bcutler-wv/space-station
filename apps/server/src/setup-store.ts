@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { eq, isNull, or, sql } from 'drizzle-orm';
-import { exclusionRules, orbits, settings, type openDatabase } from '@station/db';
+import { bumpSearchGlobalEpoch, exclusionRules, orbits, settings, type openDatabase } from '@station/db';
 import { privacyDefaultsSchema, setupStatusSchema, type SetupStatus, type SetupSubmit } from '@station/shared';
 
 type Database = ReturnType<typeof openDatabase>['db'];
@@ -34,11 +34,24 @@ export function databaseSetupStore(db: Database): SetupStore {
       return state.completed && state.confirmedOrigin === origin;
     },
     async reconfirmOrigin(origin) {
-      const updated = await db.update(settings).set({ value: sql`jsonb_set(${settings.value}, '{confirmedOrigin}', ${JSON.stringify(origin)}::jsonb)`, updatedAt: new Date() }).where(eq(settings.key, 'first_orbit_setup_v1')).returning({ key: settings.key });
-      return updated.length ? get(origin) : null;
+      const exists = await db.transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '3000ms'`);
+        await tx.execute(sql`set local lock_timeout = '750ms'`);
+        const [marker] = await tx.select({ value: settings.value }).from(settings)
+          .where(eq(settings.key, 'first_orbit_setup_v1')).for('update');
+        if (!marker) return false;
+        if ((marker.value as { confirmedOrigin?: string }).confirmedOrigin === origin) return true;
+        await tx.update(settings).set({ value: sql`jsonb_set(${settings.value}, '{confirmedOrigin}', ${JSON.stringify(origin)}::jsonb)`, updatedAt: new Date() })
+          .where(eq(settings.key, 'first_orbit_setup_v1'));
+        await bumpSearchGlobalEpoch(tx);
+        return true;
+      });
+      return exists ? get(origin) : null;
     },
     async complete(value, origin) {
       const created = await db.transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '3000ms'`);
+        await tx.execute(sql`set local lock_timeout = '750ms'`);
         await tx.execute(sql`select pg_advisory_xact_lock(81923042)`);
         const [existing] = await tx.select({ key: settings.key }).from(settings).where(eq(settings.key, 'first_orbit_setup_v1')).limit(1);
         if (existing) return false;
@@ -46,6 +59,7 @@ export function databaseSetupStore(db: Database): SetupStore {
         await tx.insert(orbits).values({ id, name: value.orbit.name, slug: 'first-orbit', colorSlot: value.orbit.colorSlot, context: value.orbit.context, privacyDefaults: value.orbitDefaults });
         if (value.exclusions.length) await tx.insert(exclusionRules).values(value.exclusions.map((rule) => ({ id: randomUUID(), orbitId: rule.scope === 'orbit' ? id : null, kind: rule.kind, value: rule.value.trim().toLowerCase(), effect: rule.effect })));
         await tx.insert(settings).values({ key: 'first_orbit_setup_v1', value: { version: 1, orbitId: id, globalDefaults: value.globalDefaults, confirmedOrigin: origin } });
+        await bumpSearchGlobalEpoch(tx);
         return true;
       });
       return created ? get(origin) : null;

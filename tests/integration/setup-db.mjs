@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import process from 'node:process';
-import { databaseUrl, loadRuntimeConfig, openDatabase, orbits, exclusionRules } from '../../packages/db/dist/index.js';
+import { databaseUrl, loadRuntimeConfig, openDatabase, orbits, exclusionRules, searchEpochs } from '../../packages/db/dist/index.js';
 import { databaseSetupStore } from '../../apps/server/dist/setup-store.js';
 
 const origin = 'https://example.com';
@@ -21,11 +21,17 @@ try {
   assert.equal(results.filter((value) => value === null).length, 1);
   assert.equal((await database.db.select().from(orbits)).length, 1);
   assert.equal((await database.db.select().from(exclusionRules)).length, 1);
+  assert.equal((await database.db.select().from(searchEpochs))[0].epoch, 2,
+    'one completed setup bumps the global search epoch once');
   assert.deepEqual((await store.get(origin)).globalDefaults, input.globalDefaults);
   assert.equal(await store.isReady(origin), true);
   assert.equal(await store.isReady('https://changed.example.com'), false);
   await store.reconfirmOrigin('https://changed.example.com');
   assert.equal(await store.isReady('https://changed.example.com'), true);
+  assert.equal((await database.db.select().from(searchEpochs))[0].epoch, 3);
+  await store.reconfirmOrigin('https://changed.example.com');
+  assert.equal((await database.db.select().from(searchEpochs))[0].epoch, 3,
+    'unchanged confirmed origin does not churn the global epoch');
 } finally { await database.close(); }
 const reopened = openDatabase(databaseUrl(config));
 try {

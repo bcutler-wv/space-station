@@ -9,13 +9,15 @@ import { eq } from 'drizzle-orm';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, accounts, auditLog, oauthApps, oauthAttempts,
-  syncStates } from '../../packages/db/dist/index.js';
+  searchEpochs, syncStates } from '../../packages/db/dist/index.js';
 import { databaseSetupStore } from '../../apps/server/dist/setup-store.js';
 import { GmailReadAdapter, GoogleCredentialService, GoogleCredentialError, openSecret } from '../../packages/connectors/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const config = loadRuntimeConfig(process.env);
 const database = openDatabase(databaseUrl(config));
+const searchEpoch = async (scope) => (await database.db.select({ epoch: searchEpochs.epoch })
+  .from(searchEpochs).where(eq(searchEpochs.scope, scope)))[0]?.epoch ?? 0;
 const origin = 'https://example.com';
 const key = Buffer.from(config.STATION_MASTER_KEY, 'base64');
 const store = authStore(database.db);
@@ -206,6 +208,7 @@ try {
   assert.equal(account.email, 'owner@example.com');
   assert.equal(account.authorizationGeneration, 1);
   assert.equal(account.backfill, null, 'sync remains gated');
+  assert.equal(await searchEpoch(account.id), 1, 'new account starts at its own epoch');
   assert.ok(account.encryptedRefreshToken.startsWith('v1.'));
   assert.equal(JSON.stringify(account).includes('fixture-refresh'), false);
   assert.equal((await database.db.select().from(auditLog)).length, 1);
@@ -217,6 +220,7 @@ try {
   assert.equal(calls.length - callsBeforeLink, 2, 'backfill selection makes no provider call');
   const [saved] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
   assert.equal(saved.backfill, '30_days');
+  assert.equal(await searchEpoch(account.id), 2, 'backfill choice invalidates the account');
   const credentials = new GoogleCredentialService(database.db, key, transport);
   const forceExpiry = async () => database.db.update(accounts).set({ accessTokenExpiresAt: new Date(Date.now() - 1000) }).where(eq(accounts.id, account.id));
   await forceExpiry();
@@ -224,6 +228,7 @@ try {
   assert.equal((await credentials.get(account.id)).accessToken, 'fixture-refresh_rotate-access');
   let [refreshed] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
   assert.equal(refreshed.authorizationGeneration, 1, 'refresh-token rotation under the same grant preserves authorization');
+  assert.equal(await searchEpoch(account.id), 2, 'token-only rotation does not invalidate search');
   assert.equal(openSecret(refreshed.encryptedRefreshToken, key, `accounts/${account.id}/refresh`), 'fixture-rotated-refresh');
   const rejected = await credentials.get(account.id);
   const tokenCallsBeforeRejection = calls.length;
@@ -267,15 +272,18 @@ try {
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].revokedAt, null);
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 1,
     'transient refresh failure preserves authorization despite token lease generation');
+  assert.equal(await searchEpoch(account.id), 2, 'transient refresh error does not invalidate search');
   await forceExpiry();
   providerMode = 'refresh_expanded';
   await credentials.get(account.id);
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 2);
+  assert.equal(await searchEpoch(account.id), 3, 'effective scope expansion invalidates search');
   await forceExpiry();
   providerMode = 'refresh_reordered';
   await credentials.get(account.id);
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 2,
     'scope order and duplicate entries do not change the effective grant');
+  assert.equal(await searchEpoch(account.id), 3, 'equivalent reordered scope list does not invalidate search');
   await forceExpiry();
   providerMode = 'refresh_no_rotation';
   await credentials.get(account.id);
@@ -286,6 +294,7 @@ try {
   await credentials.get(account.id);
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration, 3,
     'actual scope removal advances authorization');
+  assert.equal(await searchEpoch(account.id), 4, 'scope removal invalidates search');
   providerMode = 'ok';
   const reconnectPayload = { accountId: account.id, clientId: '123456-fixture.apps.googleusercontent.com', clientSecret: 'fixture-client-secret' };
   const reconnect = async () => {
@@ -296,6 +305,7 @@ try {
   };
   profileEmail = 'wrong@example.com';
   assert.equal((await reconnect()).statusCode, 409, 'reconnect rejects a different mailbox');
+  assert.equal(await searchEpoch(account.id), 4, 'rejected reconnect leaves ledger epoch stable');
   profileEmail = 'owner@example.com';
   const rejectedBeforeReconnect = await credentials.get(account.id);
   const beforeReconnectAuthorization = (await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration;
@@ -309,6 +319,7 @@ try {
   assert.equal((await reconnect()).statusCode, 200);
   assert.equal((await database.db.select().from(accounts).where(eq(accounts.id, account.id)))[0].authorizationGeneration,
     beforeReconnectAuthorization + 1, 'same-mailbox reconnect advances durable authorization');
+  assert.equal(await searchEpoch(account.id), 5, 'same-mailbox reconnect invalidates search');
   releaseToken();
   await assert.rejects(heldRejectedRefresh, (error) => error instanceof GoogleCredentialError && error.code === 'busy',
     'rejected-token refresh cannot overwrite reconnect');
@@ -332,6 +343,7 @@ try {
   assert.equal(refreshed.orbitId, account.orbitId);
   assert.equal(refreshed.revokedAt, null);
   assert.equal(refreshed.authorizationGeneration, beforeReconnectAuthorization + 2);
+  assert.equal(await searchEpoch(account.id), 6, 'second reconnect invalidates search once');
   assert.equal((await database.db.select().from(auditLog)).filter((row) => row.action === 'reconnect_account').length, 2);
   assert.equal((await send('GET', '/api/google/status')).body.includes('fixture-rotated-refresh'), false, 'metadata response has no credentials');
   await forceExpiry();
@@ -340,15 +352,19 @@ try {
   const [deniedGrant] = await database.db.select().from(accounts).where(eq(accounts.id, account.id));
   assert.equal(deniedGrant.authorizationGeneration, refreshed.authorizationGeneration + 1,
     'definitive missing scope advances authorization with revocation');
+  assert.equal(await searchEpoch(account.id), 7, 'durable revocation invalidates search');
   assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
   providerMode = 'ok';
   assert.equal((await reconnect()).statusCode, 200, 'same account can recover from lost scope');
+  assert.equal(await searchEpoch(account.id), 8, 'recovery reconnect invalidates search');
   await forceExpiry();
   providerMode = 'refresh_invalid';
   await assert.rejects(credentials.get(account.id), (error) => error instanceof GoogleCredentialError && error.code === 'needs_reconnect');
+  assert.equal(await searchEpoch(account.id), 9, 'invalid grant revocation invalidates search');
   assert.equal((await send('GET', '/api/google/status')).json().accounts.find((row) => row.id === account.id).status, 'needs_reconnect');
   providerMode = 'ok';
   assert.equal((await reconnect()).statusCode, 200, 'same account can recover from invalid_grant');
+  assert.equal(await searchEpoch(account.id), 10);
   const holdPermanentAfterReconnect = async (mode) => {
     await forceExpiry();
     providerMode = 'ok';

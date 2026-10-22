@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { buildApp } from '../../apps/server/dist/app.js';
 import { authStore, digest } from '../../apps/server/dist/auth-store.js';
 import { accounts, auditLog, databaseUrl, itemOrbits, items, labels, loadRuntimeConfig, PrivateBlobStore,
-  mailChangeOperations, oauthApps, openDatabase, orbits, settings, threads } from '../../packages/db/dist/index.js';
+  mailChangeOperations, oauthApps, openDatabase, orbits, searchDocuments, settings, threads } from '../../packages/db/dist/index.js';
 import { GmailSyncRunner } from '../../apps/worker/dist/gmail-sync.js';
 
 const config = loadRuntimeConfig(process.env);
@@ -180,6 +180,9 @@ try {
   mode = 'system_label';
   assert.equal((await request('POST', endpoint(itemA), body('add_label', id(), { labelId: labelA }), csrf)).statusCode, 409);
   assert.equal(calls, 0);
+  const ledgerRevision = async (itemId) => (await db.select({ revision: searchDocuments.desiredRevision })
+    .from(searchDocuments).where(eq(searchDocuments.itemId, itemId)))[0]?.revision ?? 0;
+  const beforeConfirmedRevision = await ledgerRevision(itemA);
   mode = 'success';
   const key = id();
   const [first, concurrent] = await Promise.all([
@@ -190,6 +193,8 @@ try {
   assert.equal(concurrent.statusCode, 200, concurrent.body);
   assert.equal(first.json().id, concurrent.json().id);
   assert.equal(calls, 1);
+  assert.equal(await ledgerRevision(itemA), beforeConfirmedRevision + 3,
+    'reservation, claim and provider settlement dirty once each; idempotent replay does not churn');
   const actionEpoch = async (itemId) => (await db.select({ epoch: items.actionEpoch }).from(items).where(eq(items.id, itemId)))[0].epoch;
   assert.equal(await actionEpoch(itemA), 1, 'one confirmed action advances the epoch once, including idempotent replay');
   const blockedOptions = await request('GET', options(itemA));
@@ -220,6 +225,7 @@ try {
   const unknown = await request('POST', endpoint(itemB), body('mark_read'), csrf);
   assert.equal(unknown.statusCode, 202, unknown.body);
   assert.equal(unknown.json().state, 'outcome_unknown');
+  assert.equal(await ledgerRevision(itemB), 3, 'reservation, claim and unknown outcome stay durable');
   assert.equal(await actionEpoch(itemB), 0, 'uncertain provider outcomes do not advance the epoch');
   await app.close();
   app = await makeApp();
@@ -242,6 +248,7 @@ try {
   assert.equal(reconcile.json().state, 'succeeded');
   assert.equal(reconcile.json().confirmation, 'observed');
   assert.equal(await actionEpoch(itemB), 1, 'observed reconciliation advances the epoch');
+  assert.equal(await ledgerRevision(itemB), 4, 'observed recovery dirties the same item');
   assert.equal(calls, 2);
   assert.equal((await db.select().from(items).where(eq(items.id, itemB)))[0].providerRevision, '7');
 
@@ -259,11 +266,14 @@ try {
   assert.equal(await actionEpoch(itemB), 1, 'a fenced reconciliation does not advance the epoch');
   credentialGeneration = 2;
   onInspect = async () => { await db.update(accounts).set({ credentialGeneration: 3 }).where(eq(accounts.id, accountA)); };
+  const beforeFenceRevision = await ledgerRevision(capItems[0]);
   const fence = await request('POST', endpoint(capItems[0]), body('add_label', id(), { labelId: labelA,
     itemSequence: 1, itemRevision: '7' }), csrf);
   assert.equal(fence.statusCode, 409, fence.body);
   assert.equal(calls, 3);
   assert.equal((await db.select().from(mailChangeOperations).where(eq(mailChangeOperations.id, fence.json().id)))[0].state, 'failed');
+  assert.equal(await ledgerRevision(capItems[0]), beforeFenceRevision + 2,
+    'reservation and fenced preflight failure each dirty the item');
   await db.update(items).set({ appliedSequence: 2, providerRevision: '8',
     updatedAt: new Date(Date.now() + 1_000) }).where(eq(items.id, itemA));
   mode = 'success';
@@ -273,6 +283,8 @@ try {
     itemSequence: 2, itemRevision: '8' }), csrf);
   assert.equal(noOp.statusCode, 200, noOp.body);
   assert.equal(noOp.json().confirmation, 'observed');
+  assert.equal(await ledgerRevision(itemA), beforeConfirmedRevision + 5,
+    'zero-write observation dirties reservation and observed settlement');
   assert.equal(await actionEpoch(itemA), 2, 'a zero-write observed no-op still requires a later provider read');
   assert.equal((await db.select().from(mailChangeOperations).where(eq(mailChangeOperations.id, noOp.json().id)))[0].attemptCount, 0);
   assert.equal(calls, 3);
@@ -333,7 +345,10 @@ try {
       state: 'in_flight', attemptCount: 1, credentialGeneration: 4, updatedAt: staleAt },
   ]);
   const reconciliation = (operationId) => `/api/mail/changes/${operationId}/reconcile?accountId=${accountA}&orbitId=${orbitA}`;
+  const beforeAbandonedRevision = await ledgerRevision(capItems[0]);
   assert.equal((await request('POST', reconciliation(pendingId), {}, csrf)).json().state, 'failed');
+  assert.equal(await ledgerRevision(capItems[0]), beforeAbandonedRevision + 1,
+    'abandoned pending recovery dirties the item');
   const nonmatch = await request('POST', reconciliation(flightId), {}, csrf);
   assert.equal(nonmatch.statusCode, 200, nonmatch.body);
   assert.equal(nonmatch.json().state, 'outcome_unknown');

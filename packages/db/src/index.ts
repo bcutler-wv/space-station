@@ -11,7 +11,7 @@ export { mailChangeOperations } from './schema.js';
 export { collectDraftAttachmentBlobs } from './draft-attachment-collector.js';
 export { collectOutboundOperations } from './outbound-collector.js';
 export { searchDocuments, searchEpochs } from './schema.js';
-export { bumpSearchGlobalEpoch, bumpSearchAccountEpoch, dirtySearchItems,
+export { establishSearchAccountEpoch, bumpSearchGlobalEpoch, bumpSearchAccountEpoch, dirtySearchItems,
   reconcileSearchBatch, SEARCH_SWEEP_BATCH_MAX } from './search-ledger.js';
 export { readSearchProjection, recordSearchProjectionError,
   type SearchProjection } from './search-projection.js';

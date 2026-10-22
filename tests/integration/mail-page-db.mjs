@@ -6,11 +6,12 @@ import console from 'node:console';
 import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout, clearTimeout } from 'node:timers';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { sanitizeMailHtml } from '../../apps/worker/dist/mail-html-sanitize.js';
 import { databaseUrl, loadRuntimeConfig, openDatabase, PrivateBlobStore, applyMailPage, collectOrphanBlobs, readSyncEvents,
   evaluateStoredMailPrivacy, MailPageFenceError, accounts, attachments,
-  itemRecipients, itemLabels, items, identities, blobIntents, syncPages, labels, oauthApps, orbits, settings, syncStates, users, exclusionRules } from '../../packages/db/dist/index.js';
+  itemRecipients, itemLabels, items, identities, blobIntents, syncPages, labels, oauthApps, orbits, settings, syncStates, users, exclusionRules,
+  searchDocuments, searchEpochs, bumpSearchGlobalEpoch } from '../../packages/db/dist/index.js';
 
 const dbHandle = openDatabase(databaseUrl(loadRuntimeConfig(process.env)));
 const db = dbHandle.db;
@@ -59,6 +60,13 @@ function change(id, options = {}) {
     deleted: options.deleted ?? false, parsed: options.deleted ? null : options.parsed ?? parsed(), routedOrbitIds: options.orbits ?? [] };
 }
 async function item(name, id) { return (await db.select().from(items).where(eq(items.accountId, accountsByName[name]))).find((row) => row.externalId === id); }
+async function ledger(name, id) { const source = await item(name, id); return (await db.select().from(searchDocuments)
+  .where(eq(searchDocuments.accountId, accountsByName[name]))).find((row) => row.itemId === source?.id); }
+async function searchEpoch(scope) { return (await db.select().from(searchEpochs).where(eq(searchEpochs.scope, scope)))[0]?.epoch ?? 0; }
+async function boundTestTransaction(tx) {
+  await tx.execute(sql`set local statement_timeout = '3000ms'`);
+  await tx.execute(sql`set local lock_timeout = '750ms'`);
+}
 try {
   await db.insert(users).values({ id: ownerId, displayName: 'Fixture owner' });
   await db.insert(orbits).values([{ id: orbitId, name: 'Work', slug: 'fixture-work', colorSlot: 1, context: '', privacyDefaults: allow },
@@ -69,6 +77,9 @@ try {
     labels: [{ ref: 'SENT', name: 'Sent' }], orbits: [secondOrbitId] }), observedActionEpoch: 0,
     observedCredentialGeneration: 1, observedAuthorizationGeneration: 1 }]);
   assert.equal(await applyMailPage(db, store, first), 'applied');
+  assert.equal((await ledger('one', 'same')).desiredRevision, 1);
+  assert.equal(await searchEpoch(accountsByName.one), 2, 'new shared label invalidates this account');
+  const firstAccountEpoch = await searchEpoch(accountsByName.one);
   const firstEvent = await readSyncEvents(db, 0);
   assert.deepEqual(firstEvent.rows.map(({ kind, accountId }) => [kind, accountId]), [['mail-changed', accountsByName.one]]);
   assert.equal((await item('one', 'same')).direction, 'out');
@@ -85,6 +96,8 @@ try {
   assert.equal((await store.read((await db.select().from(attachments))[0].storagePath)).toString(), 'fixture bytes');
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canIndex, false);
   assert.equal(await applyMailPage(db, store, first), 'replayed');
+  assert.equal((await ledger('one', 'same')).desiredRevision, 1, 'page replay does not dirty ledger');
+  assert.equal(await searchEpoch(accountsByName.one), firstAccountEpoch, 'page replay does not bump account');
   await assert.rejects(applyMailPage(db, store, { ...first, changes: first.changes.map((entry) => ({ ...entry,
     observedActionEpoch: null, observedCredentialGeneration: null, observedAuthorizationGeneration: null })) }), /changed content or sequence/);
   await assert.rejects(applyMailPage(db, store, { ...first, expectedAuthorizationGeneration: 2,
@@ -103,6 +116,8 @@ try {
   ] });
   ambiguous.mail.replyTo = [{ name: 'Valid', address: fake('reply') }, { name: 'Broken', address: 'bad@@' }];
   await applyMailPage(db, store, page('two', 0, [change('same', { parsed: ambiguous })]));
+  assert.equal(await searchEpoch(accountsByName.one), firstAccountEpoch, 'other account page cannot invalidate first account');
+  assert.equal((await ledger('two', 'same')).desiredRevision, 1);
   assert.equal((await db.select().from(items)).length, 2);
   assert.notEqual((await item('one', 'same')).id, (await item('two', 'same')).id);
   assert.equal((await item('two', 'same')).senderIdentitiesComplete, false);
@@ -116,8 +131,13 @@ try {
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'label', value: 'inbox', effect: 'no_index' });
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canIndex, false);
   await applyMailPage(db, store, page('two', 1, [change('same', { parsed: parsed(fake('sender'), { senders: [{ name: 'Sender', address: fake('sender') }] }), labels: [{ ref: 'INBOX', name: 'Inbox' }] })]));
+  assert.equal((await ledger('two', 'same')).desiredRevision, 2, 'observed page mutation dirties item');
+  const beforeLabelRenameEpoch = await searchEpoch(accountsByName.two);
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canUseAi, true);
   await applyMailPage(db, store, page('two', 2, [change('same', { parsed: parsed(fake('sender'), { senders: [{ name: 'Sender', address: fake('sender') }] }), labels: [{ ref: 'INBOX', name: null }] })]));
+  assert.equal(await searchEpoch(accountsByName.two), beforeLabelRenameEpoch + 1,
+    'page label-name change invalidates all items in its account');
+  assert.equal(await searchEpoch(accountsByName.one), firstAccountEpoch, 'shared label rename does not affect another account');
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('two', 'same')).id)).canUseAi, false);
   await db.insert(exclusionRules).values({ id: randomUUID(), orbitId: null, kind: 'sender', value: fake('blocked'), effect: 'no_ai' });
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canUseAi, false);
@@ -139,6 +159,7 @@ try {
   await assert.rejects(applyMailPage(db, store, page('one', 1, [change('revoked')])), MailPageFenceError);
   await db.update(accounts).set({ revokedAt: null }).where(eq(accounts.id, accountsByName.one));
   await applyMailPage(db, store, page('one', 1, [change('same', { deleted: true })]));
+  assert.equal((await ledger('one', 'same')).desiredRevision, 2, 'tombstone dirties existing document');
   assert.ok((await item('one', 'same')).deletedAt);
   assert.equal((await db.select().from(attachments)).length, 0);
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'same')).id)).canUseAi, false);
@@ -249,9 +270,99 @@ try {
   await applyMailPage(db, store, page('one', 7, [change('incomplete-sender', { parsed: parsed('invalid-address', { senders: [] }) })]));
   assert.equal((await evaluateStoredMailPrivacy(db, (await item('one', 'incomplete-sender')).id)).canUseAi, false);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 8);
+  const overflowItem = await item('one', 'incomplete-sender');
+  await db.update(searchDocuments).set({ desiredRevision: 2147483647 }).where(eq(searchDocuments.itemId, overflowItem.id));
+  const beforeOverflowSource = overflowItem.providerRevision;
+  const beforeOverflowEvent = (await readSyncEvents(db, null)).head;
+  await assert.rejects(applyMailPage(db, store, page('one', 8, [change('incomplete-sender', { revision: 'new-revision' })])),
+    /Search document revision exhausted/);
+  assert.equal((await item('one', 'incomplete-sender')).providerRevision, beforeOverflowSource, 'source update rolls back with ledger overflow');
+  assert.equal((await ledger('one', 'incomplete-sender')).desiredRevision, 2147483647);
+  assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 8);
+  assert.equal((await readSyncEvents(db, null)).head, beforeOverflowEvent, 'overflow emits no event');
   await db.update(accounts).set({ authorizationGeneration: 2 }).where(eq(accounts.id, accountsByName.one));
   await assert.rejects(applyMailPage(db, store, page('one', 8, [change('old-grant-response')])), MailPageFenceError);
   assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 8);
+  await db.update(accounts).set({ authorizationGeneration: 1 }).where(eq(accounts.id, accountsByName.one));
+  let signalClockHeld; let releaseClock;
+  const clockEntered = new Promise((resolve) => { signalClockHeld = resolve; });
+  const clockReleased = new Promise((resolve) => { releaseClock = resolve; });
+  const clockHolder = db.transaction(async (tx) => {
+    await boundTestTransaction(tx);
+    await tx.execute(sql`SELECT id FROM event_clock WHERE id = 1 FOR UPDATE`);
+    signalClockHeld();
+    await clockReleased;
+  });
+  void clockHolder.catch(() => {});
+  let blockedPageResult;
+  let globalBumpResult;
+  try {
+    await awaitBarrier(Promise.race([clockEntered, clockHolder]), 'Event clock acquisition');
+    blockedPageResult = applyMailPage(db, store, page('one', 8, [change('clock-gated')]));
+    void blockedPageResult.catch(() => {});
+    const clockWait = async () => {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const { rows } = await db.execute(sql`SELECT count(*)::int AS count FROM pg_stat_activity
+          WHERE wait_event_type = 'Lock' AND query LIKE '%event_clock%'`);
+        if (rows[0].count > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error('Page did not reach event clock lock');
+    };
+    await clockWait();
+    globalBumpResult = db.transaction(async (tx) => {
+      await boundTestTransaction(tx);
+      return bumpSearchGlobalEpoch(tx);
+    });
+    void globalBumpResult.catch(() => {});
+    const outcome = await Promise.race([globalBumpResult.then(() => 'advanced', () => 'failed'),
+      new Promise((resolve) => setTimeout(() => resolve('waiting'), 25))]);
+    assert.equal(outcome, 'waiting', 'global invalidation waits for the page-held search epoch lock');
+  } finally {
+    releaseClock();
+    await Promise.allSettled([clockHolder]);
+    await Promise.allSettled([blockedPageResult, globalBumpResult].filter(Boolean));
+  }
+  assert.equal(await blockedPageResult, 'applied', 'page resumes after event clock is released');
+  await globalBumpResult;
+  assert.equal((await ledger('one', 'clock-gated')).desiredRevision, 1);
+  assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 9);
+  // Expiry while the page waits on the final event clock must roll back its source and ledger writes.
+  const expiryDeadline = Date.now() + 500;
+  await db.update(syncStates).set({ leaseUntil: new Date(expiryDeadline) }).where(eq(syncStates.id, statesByName.one));
+  let signalExpiryClock; let releaseExpiryClock;
+  const expiryClockEntered = new Promise((resolve) => { signalExpiryClock = resolve; });
+  const expiryClockReleased = new Promise((resolve) => { releaseExpiryClock = resolve; });
+  const expiryClockHolder = db.transaction(async (tx) => {
+    await boundTestTransaction(tx);
+    await tx.execute(sql`SELECT id FROM event_clock WHERE id = 1 FOR UPDATE`);
+    signalExpiryClock();
+    await expiryClockReleased;
+  });
+  void expiryClockHolder.catch(() => {});
+  let expiringPage;
+  const beforeExpiryEvent = (await readSyncEvents(db, null)).head;
+  try {
+    await awaitBarrier(Promise.race([expiryClockEntered, expiryClockHolder]), 'Expiry clock acquisition');
+    expiringPage = applyMailPage(db, store, page('one', 9, [change('expired-at-clock')]));
+    void expiringPage.catch(() => {});
+    let sawClockWait = false;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const { rows } = await db.execute(sql`SELECT count(*)::int AS count FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND query LIKE '%event_clock%'`);
+      if (rows[0].count > 0) { sawClockWait = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(sawClockWait, true, 'expiring page reached event clock after its source and ledger writes');
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiryDeadline - Date.now() + 20)));
+  } finally {
+    releaseExpiryClock();
+    await Promise.allSettled([expiryClockHolder, expiringPage].filter(Boolean));
+  }
+  await assert.rejects(expiringPage, MailPageFenceError);
+  assert.equal(await item('one', 'expired-at-clock'), undefined);
+  assert.equal((await db.select().from(syncStates).where(eq(syncStates.id, statesByName.one)))[0].sequence, 9);
+  assert.equal((await readSyncEvents(db, null)).head, beforeExpiryEvent);
   console.log('Mail page database gate passed');
 } finally {
   await dbHandle.close();

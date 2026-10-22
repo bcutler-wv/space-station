@@ -8,6 +8,7 @@ import { openDatabase } from './connection.js';
 import { PrivateBlobStore } from './private-blob-store.js';
 import { accounts, attachments, blobIntents, exclusionRules, identities, itemLabels, itemOrbits, itemRecipients, items, labels, mailChangeOperations, orbits, people, settings, syncPages, syncStates, threads } from './schema.js';
 import { appendSyncEvent } from './sync-events.js';
+import { boundSearchTransaction, bumpSearchAccountEpoch, dirtySearchItems } from './search-ledger.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -218,6 +219,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
   }
   return db.transaction(async (tx) => {
       signal?.throwIfAborted();
+      await boundSearchTransaction(tx);
       await checkFence(tx, page, true, false);
       const [replayed] = await tx.select({ digest: syncPages.pageDigest, sequence: syncPages.sequence }).from(syncPages).where(and(eq(syncPages.stateId, page.stateId), eq(syncPages.pageId, page.pageId)));
       if (replayed) {
@@ -229,6 +231,8 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
       if (!account) throw new MailPageFenceError();
       const [baseOrbit] = await tx.select({ id: orbits.id }).from(orbits).where(eq(orbits.id, account.orbitId));
       if (!baseOrbit) throw new MailPageFenceError();
+      const changedItemIds: string[] = [];
+      let labelCatalogChanged = false;
       for (const change of page.changes) {
         signal?.throwIfAborted();
         const parsed = change.parsed?.ok ? change.parsed.mail : null;
@@ -283,6 +287,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
         const [item] = prior ? await tx.update(items).set(values).where(eq(items.id, prior.id)).returning() :
           await tx.insert(items).values({ id: randomUUID(), ...values }).returning();
         if (!item) throw new Error('Item insert failed');
+        changedItemIds.push(item.id);
         await tx.delete(itemRecipients).where(eq(itemRecipients.itemId, item.id));
         await tx.delete(itemLabels).where(eq(itemLabels.itemId, item.id));
         await tx.delete(itemOrbits).where(eq(itemOrbits.itemId, item.id));
@@ -307,8 +312,13 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
           for (const label of change.labelRefs) {
             if (!label.ref || label.ref.length > 1024) throw new Error('Invalid provider label');
             let [row] = await tx.select().from(labels).where(and(eq(labels.accountId, page.accountId), eq(labels.providerRef, label.ref)));
-            if (!row) [row] = await tx.insert(labels).values({ id: randomUUID(), accountId: page.accountId, providerRef: label.ref, name: label.name ?? '' }).returning();
-            else if (row.name !== (label.name ?? '')) [row] = await tx.update(labels).set({ name: label.name ?? '', updatedAt: new Date() }).where(eq(labels.id, row.id)).returning();
+            if (!row) {
+              [row] = await tx.insert(labels).values({ id: randomUUID(), accountId: page.accountId, providerRef: label.ref, name: label.name ?? '' }).returning();
+              labelCatalogChanged = true;
+            } else if (row.name !== (label.name ?? '')) {
+              [row] = await tx.update(labels).set({ name: label.name ?? '', updatedAt: new Date() }).where(eq(labels.id, row.id)).returning();
+              labelCatalogChanged = true;
+            }
             if (!row) throw new Error('Label insert failed');
             await tx.insert(itemLabels).values({ itemId: item.id, accountId: page.accountId, labelId: row.id, source: 'provider' }).onConflictDoNothing();
           }
@@ -325,7 +335,13 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
       signal?.throwIfAborted();
       await tx.insert(syncPages).values({ id: randomUUID(), stateId: page.stateId, accountId: page.accountId, pageId: page.pageId, pageDigest, sequence: page.expectedSequence + 1 });
       await tx.update(syncStates).set({ cursor: page.cursorAfter, sequence: page.expectedSequence + 1, lastSuccessAt: new Date(), updatedAt: new Date() }).where(eq(syncStates.id, page.stateId));
+      const epochs = labelCatalogChanged ? await bumpSearchAccountEpoch(tx, page.accountId) : undefined;
+      await dirtySearchItems(tx, page.accountId, changedItemIds, epochs);
       await appendSyncEvent(tx, 'mail-changed', page.accountId);
+      const [live] = await tx.select({ id: syncStates.id }).from(syncStates).where(and(
+        eq(syncStates.id, page.stateId), eq(syncStates.generation, page.expectedLeaseGeneration),
+        eq(syncStates.status, 'running'), sql`${syncStates.leaseUntil} > clock_timestamp()`)).limit(1);
+      if (!live) throw new MailPageFenceError();
       signal?.throwIfAborted();
       return 'applied';
   });

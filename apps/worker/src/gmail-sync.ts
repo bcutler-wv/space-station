@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { and, eq, gt, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { GmailReadAdapter, GmailReadError, type GmailRawMessage, type GmailMessageMetadata, type GmailHistoryPage } from '@station/connectors';
-import { accounts, appendSyncEvent, applyMailPage, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
+import { accounts, appendSyncEvent, applyMailPage, bumpSearchAccountEpoch, collectOrphanBlobs, items, labels, openDatabase, orbits, PrivateBlobStore, settings, syncStates,
   MailPageFenceError, type MailChange } from '@station/db';
 import { privacyDefaultsSchema, type ParseResult } from '@station/shared';
 import { z } from 'zod';
@@ -201,7 +201,10 @@ export class GmailSyncRunner {
         changed = true;
       }
       signal.throwIfAborted();
-      if (changed) await appendSyncEvent(tx, 'mail-changed', account.id);
+      if (changed) {
+        await bumpSearchAccountEpoch(tx, account.id);
+        await appendSyncEvent(tx, 'mail-changed', account.id);
+      }
       signal.throwIfAborted();
       const [live] = await tx.select({ id: syncStates.id }).from(syncStates).where(and(eq(syncStates.id, state.id),
         eq(syncStates.generation, state.generation), eq(syncStates.status, 'running'),
@@ -528,6 +531,7 @@ export class GmailSyncRunner {
             eq(accounts.authorizationGeneration, account.authorizationGeneration), isNull(accounts.revokedAt)))
             .returning({ id: accounts.id });
           if (!revoked) return;
+          await bumpSearchAccountEpoch(tx, account.id);
         }
         const [updated] = await tx.update(syncStates).set({ status: permanent ? 'blocked' : 'idle', leaseUntil: null, lastError: safeCode(error),
           cursor: currentCursor.success ? { ...currentCursor.data, failures,
