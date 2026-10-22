@@ -60,6 +60,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
       - run: pnpm check
+      - run: node --test tests/support/search-attestor-pure.test.mjs
       - run: node tests/integration/search-generation-identity.mjs
       - run: node tests/integration/mail-parser.mjs
       - run: node tests/integration/mail-sanitize.mjs
