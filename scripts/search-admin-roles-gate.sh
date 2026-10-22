@@ -30,8 +30,11 @@ for migration in packages/db/drizzle/[0-9]*.sql; do
   docker exec -i "$container" psql -X -U station -d station -v ON_ERROR_STOP=1 \
     < "$migration" >/dev/null
 done
-docker exec -i "$container" psql -X -U station -d station -v ON_ERROR_STOP=1 \
-  < ops/postgres/search-admin-roles.sql >/dev/null
+{
+  printf "BEGIN; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '750ms';\n"
+  cat ops/postgres/search-admin-roles-apply.sql ops/postgres/search-admin-roles-audit.sql
+  printf 'COMMIT;\n'
+} | docker exec -i "$container" psql -X -U station -d station -v ON_ERROR_STOP=1 >/dev/null
 fixture_status=0
 SEARCH_ADMIN_TEST_SECRET_ROOT="$secret_root" node tests/support/search-admin-provision.mjs container > "$fixture_log" 2>&1 || fixture_status=$?
 if [[ "$fixture_status" == 0 ]]; then

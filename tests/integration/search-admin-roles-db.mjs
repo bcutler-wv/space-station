@@ -87,8 +87,12 @@ try {
 
   phase = 'retained policy and hostile grants';
   await owner.connect();
-  const policy = await readFile(new URL('../../ops/postgres/search-admin-roles.sql', import.meta.url), 'utf8');
+  const apply = await readFile(new URL('../../ops/postgres/search-admin-roles-apply.sql', import.meta.url), 'utf8');
+  const audit = await readFile(new URL('../../ops/postgres/search-admin-roles-audit.sql', import.meta.url), 'utf8');
+  const policy = `BEGIN; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '750ms';\n${apply}\n${audit}\nCOMMIT;`;
+  const auditOnly = `BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '750ms';\n${audit}\nCOMMIT;`;
   await owner.query(policy);
+  await owner.query(auditOnly);
   const rejectPolicy = async expression => {
     await assert.rejects(owner.query(policy), error => expression.test(error.message),
       'owner policy rejects preexisting dangerous state');

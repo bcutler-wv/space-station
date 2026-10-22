@@ -1,0 +1,11 @@
+# Stopped search administration credentials
+
+Version 0.50.0 adds the Astra-reviewed explicit owner-local command creates, verifies or aborts pending initial credentials for the two restricted search database roles. It uses existing PostgreSQL `psql` and Node APIs without adding a dependency. No production command was run, and no search job, scheduler, engine identity or live search gate is enabled by this change.
+
+Private installation metadata and independent password files are synced before database changes. A complete bundle is published with one directory rename after actual correct- and wrong-password checks on the same SCRAM endpoint. Retained verification audits existing permissions without granting or repairing them. The durable PostgreSQL system identifier survives ordinary container recreation; it does not distinguish physical clones or restores.
+
+There is no atomic transaction spanning PostgreSQL and the filesystem. Roles can briefly have LOGIN before publication while jobs remain stopped. Every owner mutation has a durable in-flight marker. An unconfirmed Docker operation leaves that marker and requires independent owner diagnosis before recovery. Explicit abort verifies installation identity, disables the dedicated roles, terminates their sessions, clears their passwords and removes only owned pending material. Published bundles cannot be aborted. See [deployment and recovery](../DEPLOYMENT.md).
+
+Review corrected bounded metadata reads, inherited libpq settings, HBA netmask checks, shutdown uncertainty, remote mutation ambiguity and missing-table detection in the audit-only path. The original effective privilege audit remains unchanged. Local PostgreSQL 15 fixtures passed staged and uncertain failures, explicit abort, retained verification, permission drift, wrong passwords and malformed files. The original restricted-role lifecycle regression and full local check passed, including 110 unit tests.
+
+The separate Ubuntu PostgreSQL 16 gate exercises the actual Docker command in a disposable Compose project without a host database port. Its result is required before integration acceptance. Runtime credential delivery and rotation remain separate tasks.
