@@ -7,6 +7,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
+import { operateSearchAdminCredentialsAlreadyJobLocked } from './search-admin-credential-core.mjs';
+import { createSearchAdminDockerAdapter } from './search-admin-credentials.mjs';
+import { withSearchAdminJobLock } from './search-admin-job-lock.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const names = Object.freeze({ verifier: 'search-db-verifier', transition: 'search-db-transition' });
@@ -92,17 +95,23 @@ async function main() {
   const uid = process.getuid?.(), gid = process.getgid?.();
   if (process.argv.length !== 3 || !Object.hasOwn(names, role) || !Number.isSafeInteger(uid) ||
       !Number.isSafeInteger(gid) || uid < 1 || gid < 1) fail();
-  const bundle = await metadata(uid, gid);
-  const sources = { verifier: await source('verifier', uid), transition: await source('transition', uid) };
-  await bounded('node', ['scripts/search-admin-credentials.mjs', 'verify', '--uid', `${uid}`, '--gid', `${gid}`], 30_000, 8192);
-  const serialized = await bounded('docker', ['compose', '--profile', 'search-admin-db', 'config', '--format', 'json',
-    'search-db-verifier', 'search-db-transition']);
-  const config = JSON.parse(serialized);
-  verifyJobConfig(config, uid, gid, sources);
-  if (config.name !== bundle.project) fail();
-  if (await source(role, uid) !== sources[role]) fail();
-  await bounded('docker', ['compose', '--profile', 'search-admin-db', 'run', '--rm', '-T', '--no-deps', names[role]],
-    45_000, 8192);
+  const root = path.join(repository, '.cache/search-db');
+  await withSearchAdminJobLock({ root, uid }, async jobLock => {
+    await operateSearchAdminCredentialsAlreadyJobLocked({ action: 'verify', root, uid, gid, jobLock,
+      adapterFactory: () => createSearchAdminDockerAdapter(uid, gid) });
+    const bundle = await metadata(uid, gid);
+    const sources = { verifier: await source('verifier', uid), transition: await source('transition', uid) };
+    const serialized = await bounded('docker', ['compose', '--profile', 'search-admin-db', 'config', '--format', 'json',
+      'search-db-verifier', 'search-db-transition']);
+    const config = JSON.parse(serialized);
+    verifyJobConfig(config, uid, gid, sources);
+    if (config.name !== bundle.project) fail();
+    if (await source(role, uid) !== sources[role]) fail();
+    await jobLock.markDispatched(role);
+    await bounded('docker', ['compose', '--profile', 'search-admin-db', 'run', '--rm', '-T', '--no-deps', names[role]],
+      45_000, 8192);
+    jobLock.confirmCompletion();
+  });
   process.stdout.write(`Search DB ${role} inspector completed.\n`);
 }
 

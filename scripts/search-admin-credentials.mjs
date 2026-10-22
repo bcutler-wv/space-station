@@ -55,7 +55,7 @@ const psqlInput = async (id, sql, kind, mutation = false) => {
 };
 const quoteFixed = role => roles[role] ?? failed('role');
 
-async function createDockerAdapter(uid, gid) {
+export async function createSearchAdminDockerAdapter(uid, gid) {
   const ids = (await checked('docker', ['compose', 'ps', '-q', 'postgres'], '', 'compose service'))
     .split('\n').filter(Boolean);
   if (ids.length !== 1 || !/^[0-9a-f]{12,64}$/.test(ids[0])) failed('compose service');
@@ -203,9 +203,9 @@ async function main() {
   if (uidFlag !== '--uid' || gidFlag !== '--gid' || !/^[0-9]+$/.test(uidRaw ?? '') ||
       !/^[0-9]+$/.test(gidRaw ?? '') || process.argv.length !== 7) failed('usage');
   const uid = Number(uidRaw), gid = Number(gidRaw);
-  const adapter = await createDockerAdapter(uid, gid);
   const result = await operateSearchAdminCredentials({ action, uid, gid,
-    root: path.join(repository, '.cache/search-db'), adapter });
+    root: path.join(repository, '.cache/search-db'),
+    adapterFactory: () => createSearchAdminDockerAdapter(uid, gid) });
   process.stdout.write(`Search admin credential ${result.state}; operation ${result.operationId}.\n`);
 }
 

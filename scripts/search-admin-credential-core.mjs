@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { isSearchAdminJobLock, withSearchAdminJobLock } from './search-admin-job-lock.mjs';
 
 const roles = ['verifier', 'transition'];
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -85,7 +86,7 @@ const sameInstallation = (left, right) => left.project === right.project &&
   left.owner === right.owner && left.uid === right.uid && left.gid === right.gid;
 const boundedEntries = async root => {
   const entries = await readdir(root);
-  if (entries.length > 5 || entries.some(x => !['.operation.lock', finalName].includes(x) &&
+  if (entries.length > 6 || entries.some(x => !['.operation.lock', '.job-operation.lock', finalName].includes(x) &&
       !/^\.pending-[0-9a-f-]{36}$/.test(x))) fail('unexpected material');
   return entries;
 };
@@ -125,8 +126,7 @@ const mutating = async (directory, operationId, work) => {
   return result;
 };
 
-/** The adapter performs fixed owner-local PostgreSQL operations; no network I/O occurs under a DB transaction. */
-export async function operateSearchAdminCredentials({ action, root, uid, gid, adapter }) {
+async function prepareRoot({ action, root, uid, gid }) {
   if (!['create', 'verify', 'abort-pending-create'].includes(action) || !Number.isSafeInteger(uid) ||
       !Number.isSafeInteger(gid) || uid < 1 || gid < 1 ||
       uid !== process.getuid?.() || gid !== process.getgid?.()) fail('configuration');
@@ -139,6 +139,12 @@ export async function operateSearchAdminCredentials({ action, root, uid, gid, ad
   }
   await inspectedDirectory(root, uid);
   if (await realpath(root) !== root) fail('canonical root');
+}
+
+/** Called only while the fixed job lock is held; verification acquires the credential lock. */
+export async function operateSearchAdminCredentialsAlreadyJobLocked({ action, root, uid, gid, adapter, adapterFactory, jobLock }) {
+  if (!isSearchAdminJobLock(jobLock, root, uid)) fail('job locked');
+  await prepareRoot({ action, root, uid, gid });
   const lock = path.join(root, '.operation.lock');
   let lockHandle;
   try { lockHandle = await open(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
@@ -146,6 +152,8 @@ export async function operateSearchAdminCredentials({ action, root, uid, gid, ad
   try {
     await lockHandle.writeFile(`${process.pid}\n`); await lockHandle.sync();
     const entries = await boundedEntries(root);
+    adapter ??= await adapterFactory?.();
+    if (!adapter) fail('configuration');
     const installation = await adapter.identity();
     if (installation.uid !== uid || installation.gid !== gid) fail('installation identity');
     if (action === 'create') {
@@ -208,7 +216,21 @@ export async function operateSearchAdminCredentials({ action, root, uid, gid, ad
     await syncDirectory(root);
     return { state: 'aborted', operationId: pendingMetadata.operationId };
   } finally {
+    const claimed = await lockHandle.stat().catch(() => null);
     await lockHandle.close().catch(() => {});
-    await rm(lock, { force: true }).catch(() => {});
+    const current = await lstat(lock).catch(() => null);
+    if (claimed && current?.isFile() && !current.isSymbolicLink() && current.nlink === 1 &&
+        current.uid === uid && (current.mode & 0o777) === 0o600 &&
+        current.dev === claimed.dev && current.ino === claimed.ino) {
+      await rm(lock);
+      await syncDirectory(root);
+    }
   }
+}
+
+/** The adapter performs fixed owner-local PostgreSQL operations; no network I/O occurs under a DB transaction. */
+export async function operateSearchAdminCredentials(options) {
+  await prepareRoot(options);
+  return withSearchAdminJobLock({ root: options.root, uid: options.uid }, jobLock =>
+    operateSearchAdminCredentialsAlreadyJobLocked({ ...options, jobLock }));
 }
