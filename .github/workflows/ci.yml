@@ -87,19 +87,19 @@ jobs:
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=initial search-contract
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=initial search-contract
       - run: docker compose --profile search restart opensearch
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=ready search-contract
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=retained search-contract
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=profile search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=ready search-contract
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=retained search-contract
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=profile search-profile-drift
       - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=restore search-profile-drift
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=restore search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow-restore search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow-restore search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
-      - run: docker compose --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
       - if: always()

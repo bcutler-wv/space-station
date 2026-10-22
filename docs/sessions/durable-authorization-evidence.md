@@ -7,3 +7,5 @@ The generated migration leaves historical observations without authorization evi
 Sol implementation and independent Astra review passed. Local checks include 108 unit tests, fresh PostgreSQL migration and historical upgrade, credential/sync/page races, action/send recovery, no provider-data fetch after revocation and integer-overflow rollback. A fixture transport hold left by a prior reset test was corrected; it did not indicate a provider SDK defect.
 
 Ubuntu PostgreSQL 16 Compose and end-to-end gates remain required. This prerequisite adds no indexer, query route or derived-data serving authority. Durable publication and current-policy validation remain the next search tasks.
+
+Ubuntu run 39685399497 at 0.41.1 passed scaffold, PostgreSQL 16 runtime integration, browser and process-recovery jobs, validating this authorization slice. The overall workflow remained red because the separate OpenSearch fixture command omitted a required Compose profile; that failure does not establish search runtime acceptance.
