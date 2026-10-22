@@ -89,14 +89,51 @@ for pair in default runner; do
   sudo chown "$pair_uid:$pair_gid" "$pair_home"
   sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker"
   project="$candidate"
+  # Image construction is outside the UID/password-delivery proof. Build
+  # before handing fixture files to the pair; all credential and job commands
+  # below still use the pair's separate private HOME and Docker configuration.
+  phase=runner-compose-plugin
+  docker compose version >> "$log" 2>&1
+  phase=runner-buildx-plugin
+  docker buildx version >> "$log" 2>&1
+  phase=runner-docker-daemon
+  docker version --format '{{.Server.Version}}' >> "$log" 2>&1
+  phase=build
+  build_log="$scratch/build-$pair.log"
+  if timeout 600s env COMPOSE_PROJECT_NAME="$project" APP_UID="$pair_uid" APP_GID="$pair_gid" \
+      docker compose --profile search-admin-db build search-db-verifier search-db-transition > "$build_log" 2>&1; then
+    cat "$build_log" >> "$log"
+  else
+    result=$?
+    cat "$build_log" >> "$log"
+    if grep -Eiq 'buildx.*(missing|not found|not installed)|requires buildx' "$build_log"; then
+      phase=build-buildx
+    elif grep -Eiq 'permission denied|operation not permitted' "$build_log"; then
+      phase=build-permission
+    elif grep -Eiq 'cannot connect to the docker daemon|error during connect' "$build_log"; then
+      phase=build-daemon
+    fi
+    exit "$result"
+  fi
+  phase=setup
   sudo chown "$pair_uid:$pair_gid" .env .cache/go-camo.env
   if [[ -e .cache/search-db || -L .cache/search-db ]]; then
     echo 'Unexpected credential root before pair.' >&2; exit 1
   fi
   sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" .cache/search-db
   owned_bundle=1
-  phase=build
-  RUN_PAIR_TIMEOUT=600 run_as_pair docker compose --profile search-admin-db build search-db-verifier search-db-transition >> "$log" 2>&1
+  # Report only fixed phases. The private Docker output may contain expanded
+  # Compose values and must never be printed by this gate.
+  phase=checkout-access
+  run_as_pair test -r Dockerfile
+  run_as_pair test -r .dockerignore
+  run_as_pair test -r compose.yaml
+  phase=compose-plugin
+  run_as_pair docker compose version >> "$log" 2>&1
+  phase=docker-daemon
+  run_as_pair docker version --format '{{.Server.Version}}' >> "$log" 2>&1
+  phase=compose-config
+  run_as_pair docker compose --profile search-admin-db config --quiet >> "$log" 2>&1
   phase=setup
   run_as_pair docker compose up -d postgres >> "$log" 2>&1
   id=$(run_as_pair docker compose ps -q postgres)
