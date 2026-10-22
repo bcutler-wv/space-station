@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { TextDecoder } from 'node:util';
 import { Client } from '@opensearch-project/opensearch';
 import { OPENSEARCH_MAPPING, OPENSEARCH_PROFILE, type SearchCompileResult } from './opensearch-compiler.js';
+import { observerBudget } from './opensearch-observer-budget.js';
 import { PINNED_STATIC_ACTION_GROUPS } from './opensearch-static-action-groups.js';
 
 export const SEARCH_INDEX = OPENSEARCH_PROFILE;
@@ -46,21 +47,23 @@ async function readIdentity(directory: string, role: Role) {
   return { ca, cert, key };
 }
 
-async function boundedRequest<T>(invoke: (options: SDKOptions) => Abortable,
-  cap = RESPONSE_BYTES, budget = REQUEST_MS): Promise<T> {
+async function boundedEnvelope<T>(invoke: (options: SDKOptions) => Abortable,
+  cap = RESPONSE_BYTES, budget = REQUEST_MS,
+  policy?: { alias404?: true; onChunk?: (bytes: number) => void }):
+  Promise<{ body: T; statusCode: number; bytes: number }> {
   if (!Number.isInteger(cap) || cap < 1 || cap > RESPONSE_BYTES || !Number.isInteger(budget) || budget < 1 || budget > REQUEST_MS)
     throw new SearchEngineError('configuration');
   const deadline = performance.now() + budget;
-  return new Promise<T>((resolve, reject) => {
+  return new Promise<{ body: T; statusCode: number; bytes: number }>((resolve, reject) => {
     let settled = false;
     let request: Abortable | undefined;
     let body: Readable | undefined;
-    const finish = (error?: unknown, value?: T) => {
+    const finish = (error?: unknown, value?: { body: T; statusCode: number; bytes: number }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (error) reject(error);
-      else resolve(value as T);
+      else resolve(value as { body: T; statusCode: number; bytes: number });
     };
     const timer = setTimeout(() => {
       if (settled) return;
@@ -82,13 +85,16 @@ async function boundedRequest<T>(invoke: (options: SDKOptions) => Abortable,
         const declared = Number(headers['content-length']);
         if (Number.isFinite(declared) && declared > cap) throw new SearchEngineError('response');
         if (response.statusCode >= 300 && response.statusCode < 400) throw new SearchEngineError('status', response.statusCode);
-        if (response.statusCode < 200 || response.statusCode >= 300) throw new SearchEngineError('status', response.statusCode);
+        if ((response.statusCode < 200 || response.statusCode >= 300) &&
+            !(policy?.alias404 && response.statusCode === 404))
+          throw new SearchEngineError('status', response.statusCode);
         let bytes = 0;
         const chunks: Buffer[] = [];
         for await (const part of body) {
           const chunk = Buffer.from(part);
           bytes += chunk.byteLength;
           if (bytes > cap) throw new SearchEngineError('response');
+          policy?.onChunk?.(chunk.byteLength);
           chunks.push(chunk);
           if (performance.now() > deadline) throw new SearchEngineError('timeout');
         }
@@ -98,13 +104,18 @@ async function boundedRequest<T>(invoke: (options: SDKOptions) => Abortable,
         let parsed: T;
         try { parsed = JSON.parse(raw) as T; } catch { throw new SearchEngineError('response'); }
         if (performance.now() > deadline) throw new SearchEngineError('timeout');
-        finish(undefined, parsed);
+        finish(undefined, { body: parsed, statusCode: response.statusCode, bytes });
       }).catch(error => {
         body?.destroy();
         finish(error instanceof SearchEngineError ? error : new SearchEngineError('transport'));
       });
     } catch { finish(new SearchEngineError('transport')); }
   });
+}
+
+function boundedRequest<T>(invoke: (options: SDKOptions) => Abortable,
+  cap = RESPONSE_BYTES, budget = REQUEST_MS): Promise<T> {
+  return boundedEnvelope<T>(invoke, cap, budget).then(response => response.body);
 }
 
 // Test fixtures share the production SDK streaming deadline/cap without a
@@ -281,12 +292,16 @@ export function verifySearch(body: unknown, size: number): unknown {
   return response;
 }
 
-export async function openSearchAccess(input: { endpoint: string; identityDir: string; role: Role }) {
+async function searchClient(input: { endpoint: string; identityDir: string; role: Role }) {
   const endpoint = assertEndpoint(input.endpoint);
   const identity = await readIdentity(input.identityDir, input.role);
-  const client = new Client({ node: endpoint, ssl: { ...identity, rejectUnauthorized: true },
+  return new Client({ node: endpoint, ssl: { ...identity, rejectUnauthorized: true },
     maxRetries: 0, requestTimeout: REQUEST_MS, sniffOnStart: false, sniffOnConnectionFault: false,
     sniffInterval: false });
+}
+
+export async function openSearchAccess(input: { endpoint: string; identityDir: string; role: Role }) {
+  const client = await searchClient(input);
   const json = <T>(invoke: (options: SDKOptions) => Abortable, cap?: number) => boundedRequest<T>(invoke, cap);
   const info = async () => {
     const response = record(await json(options => client.info({}, options) as unknown as Abortable, 32_768));
@@ -368,4 +383,121 @@ export async function openSearchAccess(input: { endpoint: string; identityDir: s
   };
   return { info, health, profile, verifySecurity, createProfileStrict, search, index, remove, bulk, refresh,
     close: () => client.close() };
+}
+
+const OBSERVE_MS = 20_000;
+const OBSERVE_BYTES = 4 * 1024 * 1024;
+const APP_PATTERN = 'station-mail-*';
+const APP_NAME = /^station-mail-[a-z0-9_-]{1,128}$/;
+
+// Only this fixed alias request may turn a bounded 404 body into empty evidence.
+function emptyAlias404(value: unknown): boolean {
+  const response = record(value);
+  if (response.status !== 404 || !sameJson(Object.keys(response).sort(), ['error', 'status'])) return false;
+  const reason = `aliases [${APP_PATTERN}] missing`;
+  if (response.error === `alias [${APP_PATTERN}] missing`) return true;
+  const error = record(response.error);
+  if (error.type !== 'aliases_not_found_exception' || error.reason !== reason ||
+      !Array.isArray(error.root_cause) || error.root_cause.length !== 1) return false;
+  const cause = record(error.root_cause[0]);
+  const check = (part: Record<string, unknown>) =>
+    part.type === 'aliases_not_found_exception' && part.reason === reason &&
+    part['resource.type'] === 'aliases' && part['resource.id'] === APP_PATTERN &&
+    sameJson(Object.keys(part).sort(), ['reason', 'resource.id', 'resource.type', 'type']);
+  const summary = Object.fromEntries(Object.entries(error).filter(([key]) => key !== 'root_cause'));
+  return check(cause) && check(summary) &&
+    sameJson(Object.keys(error).sort(), ['reason', 'resource.id', 'resource.type', 'root_cause', 'type']);
+}
+
+/** One registry-free, admin-TLS, GET-only observation; no SDK or path is exposed. */
+export async function openSearchAdminObserver(input: { endpoint: string; identityDir: string }) {
+  const client = await searchClient({ ...input, role: 'admin' });
+  const observe = async () => {
+    const budget = observerBudget({ milliseconds: OBSERVE_MS, bytes: OBSERVE_BYTES },
+      () => performance.now(), kind => { throw new SearchEngineError(kind); });
+    let names = 0;
+    const check = budget.check;
+    const read = async <T>(invoke: (options: SDKOptions) => Abortable, cap: number, alias404 = false) => {
+      const remaining = budget.remaining(REQUEST_MS);
+      const result = await boundedEnvelope<T>(invoke, cap, remaining, {
+        ...(alias404 ? { alias404: true as const } : {}),
+        onChunk: bytes => budget.chunk(bytes),
+      });
+      check();
+      return result;
+    };
+    const info = record((await read(options => client.info({}, options) as unknown as Abortable, 32_768)).body);
+    const version = record(info.version);
+    if (version.distribution !== 'opensearch' || version.number !== SEARCH_ENGINE_VERSION)
+      throw new SearchEngineError('profile');
+    check();
+    const health = record((await read(options => client.cluster.health({ wait_for_status: 'yellow', timeout: '3s' }, options) as unknown as Abortable,
+      32_768)).body);
+    if (health.timed_out !== false || typeof health.status !== 'string' ||
+        !['yellow', 'green'].includes(health.status) ||
+        health.number_of_data_nodes !== 1) throw new SearchEngineError('partial');
+    check();
+    const indexes = record((await read(options => client.indices.get({ index: APP_PATTERN,
+      expand_wildcards: 'all', allow_no_indices: true, ignore_unavailable: false, include_defaults: false }, options) as unknown as Abortable,
+      RESPONSE_BYTES)).body);
+    const physical = Object.keys(indexes).sort();
+    if (physical.length > 512 || physical.some(name => {
+      if (!APP_NAME.test(name)) return true;
+      const value = record(indexes[name]);
+      if (!sameJson(Object.keys(value).sort(), ['aliases', 'mappings', 'settings']) ||
+          !sameJson(Object.keys(record(value.aliases)), [])) return true;
+      record(value.mappings);
+      const settings = record(record(value.settings).index);
+      return typeof settings.uuid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(settings.uuid) ||
+        settings.provided_name !== name;
+    }))
+      throw new SearchEngineError('response');
+    names += physical.length;
+    check();
+    const resolved = record((await read(options => client.indices.resolveIndex({ name: APP_PATTERN,
+      expand_wildcards: 'all' }, options) as unknown as Abortable, 128_000)).body);
+    if (!sameJson(Object.keys(resolved).sort(), ['aliases', 'data_streams', 'indices']) ||
+        !Array.isArray(resolved.aliases) || !Array.isArray(resolved.data_streams) ||
+        !Array.isArray(resolved.indices) || resolved.aliases.length || resolved.data_streams.length ||
+        resolved.indices.length > 512) throw new SearchEngineError('response');
+    const resolvedNames = resolved.indices.map(item => {
+      const value = record(item);
+      if (!sameJson(Object.keys(value).sort(), ['attributes', 'name']) ||
+          !Array.isArray(value.attributes) || value.attributes.length < 1 || value.attributes.length > 2 ||
+          value.attributes.some(attribute => typeof attribute !== 'string' ||
+            !['open', 'closed', 'hidden'].includes(attribute)) ||
+          new Set(value.attributes).size !== value.attributes.length ||
+          !value.attributes.includes('open') || value.attributes.includes('closed'))
+        throw new SearchEngineError('response');
+      return value.name;
+    });
+    if (resolvedNames.some(name => typeof name !== 'string' || !APP_NAME.test(name)) ||
+        new Set(resolvedNames).size !== resolvedNames.length ||
+        !sameJson([...resolvedNames].sort(), physical)) throw new SearchEngineError('response');
+    names += resolvedNames.length;
+    check();
+    const alias = await read(options => client.indices.getAlias({ name: APP_PATTERN,
+      expand_wildcards: 'all', allow_no_indices: true, ignore_unavailable: false }, options) as unknown as Abortable,
+      128_000, true);
+    if (alias.statusCode === 404) {
+      if (!emptyAlias404(alias.body)) throw new SearchEngineError('response');
+    } else if (alias.statusCode !== 200 || Object.keys(record(alias.body)).length !== 0)
+      throw new SearchEngineError('response');
+    check();
+    const get = (path: string, cap: number) => read(options => client.transport.request({ method: 'GET', path }, options) as unknown as Abortable,
+      cap).then(result => result.body);
+    const roles = record(await get('/_plugins/_security/api/roles', 128_000));
+    const mappings = record(await get('/_plugins/_security/api/rolesmapping', 128_000));
+    if (Object.keys(roles).length > 512 || Object.keys(mappings).length > 512)
+      throw new SearchEngineError('response');
+    names += Object.keys(roles).length + Object.keys(mappings).length;
+    if (names > 2_048) throw new SearchEngineError('response');
+    check();
+    verifySecurityConfig(await get('/_plugins/_security/api/securityconfig', 128_000));
+    check();
+    verifyActionGroups(await get('/_plugins/_security/api/actiongroups', 128_000));
+    check();
+    return { indexes, roles, mappings };
+  };
+  return { observe, close: () => client.close() };
 }

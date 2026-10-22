@@ -336,6 +336,8 @@ services:
     volumes:
       - search_admin_certs:/run/station-admin:ro
       - search_query_certs:/run/station-query:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
     restart: "no"
 
   search-generation-proof:

@@ -156,6 +156,7 @@ jobs:
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow-restore search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
       - run: bash scripts/opensearch-generation-proof-gate.sh
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps search-profile-drift node tests/integration/opensearch-observer-proof.mjs
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'

@@ -7,4 +7,4 @@ export type { AuthorizedSearchContext, OpenSearchDsl, SearchCompileResult, V2Sea
 export { makeV2Fence, makeV2Eligible, V2_DOCUMENT_BYTES_MAX } from './opensearch-v2-envelope.js';
 export type { V2DocumentIdentity, V2MailFields, V2FenceDocument, V2EligibleDocument,
   V2EnvelopeResult } from './opensearch-v2-envelope.js';
-export { openSearchAccess, SearchEngineError, SEARCH_INDEX, SEARCH_ENGINE_VERSION } from './opensearch-runtime.js';
+export { openSearchAccess, openSearchAdminObserver, SearchEngineError, SEARCH_INDEX, SEARCH_ENGINE_VERSION } from './opensearch-runtime.js';
