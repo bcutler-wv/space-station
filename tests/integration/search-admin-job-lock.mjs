@@ -27,7 +27,9 @@ if (['hold', 'dispatch-hold'].includes(process.argv[2])) {
     await waitFor(() => existsSync(release));
   });
 } else {
-  const parent = await mkdtemp(path.join(process.cwd(), '.cache/results/search-admin-job-lock-'));
+  const artifactRoot = path.join(process.cwd(), '.cache/results');
+  await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+  const parent = await mkdtemp(path.join(artifactRoot, 'search-admin-job-lock-'));
   const cache = path.join(parent, '.cache');
   const root = path.join(cache, 'search-db');
   const jobPath = path.join(root, '.job-operation.lock');
