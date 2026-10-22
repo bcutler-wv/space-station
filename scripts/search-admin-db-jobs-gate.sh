@@ -57,6 +57,32 @@ node scripts/init-env.mjs >> "$log" 2>&1
 # Only traversal is shared during the UID 1000 fixture; the bundle stays private 0700.
 chmod 711 .cache
 
+# Docker reports the Compose executable it selected for this runner. Keep the
+# pair's Docker configuration empty except for a private copy of that plugin.
+phase=runner-compose-plugin
+compose_plugins_file="$scratch/compose-plugins.json"
+docker info --format '{{json .ClientInfo.Plugins}}' > "$compose_plugins_file" 2>> "$log"
+if ! compose_path=$(node -e '
+  const plugins = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (!Array.isArray(plugins)) process.exit(1);
+  const matches = plugins.filter(plugin => plugin?.Name === "compose");
+  if (matches.length !== 1 || typeof matches[0].Path !== "string" ||
+      !matches[0].Path.startsWith("/") || /[\x00-\x1f\x7f]/.test(matches[0].Path)) process.exit(1);
+  process.stdout.write(matches[0].Path);
+' "$compose_plugins_file" 2>> "$log"); then
+  echo 'Runner Compose plugin metadata is missing or ambiguous.' >&2; exit 1
+fi
+if ! compose_plugin=$(realpath -e -- "$compose_path" 2>> "$log"); then
+  echo 'Runner Compose plugin path does not resolve.' >&2; exit 1
+fi
+if [[ ! -f "$compose_plugin" || ! -x "$compose_plugin" ]]; then
+  echo 'Runner Compose plugin is not a regular executable.' >&2; exit 1
+fi
+runner_compose_version=$(docker compose version --short 2>> "$log")
+if [[ -z "$runner_compose_version" ]]; then
+  echo 'Runner Compose version is empty.' >&2; exit 1
+fi
+
 run_as_pair() {
   if [[ "$pair_uid" == 1000 ]]; then
     timeout "${RUN_PAIR_TIMEOUT:-120}s" sudo setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" \
@@ -88,6 +114,9 @@ for pair in default runner; do
   pair_home=$(mktemp -d "$PWD/.cache/search-db-jobs-home.XXXXXXXX")
   sudo chown "$pair_uid:$pair_gid" "$pair_home"
   sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker"
+  sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker/cli-plugins"
+  sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
+    "$compose_plugin" "$pair_home/.docker/cli-plugins/docker-compose"
   project="$candidate"
   # Image construction is outside the UID/password-delivery proof. Build
   # before handing fixture files to the pair; all credential and job commands
@@ -129,7 +158,10 @@ for pair in default runner; do
   run_as_pair test -r .dockerignore
   run_as_pair test -r compose.yaml
   phase=compose-plugin
-  run_as_pair docker compose version >> "$log" 2>&1
+  pair_compose_version=$(run_as_pair docker compose version --short 2>> "$log")
+  if [[ "$pair_compose_version" != "$runner_compose_version" ]]; then
+    echo 'Pair Compose version differs from runner.' >&2; exit 1
+  fi
   phase=docker-daemon
   run_as_pair docker version --format '{{.Server.Version}}' >> "$log" 2>&1
   phase=compose-config
