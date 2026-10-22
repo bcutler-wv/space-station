@@ -79,6 +79,8 @@ docker compose up -d --force-recreate --wait app worker
 
 Migrations run in the controlled `migrate` service before app and worker startup.
 
+The future M2 search admin database roles have an owner-only, post-migration policy at `ops/postgres/search-admin-roles.sql`. It is not part of the production update sequence above and does not enable search. The policy revokes PUBLIC `TEMPORARY` on the Station database and PUBLIC `CREATE` on its `public` schema; evaluate that database-wide change in a separate reviewed deployment step before applying it outside disposable fixtures. The two roles are initially `NOLOGIN` and receive no password from the policy. It rejects conflicting existing grants or role attributes instead of silently repairing them.
+
 Backups contain sensitive message content and metadata even though application-level encryption protects provider credentials only. Restrict access and encrypt backup storage. Use disposable data for automated restore checks in CI; do not use the production host for build tests.
 # Mail image proxy secret
 

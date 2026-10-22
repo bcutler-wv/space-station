@@ -71,9 +71,11 @@ export async function enrollLegacySearchGeneration(tx: Transaction, expected: Ge
   if (!row) return null;
   if (row.stage !== 'disabled' || row.sourceGenerationToken || row.generationToken ||
       row.transitionToken || row.indexUuid) throw new Error('Legacy enrollment requires initial disabled state');
-  await tx.insert(searchGenerationHistory).values({ generationToken: 'legacy-v1',
-    physicalIndex: 'station-mail-v1', profileId: 'station-mail-v1',
-    indexUuid: exactUuid(observedUuid), lifecycle: 'roles_attested' });
+  // Drizzle emits DEFAULT for omitted columns. Explicit INSERT columns keep
+  // the transition role's accepted column grant exact, including no created_at.
+  await tx.execute(sql`insert into search_generation_history
+    (generation_token, physical_index, profile_id, index_uuid, lifecycle)
+    values ('legacy-v1', 'station-mail-v1', 'station-mail-v1', ${exactUuid(observedUuid)}, 'roles_attested')`);
   return bump(tx, { sourceGenerationToken: 'legacy-v1' });
 }
 
@@ -93,8 +95,11 @@ export async function reserveSearchGeneration(tx: Transaction, expected: Generat
     .where(eq(searchGenerationDispatch.generationToken, source!));
   if (unresolved.some(entry => !['response_confirmed', 'quiesced'].includes(entry.state)))
     throw new Error('Source has unresolved dispatch');
-  await tx.insert(searchGenerationHistory).values({ generationToken: candidate.generationToken,
-    physicalIndex: candidate.physicalIndex, profileId: 'station-mail-v2', ...names(candidate.generationToken) });
+  const identity = names(candidate.generationToken);
+  await tx.execute(sql`insert into search_generation_history
+    (generation_token, physical_index, profile_id, writer_role, query_role, writer_principal, query_principal)
+    values (${candidate.generationToken}, ${candidate.physicalIndex}, 'station-mail-v2',
+      ${identity.writerRole}, ${identity.queryRole}, ${identity.writerPrincipal}, ${identity.queryPrincipal})`);
   return bump(tx, { stage: 'disabled_intent', transitionToken: candidate.transitionToken,
     sourceGenerationToken: source, generationToken: candidate.generationToken,
     physicalIndex: candidate.physicalIndex, indexUuid: null, profileId: 'station-mail-v2' });
@@ -170,8 +175,10 @@ export async function armSearchGenerationDispatch(tx: Transaction, expected: Gen
   const spec = searchGenerationDispatchSpec(history, input.operation);
   if (input.target !== spec.target || input.bodyIdentity !== spec.bodyIdentity)
     throw new Error('Invalid dispatch target or body identity');
-  await tx.insert(searchGenerationDispatch).values({ generationToken: row.generationToken,
-    ...input, state: 'armed' });
+  await tx.execute(sql`insert into search_generation_dispatch
+    (generation_token, operation, dispatch_id, owner_id, target, body_identity, state)
+    values (${row.generationToken}, ${input.operation}, ${input.dispatchId}, ${input.ownerId},
+      ${input.target}, ${input.bodyIdentity}, 'armed')`);
   return bump(tx, {});
 }
 

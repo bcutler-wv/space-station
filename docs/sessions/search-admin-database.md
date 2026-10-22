@@ -1,0 +1,11 @@
+# Restricted search administration database access
+
+Version 0.48.0 adds an inactive database prerequisite for future search administration. An owner-operated policy creates two dedicated roles without LOGIN or credentials. The verifier may read the three generation registry tables; the transition role may additionally insert and update only the reviewed columns. Neither can access source data, enable search, delete registry history, create objects or administer roles.
+
+The policy audits effective grants, including PUBLIC, column grants, future-object defaults, memberships, ownership and callable security-definer routines. It rejects unexpected access to password-bearing PostgreSQL catalogs while preserving normal masked catalog metadata. Applying this policy revokes PUBLIC TEMP on the Station database and PUBLIC CREATE on its public schema. That database-wide change is explicit and is not applied by normal startup. Other databases' default CONNECT privileges are outside this policy.
+
+The separate connection helper reads a private regular password file through a bounded descriptor, rejects links and nonregular files without blocking, and uses explicit connection, query, lock and overall work limits. Errors are redacted. Verifier snapshots use bounded read-only transactions without row locks. Three transition INSERT statements now specify their exact columns so Drizzle's default-column behavior does not require broader privileges.
+
+Astra review required corrections for sensitive-catalog grants, fixture cleanup ownership, secret-safe failure output and complete lifecycle coverage. Local SCRAM-authenticated PostgreSQL 15 fixtures passed the full transition lifecycle, permission denials, retained-policy rejection, connection loss, lock bounds and secret-file attacks. Forced credential failures passed output scans. Original transition fresh and upgrade regressions and the full local check passed, including 110 unit tests.
+
+The new Ubuntu PostgreSQL 16 job runs a separate disposable cluster and remains pending. Production credential creation and rotation, runtime mounts and network access, engine administration, publication and search serving remain separate work. Both search gates remain SQL-forced false. No production role policy was applied.
