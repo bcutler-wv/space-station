@@ -108,6 +108,27 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
   const installation = { project, service, database: 'station', databaseOid, systemIdentifier,
     owner, uid, gid };
 
+  const targetContainersAbsent = async role => {
+    const serviceName = { verifier: 'search-db-verifier', transition: 'search-db-transition' }[role];
+    if (!serviceName) failed('role');
+    const listed = await checked('docker', ['ps', '-a', '--no-trunc', '--filter',
+      `label=com.docker.compose.project=${project}`, '--filter',
+      `label=com.docker.compose.service=${serviceName}`, '--format', '{{.ID}}'], '', 'target containers');
+    if (listed && (listed.split('\n').length > 64 || listed.split('\n').some(x => !/^[0-9a-f]{64}$/.test(x))))
+      failed('target containers');
+    return listed === '';
+  };
+  const assertRetiredContainer = async previousId => {
+    if (!/^[0-9a-f]{12,64}$/.test(previousId) || previousId === id) failed('remote quiescence');
+    // A successful complete enumeration is required. Inspect/daemon errors do
+    // not turn into absence, and a stopped container remains in this list.
+    const listed = await checked('docker', ['ps', '-a', '--no-trunc', '--format', '{{.ID}}'], '', 'remote quiescence');
+    const ids = listed ? listed.split('\n') : [];
+    if (ids.length > 256 || ids.some(x => !/^[0-9a-f]{64}$/.test(x)) ||
+        ids.some(x => x === previousId || x.startsWith(previousId))) failed('remote quiescence');
+    await unchangedEndpoint();
+  };
+
   const hba = async () => {
     const rows = await psqlInput(id, `SELECT type || '|' || array_to_string(database, ',') || '|' ||
       array_to_string(user_name, ',') || '|' || coalesce(address, '') || '|' ||
@@ -132,12 +153,20 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
   };
   const audit = async () => {
     const body = await readFile(path.join(repository, 'ops/postgres/search-admin-roles-audit.sql'), 'utf8');
-    await psqlInput(id, `BEGIN READ ONLY; SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='750ms';\n${body}\nCOMMIT;`, 'role audit');
+    await psqlInput(id, `BEGIN READ ONLY; SET LOCAL station.search_admin_rotation_target='none';
+      SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='750ms';\n${body}\nCOMMIT;`, 'role audit');
+  };
+  const auditRecovery = async role => {
+    const body = await readFile(path.join(repository, 'ops/postgres/search-admin-roles-audit.sql'), 'utf8');
+    const name = quoteFixed(role);
+    await psqlInput(id, `BEGIN READ ONLY; SET LOCAL station.search_admin_rotation_target='${name}';
+      SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='750ms';\n${body}\nCOMMIT;`, 'rotation audit');
   };
   const applyPolicy = async () => {
     const apply = await readFile(path.join(repository, 'ops/postgres/search-admin-roles-apply.sql'), 'utf8');
     const auditBody = await readFile(path.join(repository, 'ops/postgres/search-admin-roles-audit.sql'), 'utf8');
-    await psqlInput(id, `BEGIN; SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='750ms';\n${apply}\n${auditBody}\nCOMMIT;`, 'role policy', true);
+    await psqlInput(id, `BEGIN; SET LOCAL station.search_admin_rotation_target='none';
+      SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='750ms';\n${apply}\n${auditBody}\nCOMMIT;`, 'role policy', true);
   };
   const setPassword = async (role, password) => {
     const name = quoteFixed(role);
@@ -149,6 +178,29 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
   const setLogin = async (role, enabled) => {
     const name = quoteFixed(role);
     await psqlInput(id, `ALTER ROLE ${name} ${enabled ? 'LOGIN' : 'NOLOGIN'};`, 'role login', true);
+  };
+  const terminateTargetSessions = async role => {
+    const name = quoteFixed(role);
+    const results = await psqlInput(id, `SELECT pg_terminate_backend(pid, 3000) FROM pg_stat_activity
+      WHERE usename='${name}' AND pid<>pg_backend_pid();`, 'target shutdown', true);
+    if (results && results.split('\n').some(x => x !== 't')) failed('remote uncertain');
+    const remaining = await psqlInput(id,
+      `SELECT count(*)::text FROM pg_stat_activity WHERE usename='${name}';`, 'target sessions');
+    if (remaining !== '0') failed('target sessions');
+  };
+  const targetSessionsZero = async role => {
+    const name = quoteFixed(role);
+    return await psqlInput(id, `SELECT count(*)::text FROM pg_stat_activity WHERE usename='${name}';`,
+      'target sessions') === '0';
+  };
+  const roleEvidence = async role => {
+    const name = quoteFixed(role);
+    const row = await psqlInput(id, `SELECT rolcanlogin::text || '|' || coalesce(rolpassword, '')
+      FROM pg_authid WHERE rolname='${name}';`, 'role evidence');
+    const [login, verifier] = row.split('|');
+    if (!['true', 'false'].includes(login) || !/^SCRAM-SHA-256\$[!-~]{1,512}$/.test(verifier ?? '') ||
+        row.split('|').length !== 2) failed('role evidence');
+    return { login: login === 'true', verifier };
   };
   const authAttempt = async (role, password) => { await unchangedEndpoint(); return command('docker', ['exec', '-i', id, ...cleanPsql,
     '-X', '-h', ip, '-p', '5432', '-U', quoteFixed(role), '-d', 'station', '-W', '-A', '-t',
@@ -162,6 +214,12 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
     const rejected = await authAttempt(role, wrong);
     if (rejected.code !== 2 || rejected.stdout.trim() || !/password authentication failed/.test(rejected.stderr))
       failed('wrong password proof');
+  };
+  const authenticateRejected = async (role, password) => {
+    await hba();
+    const rejected = await authAttempt(role, password);
+    if (rejected.code !== 2 || rejected.stdout.trim() || !/password authentication failed/.test(rejected.stderr))
+      failed('old password denial');
   };
   const preflightCreate = async () => {
     const rows = await psqlInput(id, `SELECT rolname || '|' || rolcanlogin::text || '|' ||
@@ -194,16 +252,30 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
       `DO $clear$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${name}') THEN
         EXECUTE 'ALTER ROLE ${name} PASSWORD NULL'; END IF; END $clear$;`, 'role credential clearing', true);
   };
-  return { identity: async () => installation, audit, applyPolicy, setPassword, setLogin,
-    authenticate, preflightCreate, disableRoles, disableAndClearRoles };
+  return { identity: async () => installation, containerId: async () => id, attestAuthentication: hba,
+    targetContainersAbsent, assertRetiredContainer, terminateTargetSessions, targetSessionsZero, roleEvidence,
+    audit, auditRecovery, applyPolicy, setPassword, setLogin, authenticate, authenticateRejected,
+    preflightCreate, disableRoles, disableAndClearRoles };
 }
 
 async function main() {
-  const [action, uidFlag, uidRaw, gidFlag, gidRaw] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const action = args.shift();
+  let role, operationId;
+  if (['rotate', 'finish-pending-rotation', 'abort-pending-rotation'].includes(action)) {
+    role = args.shift();
+    if (!Object.hasOwn(roles, role ?? '')) failed('usage');
+    if (action !== 'rotate') {
+      operationId = args.shift();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId ?? ''))
+        failed('usage');
+    }
+  }
+  const [uidFlag, uidRaw, gidFlag, gidRaw] = args;
   if (uidFlag !== '--uid' || gidFlag !== '--gid' || !/^[0-9]+$/.test(uidRaw ?? '') ||
-      !/^[0-9]+$/.test(gidRaw ?? '') || process.argv.length !== 7) failed('usage');
+      !/^[0-9]+$/.test(gidRaw ?? '') || args.length !== 4) failed('usage');
   const uid = Number(uidRaw), gid = Number(gidRaw);
-  const result = await operateSearchAdminCredentials({ action, uid, gid,
+  const result = await operateSearchAdminCredentials({ action, role, operationId, uid, gid,
     root: path.join(repository, '.cache/search-db'),
     adapterFactory: () => createSearchAdminDockerAdapter(uid, gid) });
   process.stdout.write(`Search admin credential ${result.state}; operation ${result.operationId}.\n`);

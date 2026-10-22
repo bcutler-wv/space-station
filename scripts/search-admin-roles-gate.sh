@@ -31,7 +31,7 @@ for migration in packages/db/drizzle/[0-9]*.sql; do
     < "$migration" >/dev/null
 done
 {
-  printf "BEGIN; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '750ms';\n"
+  printf "BEGIN; SET LOCAL station.search_admin_rotation_target = 'none'; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '750ms';\n"
   cat ops/postgres/search-admin-roles-apply.sql ops/postgres/search-admin-roles-audit.sql
   printf 'COMMIT;\n'
 } | docker exec -i "$container" psql -X -U station -d station -v ON_ERROR_STOP=1 >/dev/null

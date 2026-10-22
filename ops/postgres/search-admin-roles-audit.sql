@@ -1,7 +1,11 @@
 -- Read-only role and DB identity checks. No GRANT, REVOKE or role mutation.
 DO $verify$
 DECLARE name text; role_row pg_authid%ROWTYPE; count_rows integer;
+DECLARE rotation_target text := NULLIF(NULLIF(current_setting('station.search_admin_rotation_target', true), ''), 'none');
 BEGIN
+  IF rotation_target IS NOT NULL AND rotation_target NOT IN
+    ('station_search_verifier','station_search_transition')
+  THEN RAISE EXCEPTION 'invalid search admin rotation target'; END IF;
   IF current_database() <> 'station' OR
      (SELECT datdba FROM pg_database WHERE datname = current_database()) <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
   THEN RAISE EXCEPTION 'search admin audit requires Station database owner'; END IF;
@@ -17,7 +21,11 @@ BEGIN
        role_row.rolbypassrls OR role_row.rolinherit OR role_row.rolconnlimit <> 2 OR
        role_row.rolvaliduntil IS NOT NULL OR
        (role_row.rolcanlogin AND (role_row.rolpassword IS NULL OR role_row.rolpassword NOT LIKE 'SCRAM-SHA-256$%')) OR
-       (NOT role_row.rolcanlogin AND role_row.rolpassword IS NOT NULL) OR
+       (NOT role_row.rolcanlogin AND role_row.rolpassword IS NOT NULL AND
+         name IS DISTINCT FROM rotation_target) OR
+       (rotation_target IS NOT NULL AND (role_row.rolpassword IS NULL OR
+         role_row.rolpassword NOT LIKE 'SCRAM-SHA-256$%' OR
+         (name <> rotation_target AND NOT role_row.rolcanlogin))) OR
        EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = role_row.oid OR member = role_row.oid) OR
        EXISTS (SELECT 1 FROM pg_shdepend WHERE refobjid = role_row.oid AND deptype = 'o')
     THEN RAISE EXCEPTION 'unsafe preexisting search admin role: %', name; END IF;
