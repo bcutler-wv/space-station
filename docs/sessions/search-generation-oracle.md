@@ -8,4 +8,10 @@ The search package builds expected roles and mappings from the ready inventory, 
 
 Independent review corrected accessor execution, decorated Date values, custom array prototypes, duplicate engine UUIDs, impossible dispatch prefixes and order-dependent rejection reasons. Focused tests and independent adversarial probes passed. Input callbacks are rejected before traversal or serialization, results are deterministic, and neither package imports the other at runtime.
 
-Complete bounded database reads, engine UUID/profile/alias and public-certificate checks, hidden security collection visibility and the combined administration-container boundary remain separate implementation work. Retained bootstrap must also stop creating a missing v1 index before that engine verifier is accepted.
+Engine UUID/profile/alias and public-certificate checks, hidden security collection visibility and the combined administration-container boundary remain separate implementation work. The explicit-introduction bootstrap correction is integrated in 0.55.0 and has passed its changed-feature Ubuntu gate.
+
+Version 0.56.0 adds the independently Astra-reviewed E0c1 complete, bounded read-only registry snapshot and fresh recheck while keeping the existing manifest inspector API. The raw path includes lifecycle and separately keyed full-microsecond SQL timestamp evidence that the Date-shaped manifest omits. It checks unprivileged session and database identity and retains separate byte limits for raw and projected results. Equality of two reads proves only row equality on the configured trusted endpoint; it is not clone/restore provenance or a cross-system atomic snapshot. Engine observation, certificate attestation and container delivery remain separate, and both SQL gates remain false.
+
+The shared-baseline engine proof passed in Ubuntu run `39861764148` at `62019c2`, job `120115511654`, and again with the bootstrap correction at `5004321`. Full workflow regressions remain pending.
+
+Reader review corrected PostgreSQL sub-millisecond timestamp loss and isolated the dispatch-drift fixture from unrelated history changes. Independent PG15 precision, restoration and timezone probes passed, together with the full local check. The extended actual PG16 role fixture remains pending.

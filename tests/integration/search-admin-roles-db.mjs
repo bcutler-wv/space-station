@@ -9,6 +9,7 @@ import process from 'node:process';
 import { URL } from 'node:url';
 import { advanceSearchGeneration, armSearchGenerationDispatch, enrollLegacySearchGeneration,
   readSearchAdminPassword, readSearchAdminSnapshot, recheckSearchAdminSnapshot,
+  readSearchAdminRegistrySnapshot, recheckSearchAdminRegistrySnapshot,
   recordSearchGenerationCertEvidence, updateSearchGenerationDispatch,
   reserveSearchGeneration, searchGenerationDispatchSpec, SearchAdminDatabaseError,
   withSearchAdminDatabase } from '../../packages/db/dist/index.js';
@@ -123,6 +124,26 @@ try {
 
   phase = 'effective least privilege';
   const initial = await withSearchAdminDatabase(options('verifier'), readSearchAdminSnapshot);
+  const rawInitial = await withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier'));
+  assert.deepEqual(rawInitial.history, []);
+  assert.deepEqual(rawInitial.dispatch, []);
+  assert.deepEqual(rawInitial.identity, { sessionUser: 'station_search_verifier',
+    currentUser: 'station_search_verifier', database: 'station',
+    databaseOid: rawInitial.identity.databaseOid, databaseOwner: 'station' });
+  assert.ok(Number.isInteger(rawInitial.identity.databaseOid) && rawInitial.identity.databaseOid > 0);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, rawInitial, 'station_search_verifier')), true);
+  await assert.rejects(withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_transition')),
+  error => error.kind === 'snapshot', 'wrong expected login role fails');
+  await assert.rejects(withSearchAdminDatabase(options('transition'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier')),
+  error => error.kind === 'snapshot', 'transition role cannot masquerade as verifier');
+  const transitionRaw = await withSearchAdminDatabase(options('transition'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_transition'));
+  assert.equal(transitionRaw.identity.sessionUser, 'station_search_transition');
+  assert.equal(transitionRaw.identity.databaseOid, rawInitial.identity.databaseOid);
   assert.equal(initial.control.stage, 'disabled');
   assert.equal(initial.control.publicationEnabled, false);
   assert.equal(initial.control.servingReady, false);
@@ -215,8 +236,13 @@ try {
   };
   row = await completeDispatch(row, dispatch);
   row = await transitionTx(trx => advanceSearchGeneration(trx, expected(row), 'uuid_bound', 'fixtureUuid'));
+  const beforeCertEvidence = await withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier'));
   row = await transitionTx(trx => recordSearchGenerationCertEvidence(trx, expected(row),
     { writer: 'a'.repeat(64), query: 'b'.repeat(64) }));
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, beforeCertEvidence, 'station_search_verifier')), false,
+  'raw recheck sees newly recorded certificate fingerprints');
   for (const [requested, operation, completed] of [
     ['writer_role_requested', 'writer_role', 'writer_role_attested'],
     ['writer_mapping_requested', 'writer_mapping', 'writer_attested'],
@@ -245,6 +271,80 @@ try {
     assert.equal(row.servingReady, false);
   }
   const attested = await withSearchAdminDatabase(options('verifier'), readSearchAdminSnapshot);
+  const rawAttested = await withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier'));
+  assert.deepEqual(rawAttested.history.map(item => item.generationToken).slice().sort(),
+    rawAttested.history.map(item => item.generationToken), 'history is stably ordered');
+  assert.equal(rawAttested.history.length, 2);
+  assert.equal(rawAttested.dispatch.length, 5);
+  assert.equal(rawAttested.control.publicationEnabled, false);
+  assert.equal(rawAttested.control.servingReady, false);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, rawAttested, 'station_search_verifier')), true);
+  await owner.query('begin');
+  try {
+    await owner.query('update search_generation_history set created_at = created_at + interval \'1 second\' where generation_token = $1',
+      [candidate.generationToken]);
+    assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+      recheckSearchAdminRegistrySnapshot(db, rawAttested, 'station_search_verifier')), true,
+    'uncommitted timestamp change is invisible');
+  } finally { await owner.query('rollback'); }
+  await owner.query(`update search_generation_history set created_at = created_at +
+    case when mod(extract(microseconds from created_at)::integer, 1000) = 999
+      then interval '-1 microsecond' else interval '1 microsecond' end
+    where generation_token = $1`,
+    [candidate.generationToken]);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, rawAttested, 'station_search_verifier')), false,
+  'raw recheck sees timestamp omitted from manifest');
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminSnapshot(db, attested)), true,
+  'projected recheck deliberately omits history creation time');
+  await owner.query('update search_generation_history set created_at = $2::timestamptz where generation_token = $1',
+    [candidate.generationToken, rawAttested.exactTimestamps.history
+      .find(item => item.generationToken === candidate.generationToken).createdAt]);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, rawAttested, 'station_search_verifier')), true);
+  const abandonedToken = randomUUID(), abandonedSuffix = abandonedToken.replaceAll('-', '');
+  await owner.query(`insert into search_generation_history
+    (generation_token, physical_index, profile_id, lifecycle, writer_role, query_role,
+      writer_principal, query_principal)
+    values ($1, $2, 'station-mail-v2', 'reserved', $3, $4, $5, $6)`,
+  [abandonedToken, `station-mail-v2-g${abandonedSuffix}`,
+    `station_indexer_${abandonedSuffix}`, `station_query_${abandonedSuffix}`,
+    `station-search-indexer-${abandonedSuffix}`, `station-search-query-${abandonedSuffix}`]);
+  const beforeAbandon = await withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier'));
+  const beforeAbandonProjection = await withSearchAdminDatabase(options('verifier'), readSearchAdminSnapshot);
+  await owner.query('update search_generation_history set lifecycle = \'abandoned\' where generation_token = $1',
+    [abandonedToken]);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, beforeAbandon, 'station_search_verifier')), false,
+  'raw recheck sees lifecycle omitted from manifest');
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminSnapshot(db, beforeAbandonProjection)), true,
+  'projected recheck deliberately omits lifecycle');
+  assert.equal(rawAttested.history.find(item => item.generationToken === candidate.generationToken)
+    .queryCertFingerprint, 'b'.repeat(64), 'raw snapshot retains certificate evidence');
+  const beforeDispatchDrift = await withSearchAdminDatabase(options('verifier'), db =>
+    readSearchAdminRegistrySnapshot(db, 'station_search_verifier'));
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, beforeDispatchDrift, 'station_search_verifier')), true,
+  'dispatch drift baseline is current');
+  await owner.query(`update search_generation_dispatch set created_at = created_at +
+    case when mod(extract(microseconds from created_at)::integer, 1000) = 999
+      then interval '-1 microsecond' else interval '1 microsecond' end
+    where dispatch_id = $1`,
+    [dispatch.dispatchId]);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, beforeDispatchDrift, 'station_search_verifier')), false,
+  'raw recheck sees dispatch timestamp change');
+  await owner.query('update search_generation_dispatch set created_at = $2::timestamptz where dispatch_id = $1',
+    [dispatch.dispatchId, beforeDispatchDrift.exactTimestamps.dispatch
+      .find(item => item.dispatchId === dispatch.dispatchId).createdAt]);
+  assert.equal(await withSearchAdminDatabase(options('verifier'), db =>
+    recheckSearchAdminRegistrySnapshot(db, beforeDispatchDrift, 'station_search_verifier')), true,
+  'exact dispatch timestamp is restored');
   assert.equal(attested.control.stage, 'roles_attested');
   assert.equal(attested.control.indexUuid, 'fixtureUuid');
   assert.equal(attested.dispatch.length, 5);

@@ -16,7 +16,8 @@ export { enrollLegacySearchGeneration, reserveSearchGeneration, advanceSearchGen
   recordSearchGenerationCertEvidence } from './search-generation-admin.js';
 export { buildSearchGenerationManifest, searchGenerationDispatchSpec } from './search-generation-manifest.js';
 export { readSearchAdminPassword, withSearchAdminDatabase, readSearchAdminSnapshot,
-  recheckSearchAdminSnapshot, SearchAdminDatabaseError,
+  recheckSearchAdminSnapshot, readSearchAdminRegistrySnapshot,
+  recheckSearchAdminRegistrySnapshot, SearchAdminDatabaseError,
   type SearchAdminConnection, type SearchAdminRole } from './search-admin-connection.js';
 export { lockSearchGenerationControl, casDisabledSearchGeneration,
   type SearchGenerationExpectation } from './search-generation.js';

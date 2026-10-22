@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import process from 'node:process';
 import { buildSearchGenerationManifest } from './search-generation-manifest.js';
@@ -100,26 +101,102 @@ export async function withSearchAdminDatabase<T>(config: SearchAdminConnection,
 }
 
 type AdminDb = NodePgDatabase;
+type SearchAdminIdentity = Readonly<{
+  sessionUser: SearchAdminRole; currentUser: SearchAdminRole;
+  database: 'station'; databaseOid: number; databaseOwner: 'station';
+}>;
+
+function bounded(value: unknown): void {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_SNAPSHOT_BYTES)
+    throw new SearchAdminDatabaseError('snapshot');
+}
+
+async function readRows(db: AdminDb, expectedRole?: SearchAdminRole) {
+  return db.transaction(async tx => {
+    await tx.execute('set transaction isolation level repeatable read, read only');
+    const identityRows = await tx.execute(sql<{
+      sessionUser: string; currentUser: string; database: string;
+      databaseOid: number; databaseOwner: string;
+    }>`select session_user as "sessionUser", current_user as "currentUser",
+      current_database() as "database", d.oid::integer as "databaseOid",
+      pg_get_userbyid(d.datdba) as "databaseOwner"
+      from pg_catalog.pg_database d where d.datname = current_database()`);
+    const identity = identityRows.rows[0];
+    if (identityRows.rows.length !== 1 || !identity ||
+        typeof identity.sessionUser !== 'string' ||
+        !['station_search_verifier', 'station_search_transition'].includes(identity.sessionUser) ||
+        identity.currentUser !== identity.sessionUser ||
+        (expectedRole && identity.sessionUser !== expectedRole) ||
+        identity.database !== 'station' || identity.databaseOwner !== 'station' ||
+        typeof identity.databaseOid !== 'number' ||
+        !Number.isInteger(identity.databaseOid) || identity.databaseOid < 1)
+      throw new SearchAdminDatabaseError('snapshot');
+    const control = await tx.select().from(searchGenerationControl).limit(2);
+    const history = await tx.select().from(searchGenerationHistory)
+      .orderBy(searchGenerationHistory.generationToken).limit(MAX_HISTORY + 1);
+    const dispatch = await tx.select().from(searchGenerationDispatch)
+      .orderBy(searchGenerationDispatch.generationToken, searchGenerationDispatch.operation,
+        searchGenerationDispatch.dispatchId).limit(MAX_DISPATCH + 1);
+    if (control.length !== 1 || history.length > MAX_HISTORY || dispatch.length > MAX_DISPATCH)
+      throw new SearchAdminDatabaseError('snapshot');
+    // pg/Drizzle Date values discard PostgreSQL's sub-millisecond precision.
+    // Keep exact SQL text alongside the Date-shaped rows used by E0a.
+    const exactControl = await tx.select({ singleton: searchGenerationControl.singleton,
+      updatedAt: sql<string>`to_char(${searchGenerationControl.updatedAt} at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'` })
+      .from(searchGenerationControl).limit(2);
+    const exactHistory = await tx.select({ generationToken: searchGenerationHistory.generationToken,
+      createdAt: sql<string>`to_char(${searchGenerationHistory.createdAt} at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'` })
+      .from(searchGenerationHistory).orderBy(searchGenerationHistory.generationToken)
+      .limit(MAX_HISTORY + 1);
+    const exactDispatch = await tx.select({ generationToken: searchGenerationDispatch.generationToken,
+      operation: searchGenerationDispatch.operation, dispatchId: searchGenerationDispatch.dispatchId,
+      createdAt: sql<string>`to_char(${searchGenerationDispatch.createdAt} at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'` })
+      .from(searchGenerationDispatch)
+      .orderBy(searchGenerationDispatch.generationToken, searchGenerationDispatch.operation,
+        searchGenerationDispatch.dispatchId).limit(MAX_DISPATCH + 1);
+    const timestamp = (value: unknown) => typeof value === 'string' &&
+      /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/.test(value);
+    if (exactControl.length !== 1 || exactControl[0]?.singleton !== control[0]?.singleton ||
+        !timestamp(exactControl[0]?.updatedAt) || exactHistory.length !== history.length ||
+        exactDispatch.length !== dispatch.length ||
+        exactHistory.some((item, i) => item.generationToken !== history[i]?.generationToken ||
+          !timestamp(item.createdAt)) ||
+        exactDispatch.some((item, i) => item.generationToken !== dispatch[i]?.generationToken ||
+          item.operation !== dispatch[i]?.operation || item.dispatchId !== dispatch[i]?.dispatchId ||
+          !timestamp(item.createdAt))) throw new SearchAdminDatabaseError('snapshot');
+    return { control: control[0], history, dispatch, identity: identity as SearchAdminIdentity,
+      exactTimestamps: { control: exactControl[0]!, history: exactHistory, dispatch: exactDispatch } };
+  });
+}
 
 /** No row locks; a later engine attestation must recheck this snapshot. */
 export async function readSearchAdminSnapshot(db: AdminDb) {
   try {
-    return await db.transaction(async tx => {
-      await tx.execute('set transaction isolation level repeatable read, read only');
-      const control = await tx.select().from(searchGenerationControl).limit(2);
-      const history = await tx.select().from(searchGenerationHistory).limit(MAX_HISTORY + 1);
-      const dispatch = await tx.select().from(searchGenerationDispatch)
-        .orderBy(searchGenerationDispatch.generationToken, searchGenerationDispatch.operation)
-        .limit(MAX_DISPATCH + 1);
-      if (control.length !== 1 || history.length > MAX_HISTORY || dispatch.length > MAX_DISPATCH)
-        throw new SearchAdminDatabaseError('snapshot');
-      const manifest = buildSearchGenerationManifest(history);
-      const result = { control: control[0], manifest, dispatch };
-      if (Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_SNAPSHOT_BYTES)
-        throw new SearchAdminDatabaseError('snapshot');
-      return result;
-    });
+    const { control, history, dispatch } = await readRows(db);
+    const result = { control, manifest: buildSearchGenerationManifest(history), dispatch };
+    bounded(result);
+    return result;
   } catch { throw new SearchAdminDatabaseError('snapshot'); }
+}
+
+/** Complete registry evidence plus unprivileged identity of the configured endpoint. */
+export async function readSearchAdminRegistrySnapshot(db: AdminDb, expectedRole?: SearchAdminRole) {
+  try {
+    const result = await readRows(db, expectedRole);
+    bounded({ control: result.control, history: result.history, dispatch: result.dispatch,
+      exactTimestamps: result.exactTimestamps });
+    return result;
+  } catch { throw new SearchAdminDatabaseError('snapshot'); }
+}
+
+export async function recheckSearchAdminRegistrySnapshot(db: AdminDb,
+  expected: Awaited<ReturnType<typeof readSearchAdminRegistrySnapshot>>,
+  expectedRole?: SearchAdminRole): Promise<boolean> {
+  const actual = await readSearchAdminRegistrySnapshot(db, expectedRole);
+  return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 export async function recheckSearchAdminSnapshot(db: AdminDb,
