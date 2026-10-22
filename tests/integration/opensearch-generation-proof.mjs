@@ -3,11 +3,11 @@ import console from 'node:console';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import process from 'node:process';
-import { URL } from 'node:url';
 import { Client } from '@opensearch-project/opensearch';
 import { makeV2Eligible, makeV2Fence, OPENSEARCH_MAPPING_V2 } from '../../packages/search/dist/index.js';
 import { boundedSearchSdkRequest, SearchEngineError } from '../../packages/search/dist/opensearch-runtime.js';
 import { assertCompleteSecurityCollections } from '../support/opensearch-generation-collections.mjs';
+import { staticRoles } from '../../packages/search/dist/opensearch-static-roles.js';
 
 assert.equal(process.env.OPENSEARCH_URL, 'https://opensearch:9200');
 const endpoint = process.env.OPENSEARCH_URL;
@@ -72,7 +72,6 @@ const v1Roles = {
 };
 const v1Mappings = { station_query: mapping('station-search-query'),
   station_indexer: mapping('station-search-indexer') };
-const staticRoles = JSON.parse(await readFile(new URL('../fixtures/opensearch-static-roles-3.9.0.0.json', import.meta.url), 'utf8'));
 const genRoles = Object.fromEntries(generations.flatMap(g => [
   [g.writerRole, role(g.index, 'writer')], [g.queryRole, role(g.index, 'query')]]));
 const genMappings = Object.fromEntries(generations.flatMap(g => [

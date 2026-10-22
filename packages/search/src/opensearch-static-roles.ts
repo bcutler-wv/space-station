@@ -1,4 +1,5 @@
-{
+// Reviewed projection of OpenSearch Security 3.9.0.0 static roles; provenance in THIRD_PARTY.md.
+export const staticRoles = {
   "all_access": {
     "reserved": true,
     "hidden": false,
@@ -246,4 +247,4 @@
       }
     ]
   }
-}
+} as const;
