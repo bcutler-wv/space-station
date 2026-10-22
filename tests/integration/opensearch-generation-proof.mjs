@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import process from 'node:process';
 import { Client } from '@opensearch-project/opensearch';
-import { makeV2Eligible, makeV2Fence, OPENSEARCH_MAPPING_V2 } from '../../packages/search/dist/index.js';
+import { makeV2Eligible, makeV2Fence, createV2IndexBody,
+  verifyV2IndexProfile } from '../../packages/search/dist/index.js';
 import { boundedSearchSdkRequest, SearchEngineError } from '../../packages/search/dist/opensearch-runtime.js';
 import { assertCompleteSecurityCollections } from '../support/opensearch-generation-collections.mjs';
 import { staticRoles } from '../../packages/search/dist/opensearch-static-roles.js';
@@ -19,21 +20,6 @@ const generations = tokens.map((token, slot) => {
     writerPrincipal: `station-search-indexer-${suffix}`,
     queryPrincipal: `station-search-query-${suffix}` };
 });
-const settings = { number_of_shards: 1, number_of_replicas: 0, max_result_window: 200,
-  refresh_interval: '1s', mapping: { total_fields: { limit: 64 } }, replication: { type: 'DOCUMENT' } };
-function assertSettings(index, actual) {
-  const { uuid, creation_date: created, provided_name: name, version, ...semantic } = actual ?? {};
-  assert.match(uuid ?? '', /^[A-Za-z0-9_-]{1,128}$/, 'bounded engine UUID');
-  assert.match(created ?? '', /^\d{1,20}$/, 'bounded creation timestamp');
-  assert.equal(name, index, 'literal provided index name');
-  assert.match(version?.created ?? '', /^\d{1,20}$/, 'pinned creation version');
-  assert.ok(Object.keys(version ?? {}).every(key => ['created', 'upgraded'].includes(key)),
-    'no unknown version metadata');
-  if (version?.upgraded !== undefined) assert.match(version.upgraded, /^\d{1,20}$/);
-  assert.deepEqual(semantic, { number_of_shards: '1', number_of_replicas: '0',
-    max_result_window: '200', refresh_interval: '1s', mapping: { total_fields: { limit: '64' } },
-    replication: { type: 'DOCUMENT' } }, 'exact v2 settings');
-}
 const extraNames = ['station_fixture_ordinary', 'station_fixture_hidden'];
 const read = async path => {
   const value = await readFile(path);
@@ -165,12 +151,11 @@ try {
   phase = 'fixture setup';
   for (const g of generations) {
     const created = await sdk(admin, (c, options) => c.indices.create({ index: g.index,
-      body: { settings, mappings: OPENSEARCH_MAPPING_V2 } }, options));
+      body: createV2IndexBody(g.index) }, options));
     assert.equal(created.acknowledged, true);
     owned.indexes.push(g.index);
     const profile = await sdk(admin, (c, options) => c.indices.get({ index: g.index }, options), 128_000);
-    assert.deepEqual(profile[g.index]?.mappings, OPENSEARCH_MAPPING_V2, 'exact v2 mapping');
-    assertSettings(g.index, profile[g.index]?.settings?.index);
+    verifyV2IndexProfile(profile, g.index, null);
     for (const name of [g.writerRole, g.queryRole]) {
       await path(admin, 'PUT', `/_plugins/_security/api/roles/${name}`, genRoles[name]);
       owned.roles.push(name);
