@@ -94,6 +94,29 @@ run_as_pair() {
   fi
 }
 
+compose_error_class() {
+  local error_file=$1
+  if grep -Eiq 'permission denied|operation not permitted|EACCES' "$error_file"; then
+    echo permission
+  elif grep -Eiq 'exec format error|cannot execute binary file|wrong architecture' "$error_file"; then
+    echo exec-format
+  elif grep -Eiq 'config\.json|docker context|current context|docker host|docker endpoint' "$error_file"; then
+    echo config-context
+  elif grep -Eiq 'not a docker command|invalid plugin|plugin metadata|cli-plugin' "$error_file"; then
+    echo plugin-metadata
+  else
+    echo other
+  fi
+}
+
+public_version() {
+  if [[ "$1" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][A-Za-z0-9.+-]+)?$ ]]; then
+    printf '%s' "$1"
+  else
+    printf 'unrecognized'
+  fi
+}
+
 for pair in default runner; do
   if [[ "$pair" == default ]]; then pair_uid=1000; pair_gid=1000;
   else pair_uid="$runner_uid"; pair_gid="$runner_gid"; fi
@@ -158,7 +181,57 @@ for pair in default runner; do
   run_as_pair test -r .dockerignore
   run_as_pair test -r compose.yaml
   phase=compose-plugin
-  pair_compose_version=$(run_as_pair docker compose version --short 2>> "$log")
+  pair_plugin="$pair_home/.docker/cli-plugins/docker-compose"
+  if [[ "$compose_path" == "$compose_plugin" ]]; then source_link=no; else source_link=yes; fi
+  if [[ "$compose_path" == "$HOME/"* ]]; then source_location=runner-home
+  elif [[ "$compose_path" == /usr/* ]]; then source_location=system
+  else source_location=other; fi
+  if ! pair_docker_path=$(run_as_pair sh -c 'command -v docker' 2>> "$log"); then
+    echo 'Compose probe: pair Docker command is unavailable.' >&2; exit 1
+  fi
+  runner_docker_path=$(command -v docker)
+  if ! pair_docker_real=$(realpath -e -- "$pair_docker_path" 2>> "$log") ||
+     ! runner_docker_real=$(realpath -e -- "$runner_docker_path" 2>> "$log"); then
+    echo 'Compose probe: Docker command path does not resolve.' >&2; exit 1
+  fi
+  if [[ "$pair_docker_real" == "$runner_docker_real" ]]; then
+    docker_path_match=yes
+  else
+    docker_path_match=no
+  fi
+  echo "Compose probe: source=$source_location symlink=$source_link runner-version=$(public_version "$runner_compose_version") docker-path-match=$docker_path_match." >&2
+  for pair_path in "$pair_home" "$pair_home/.docker" "$pair_home/.docker/cli-plugins"; do
+    if ! run_as_pair test -r "$pair_path" || ! run_as_pair test -x "$pair_path"; then
+      echo 'Compose probe: pair directory read/execute denied.' >&2; exit 1
+    fi
+  done
+  if ! run_as_pair test -r "$pair_plugin" || ! run_as_pair test -x "$pair_plugin"; then
+    echo 'Compose probe: pair plugin read/execute denied.' >&2; exit 1
+  fi
+  plugin_metadata="$scratch/compose-metadata-$pair.json"
+  plugin_metadata_error="$scratch/compose-metadata-$pair.err"
+  if ! run_as_pair "$pair_plugin" docker-cli-plugin-metadata > "$plugin_metadata" 2> "$plugin_metadata_error"; then
+    echo "Compose probe: direct metadata failed class=$(compose_error_class "$plugin_metadata_error")." >&2
+    exit 1
+  fi
+  if ! metadata_version=$(node -e '
+    const metadata = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    if (typeof metadata.SchemaVersion !== "string" ||
+        typeof metadata.Vendor !== "string" ||
+        typeof metadata.Version !== "string") process.exit(1);
+    process.stdout.write(metadata.Version);
+  ' "$plugin_metadata" 2>> "$log"); then
+    echo 'Compose probe: direct metadata was invalid.' >&2; exit 1
+  fi
+  echo "Compose probe: direct metadata passed version=$(public_version "$metadata_version")." >&2
+  pair_compose_output="$scratch/compose-version-$pair.out"
+  pair_compose_error="$scratch/compose-version-$pair.err"
+  if ! run_as_pair docker compose version --short > "$pair_compose_output" 2> "$pair_compose_error"; then
+    echo "Compose probe: Docker version failed class=$(compose_error_class "$pair_compose_error")." >&2
+    exit 1
+  fi
+  pair_compose_version=$(cat "$pair_compose_output")
+  echo "Compose probe: pair-version=$(public_version "$pair_compose_version")." >&2
   if [[ "$pair_compose_version" != "$runner_compose_version" ]]; then
     echo 'Pair Compose version differs from runner.' >&2; exit 1
   fi
