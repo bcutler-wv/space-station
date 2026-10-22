@@ -303,8 +303,33 @@ try {
     entry.digest === createHash('sha256').update('Owner attachment').digest('hex')));
 
   // Provider acceptance precedes durable app success; the provider process survives.
-  await page.goto(`${origin}/mail`);
+  // Hold the fresh page's account context so a click cannot silently select an
+  // empty account before the request completes.
+  let contextRequested = false;
+  let releaseContext;
+  const contextReleased = new Promise((resolve) => { releaseContext = resolve; });
+  await page.route('**/api/mail/context', async (route) => {
+    contextRequested = true;
+    await contextReleased;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${origin}/mail`);
+    await until('fresh mail context requested', async () => contextRequested, 5_000);
+    await expect(page.getByRole('button', { name: 'New message' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Continue' })).toHaveCount(0);
+  } finally {
+    releaseContext();
+  }
+  await expect(page.getByRole('button', { name: 'New message' })).toBeEnabled();
+  await page.unroute('**/api/mail/context');
   await page.getByRole('button', { name: 'New message' }).click();
+  try {
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
+  } catch (error) {
+    await screenshot(page, 'new-message-start-failure').catch(() => {});
+    throw error;
+  }
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.getByRole('textbox', { name: 'To' }).fill('recipient@example.com');
   await page.getByRole('textbox', { name: 'Subject' }).fill('Example unknown send');
