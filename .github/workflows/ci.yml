@@ -126,11 +126,21 @@ jobs:
       - run: node scripts/init-search-generation-identity.mjs 22222222-2222-4222-8222-222222222222
       - run: mkdir -p .cache/results
       - run: node tests/support/opensearch-generation-collections.test.mjs && node tests/support/opensearch-generation-container.test.mjs
-      - run: docker compose --profile search --profile fixture build search-init search-profile-bootstrap search-contract search-profile-drift search-generation-proof
+      - run: docker compose --profile search --profile search-introduce --profile fixture build search-init search-profile-introduce search-profile-bootstrap search-contract search-profile-drift search-generation-proof
+      - run: docker compose --profile search config --format json | node tests/support/opensearch-bootstrap-compose.test.mjs retained
+      - run: docker compose --profile search --profile search-introduce config --format json | node tests/support/opensearch-bootstrap-compose.test.mjs introduce
+      - run: |
+          retained_probe=''
+          introduce_probe=''
+          trap 'docker rm -f "$retained_probe" "$introduce_probe" >/dev/null 2>&1 || true' EXIT
+          retained_probe=$(docker compose --profile search run -d --no-deps --entrypoint sleep search-profile-bootstrap 120)
+          introduce_probe=$(docker compose --profile search-introduce run -d --no-deps --entrypoint sleep search-profile-introduce 120)
+          node tests/support/opensearch-bootstrap-container.test.mjs "$retained_probe" "$introduce_probe"
       - run: docker compose --profile search run --rm -T --no-deps search-init
       - run: docker compose --profile search up -d --no-deps opensearch
       - run: bash scripts/opensearch-container-gate.sh
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+      - run: docker compose --profile search --profile search-introduce run --rm -T --no-deps search-profile-introduce
       - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_CONTRACT_PHASE=initial search-contract
@@ -149,6 +159,11 @@ jobs:
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
       - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role-restore search-profile-drift
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=delete-v1 search-profile-drift
+      - run: '! docker compose --profile search run --rm -T --no-deps search-profile-bootstrap'
+      - run: '! docker compose --profile search --profile search-introduce run --rm -T --no-deps search-profile-introduce'
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=assert-missing search-profile-drift
       - if: always()
         run: |
           mkdir -p .cache/results

@@ -280,11 +280,27 @@ services:
       OPENSEARCH_IDENTITY_DIR: /run/station-admin
     volumes:
       - search_admin_certs:/run/station-admin:ro
+      - search_security_state:/run/station-state:ro
     networks:
       - search_internal
     depends_on:
       search-security-bootstrap:
         condition: service_completed_successfully
+    restart: "no"
+
+  search-profile-introduce:
+    profiles: [search-introduce]
+    build: .
+    user: "1000:1000"
+    command: ["node", "packages/search/dist/opensearch-introduce.js"]
+    environment:
+      OPENSEARCH_URL: https://opensearch:9200
+      OPENSEARCH_IDENTITY_DIR: /run/station-admin
+    volumes:
+      - search_admin_certs:/run/station-admin:ro
+      - search_security_state:/run/station-state
+    networks:
+      - search_internal
     restart: "no"
 
   search-contract:

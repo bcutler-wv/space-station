@@ -106,7 +106,7 @@ test('only the pinned static action groups are accepted', () => {
 });
 
 test('full profile rejects semantic settings beyond engine metadata', () => {
-  expect(() => verifyProfile(profile())).not.toThrow();
+  expect(verifyProfile(profile())).toBe('abc_123');
   const rejectedProfile = (body: unknown, check: 'mapping' | 'settings') => {
     let error: unknown;
     try { verifyProfile(body); } catch (cause) { error = cause; }

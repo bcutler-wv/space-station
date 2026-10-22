@@ -131,7 +131,7 @@ function boundedJsonBytes(value: unknown, max: number): boolean {
   } catch { return false; }
 }
 
-export function verifyProfile(body: unknown): void {
+export function verifyProfile(body: unknown): string {
   const index = record(record(body)[SEARCH_INDEX]);
   if (!sameJson(index.mappings, OPENSEARCH_MAPPING)) throw new SearchEngineError('profile', undefined, 'mapping');
   let settings: Record<string, unknown>;
@@ -154,6 +154,7 @@ export function verifyProfile(body: unknown): void {
   if (!sameJson(metadata, { number_of_shards: '1', number_of_replicas: '0', max_result_window: '200',
     refresh_interval: '1s', mapping: { total_fields: { limit: '64' } },
     replication: { type: 'DOCUMENT' } })) throw new SearchEngineError('profile', undefined, 'settings');
+  return settings.uuid as string;
 }
 
 function strings(value: unknown): string[] {
@@ -301,7 +302,7 @@ export async function openSearchAccess(input: { endpoint: string; identityDir: s
   };
   const profile = async () => {
     const response = await json(options => client.indices.get({ index: SEARCH_INDEX }, options) as unknown as Abortable, 128_000);
-    verifyProfile(response);
+    return verifyProfile(response);
   };
   const verifySecurity = async () => {
     if (input.role !== 'admin') throw new SearchEngineError('configuration');
@@ -321,14 +322,13 @@ export async function openSearchAccess(input: { endpoint: string; identityDir: s
     await check('role-mappings', async () => verifyAllRoleMappings(await get('/_plugins/_security/api/rolesmapping')));
     await check('action-groups', async () => verifyActionGroups(await get('/_plugins/_security/api/actiongroups')));
   };
-  const createProfile = async () => {
+  const createProfileStrict = async () => {
     if (input.role !== 'admin') throw new SearchEngineError('configuration');
-    try { await profile(); return; }
-    catch (error) { if (!(error instanceof SearchEngineError) || error.kind !== 'status' || error.statusCode !== 404) throw error; }
     const result = record(await json(options => client.indices.create({ index: SEARCH_INDEX,
       body: { settings: INDEX_SETTINGS, mappings: OPENSEARCH_MAPPING } }, options) as unknown as Abortable, 32_768));
-    if (result.acknowledged !== true || result.shards_acknowledged !== true) throw new SearchEngineError('partial');
-    await profile();
+    if (result.acknowledged !== true || result.shards_acknowledged !== true || result.index !== SEARCH_INDEX)
+      throw new SearchEngineError('partial');
+    return profile();
   };
   const search = async (plan: Extract<SearchCompileResult, { status: 'ok' }>, size = 100) => {
     if (input.role !== 'query' || plan?.status !== 'ok' || plan.profile !== OPENSEARCH_PROFILE ||
@@ -366,6 +366,6 @@ export async function openSearchAccess(input: { endpoint: string; identityDir: s
     const shards = record(result._shards);
     if (shards.failed !== 0 || shards.successful !== shards.total) throw new SearchEngineError('partial');
   };
-  return { info, health, profile, verifySecurity, createProfile, search, index, remove, bulk, refresh,
+  return { info, health, profile, verifySecurity, createProfileStrict, search, index, remove, bulk, refresh,
     close: () => client.close() };
 }

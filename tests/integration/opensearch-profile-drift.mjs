@@ -8,7 +8,8 @@ import { openSearchAccess, SearchEngineError, SEARCH_INDEX } from '../../package
 const endpoint = process.env.OPENSEARCH_URL;
 const phase = process.env.SEARCH_DRIFT_PHASE;
 assert.equal(endpoint, 'https://opensearch:9200');
-assert.ok(['profile', 'restore', 'role', 'shadow', 'shadow-restore'].includes(phase));
+assert.ok(['profile', 'restore', 'role', 'role-restore', 'shadow', 'shadow-restore',
+  'delete-v1', 'assert-missing'].includes(phase));
 const root = '/run/station-admin';
 const [ca, cert, key] = await Promise.all(['ca.pem', 'admin.pem', 'admin.key'].map(name => readFile(`${root}/${name}`)));
 const admin = new Client({ node: endpoint, ssl: { ca, cert, key, rejectUnauthorized: true },
@@ -61,6 +62,23 @@ try {
     await adminAccess.verifySecurity();
     assert.equal(await querySettingsStatus(), 403, 'query identity retained settings authority after fixture restore');
     console.info('OpenSearch shadow action group was restored only by explicit fixture cleanup.');
+  } else if (phase === 'role-restore') {
+    await admin.transport.request({ method: 'DELETE', path: '/_plugins/_security/api/rolesmapping/station_fixture_excess' });
+    await admin.transport.request({ method: 'DELETE', path: '/_plugins/_security/api/roles/station_fixture_excess' });
+    await adminAccess.verifySecurity();
+    await query.profile();
+    console.info('OpenSearch fixture excess role was explicitly removed.');
+  } else if (phase === 'delete-v1') {
+    await adminAccess.verifySecurity();
+    await query.profile();
+    const result = await admin.indices.delete({ index: SEARCH_INDEX });
+    assert.equal(result.body?.acknowledged, true);
+    await assert.rejects(admin.indices.get({ index: SEARCH_INDEX }), error => error?.meta?.statusCode === 404);
+    console.info('Disposable v1 index was deleted for retained-loss proof.');
+  } else if (phase === 'assert-missing') {
+    await adminAccess.verifySecurity();
+    await assert.rejects(admin.indices.get({ index: SEARCH_INDEX }), error => error?.meta?.statusCode === 404);
+    console.info('Disposable v1 remained absent after both failed bootstrap paths.');
   } else {
     await adminAccess.verifySecurity();
     await query.profile();
