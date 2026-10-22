@@ -1,0 +1,9 @@
+# Disposable generation permission proof
+
+Version 0.47.0 adds a disposable Ubuntu fixture for the pinned OpenSearch runtime. Two fake generations use distinct literal indexes, writer/query roles and client identities. The fixture checks complete admin role and mapping collections against reviewed upstream static roles plus exact expected application grants. Ordinary and hidden extra grants must be visible and independently rejected. Replaying the first generation's immutable policy must leave the second unchanged.
+
+Positive checks cover strict external-version live documents followed by same-ID content-free fences. Negative checks cover cross-generation and v1 access, query writes, writer search, bulk, delete, administration and implicit index creation. The writer grant remains exactly index/get on its literal index. Whether this grant supports single-document writes while denying bulk must be established by the actual pinned image; source review is not engine evidence.
+
+The optional fixture container mounts only selected identities read-only on the internal search network, with bounded resources and no published port. No private CA key, application credentials or database access is added. It reuses the existing official SDK streaming deadline and response caps. The gate checks actual container isolation and removes disposable resources.
+
+Astra review required independent rejection of observed extra roles and mappings and positive external-version live-to-fence assertions. Both corrections passed rereview. The full local check passed 110 tests; comparator, container-boundary, lint and syntax checks passed. Actual Ubuntu engine and Compose results remain pending. No live publisher, query consumer, admin transition or permission broadening is included, and M2 remains incomplete.

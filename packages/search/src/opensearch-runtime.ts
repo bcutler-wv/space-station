@@ -107,6 +107,10 @@ async function boundedRequest<T>(invoke: (options: SDKOptions) => Abortable,
   });
 }
 
+// Test fixtures share the production SDK streaming deadline/cap without a
+// second HTTP stack. The helper exports no client or credentials.
+export { boundedRequest as boundedSearchSdkRequest };
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SearchEngineError('response');
   return value as Record<string, unknown>;

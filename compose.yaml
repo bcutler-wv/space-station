@@ -277,6 +277,35 @@ services:
       - search_query_certs:/run/station-query:ro
     restart: "no"
 
+  search-generation-proof:
+    profiles: [fixture]
+    build: .
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    group_add:
+      - "1000"
+    command: ["node", "tests/integration/opensearch-generation-proof.mjs"]
+    environment:
+      OPENSEARCH_URL: https://opensearch:9200
+    networks:
+      - search_internal
+    volumes:
+      - search_admin_certs:/run/station-admin:ro
+      - search_query_certs:/run/station-query:ro
+      - search_indexer_certs:/run/station-indexer:ro
+      - ./.cache/search-generations/11111111111141118111111111111111:/run/generation-a:ro
+      - ./.cache/search-generations/22222222222242228222222222222222:/run/generation-b:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+
 networks:
   mail_parser:
     internal: true

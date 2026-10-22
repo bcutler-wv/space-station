@@ -79,6 +79,14 @@ and `2dc932397aef59f151b238e35ae9e94ecd0b5f1567e088d8317cba6b10eab806`).
 It lets retained-security verification reject any custom action group,
 including a group shadowing a literal role action. No plugin code is copied.
 
+The disposable two-generation proof's
+`tests/fixtures/opensearch-static-roles-3.9.0.0.json` projects only the eight
+roles from the same Security plugin's
+[tagged static-role YAML](https://github.com/opensearch-project/security/blob/3.9.0.0/src/main/resources/static_config/static_roles.yml)
+(`sha256:ebb94f16771052f8eed7b0987f35d1f7eaffd743a6e30380c05761fda84784a5`).
+It is a reviewed comparison oracle, not runtime configuration. The retained
+Security plugin license and notice above cover this data; no dependency was added.
+
 The manual proof and optional private Compose profile pin the official OpenSearch 3.9.0 Linux image index
 `sha256:adfa61f85025d06b4aeb562e7e74fde7e31c437039c93c3862c17e9acebd6c7c`.
 Its [tagged release](https://github.com/opensearch-project/OpenSearch/releases/tag/3.9.0)
