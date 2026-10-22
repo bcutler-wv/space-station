@@ -115,6 +115,7 @@ export const searchGenerationControl = pgTable('search_generation_control', {
   revision: integer('revision').notNull().default(1),
   stage: text('stage').notNull().default('disabled'),
   transitionToken: text('transition_token'),
+  sourceGenerationToken: text('source_generation_token').references(() => searchGenerationHistory.generationToken),
   generationToken: text('generation_token'),
   physicalIndex: text('physical_index'),
   indexUuid: text('index_uuid'),
@@ -126,7 +127,7 @@ export const searchGenerationControl = pgTable('search_generation_control', {
   check('search_generation_singleton', sql`${t.singleton} = 1`),
   check('search_generation_revision_positive', sql`${t.revision} > 0`),
   check('search_generation_disabled_p1', sql`${t.publicationEnabled} = false and ${t.servingReady} = false`),
-  check('search_generation_stage', sql`${t.stage} in ('disabled', 'disabled_intent', 'unavailable')`),
+  check('search_generation_stage', sql`${t.stage} in ('disabled', 'disabled_intent', 'create_requested', 'uuid_bound', 'writer_role_requested', 'writer_role_attested', 'writer_mapping_requested', 'writer_attested', 'query_role_requested', 'query_role_attested', 'query_mapping_requested', 'roles_attested', 'unavailable')`),
   check('search_generation_identity_pair', sql`(${t.generationToken} is null and ${t.physicalIndex} is null and ${t.profileId} is null and ${t.indexUuid} is null) or
     (${t.generationToken} is not null and ${t.physicalIndex} is not null and ${t.profileId} is not null and ${t.profileId} = 'station-mail-v2')`),
   check('search_generation_intent_bound', sql`${t.stage} <> 'disabled_intent' or
@@ -142,10 +143,42 @@ export const searchGenerationHistory = pgTable('search_generation_history', {
   generationToken: text('generation_token').primaryKey(),
   physicalIndex: text('physical_index').notNull().unique(),
   profileId: text('profile_id').notNull(),
+  indexUuid: text('index_uuid').unique(),
+  lifecycle: text('lifecycle').notNull().default('reserved'),
+  writerRole: text('writer_role').unique(),
+  queryRole: text('query_role').unique(),
+  writerPrincipal: text('writer_principal').unique(),
+  queryPrincipal: text('query_principal').unique(),
+  writerCertFingerprint: text('writer_cert_fingerprint'),
+  queryCertFingerprint: text('query_cert_fingerprint'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
-  check('search_generation_history_profile', sql`${t.profileId} = 'station-mail-v2'`),
+  check('search_generation_history_profile', sql`(${t.generationToken} = 'legacy-v1' and ${t.physicalIndex} = 'station-mail-v1' and ${t.profileId} = 'station-mail-v1') or (${t.generationToken} <> 'legacy-v1' and ${t.profileId} = 'station-mail-v2' and ${t.physicalIndex} ~ '^station-mail-v2-g[a-z0-9]{16,64}$')`),
+  check('search_generation_history_lifecycle', sql`${t.lifecycle} in ('reserved', 'bound', 'roles_attested', 'retired_retained', 'abandoned', 'unavailable')`),
+  check('search_generation_history_uuid', sql`(${t.lifecycle} = 'reserved' and ${t.indexUuid} is null) or (${t.lifecycle} in ('bound', 'roles_attested', 'retired_retained') and ${t.indexUuid} is not null) or ${t.lifecycle} in ('abandoned', 'unavailable')`),
+  check('search_generation_history_identity', sql`(${t.generationToken} = 'legacy-v1' and ${t.writerRole} is null and ${t.queryRole} is null and ${t.writerPrincipal} is null and ${t.queryPrincipal} is null) or (${t.generationToken} <> 'legacy-v1' and ${t.writerRole} is not null and ${t.queryRole} is not null and ${t.writerPrincipal} is not null and ${t.queryPrincipal} is not null)`),
+  check('search_generation_history_v2_token', sql`${t.generationToken} = 'legacy-v1' or ${t.generationToken} ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'`),
+  check('search_generation_history_names', sql`${t.generationToken} = 'legacy-v1' or (${t.writerRole} = 'station_indexer_' || lower(replace(${t.generationToken}, '-', '')) and ${t.queryRole} = 'station_query_' || lower(replace(${t.generationToken}, '-', '')) and ${t.writerPrincipal} = 'station-search-indexer-' || lower(replace(${t.generationToken}, '-', '')) and ${t.queryPrincipal} = 'station-search-query-' || lower(replace(${t.generationToken}, '-', '')))`),
+  check('search_generation_history_fingerprints', sql`(${t.writerCertFingerprint} is null or ${t.writerCertFingerprint} ~ '^[0-9a-f]{64}$') and (${t.queryCertFingerprint} is null or ${t.queryCertFingerprint} ~ '^[0-9a-f]{64}$')`),
+  check('search_generation_history_index_uuid_bound', sql`${t.indexUuid} is null or ${t.indexUuid} ~ '^[A-Za-z0-9_-]{1,128}$'`),
+  check('search_generation_history_attestation', sql`${t.generationToken} = 'legacy-v1' or ${t.lifecycle} not in ('roles_attested', 'retired_retained') or (${t.writerCertFingerprint} is not null and ${t.queryCertFingerprint} is not null)`),
   check('search_generation_history_bounds', sql`length(${t.generationToken}) between 1 and 128 and length(${t.physicalIndex}) between 1 and 128`),
+]);
+
+export const searchGenerationDispatch = pgTable('search_generation_dispatch', {
+  generationToken: text('generation_token').notNull().references(() => searchGenerationHistory.generationToken),
+  operation: text('operation').notNull(),
+  dispatchId: text('dispatch_id').notNull().unique(),
+  ownerId: text('owner_id').notNull(),
+  target: text('target').notNull(),
+  bodyIdentity: text('body_identity').notNull(),
+  state: text('state').notNull().default('armed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.generationToken, t.operation] }),
+  check('search_generation_dispatch_operation', sql`${t.operation} in ('create_index', 'writer_role', 'writer_mapping', 'query_role', 'query_mapping')`),
+  check('search_generation_dispatch_state', sql`${t.state} in ('armed', 'sent_unknown', 'response_confirmed', 'quiesced')`),
+  check('search_generation_dispatch_bounds', sql`length(${t.dispatchId}) between 1 and 128 and length(${t.ownerId}) between 1 and 128 and length(${t.target}) between 1 and 128 and length(${t.bodyIdentity}) between 1 and 128`),
 ]);
 
 export const searchDocuments = pgTable('search_documents', {

@@ -1,7 +1,7 @@
 import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { openDatabase } from './connection.js';
-import { searchGenerationControl, searchGenerationHistory } from './schema.js';
+import { searchGenerationControl, searchGenerationHistory, searchGenerationDispatch } from './schema.js';
 import { boundSearchTransaction } from './search-ledger.js';
 
 type Database = ReturnType<typeof openDatabase>['db'];
@@ -43,13 +43,23 @@ export async function casDisabledSearchGeneration(tx: Transaction,
   if (!current) throw new Error('Missing search generation control');
   if (!sameExpected(current, expected)) return null;
   if (current.publicationEnabled || current.servingReady) throw new Error('Search generation is enabled');
+  // This compatibility helper predates P2. It may never clear a registered
+  // source, a P2 stage, or a durable external dispatch.
+  if (!['disabled', 'disabled_intent', 'unavailable'].includes(current.stage) ||
+      current.sourceGenerationToken !== null || current.indexUuid !== null ||
+      (await tx.select({ id: searchGenerationDispatch.dispatchId }).from(searchGenerationDispatch).limit(1)).length)
+    throw new Error('P1 search generation CAS cannot alter P2 state');
   if (change.stage === 'disabled_intent') {
     token.parse(change.transitionToken);
     token.parse(change.generationToken);
     if (!physicalName.test(change.physicalIndex)) throw new Error('Invalid search physical index');
     // Unique token and literal name enforce never-reuse even after clearing control.
+    const suffix = change.generationToken.replaceAll('-', '').toLowerCase();
     await tx.insert(searchGenerationHistory).values({ generationToken: change.generationToken,
-      physicalIndex: change.physicalIndex, profileId: 'station-mail-v2' });
+      physicalIndex: change.physicalIndex, profileId: 'station-mail-v2',
+      writerRole: `station_indexer_${suffix}`, queryRole: `station_query_${suffix}`,
+      writerPrincipal: `station-search-indexer-${suffix}`,
+      queryPrincipal: `station-search-query-${suffix}` });
   }
   const set = change.stage === 'disabled_intent' ? {
     stage: change.stage, transitionToken: change.transitionToken,

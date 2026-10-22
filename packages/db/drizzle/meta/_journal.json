@@ -127,6 +127,13 @@
       "when": 1792686376151,
       "tag": "0017_kind_azazel",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792689036569,
+      "tag": "0018_hard_jean_grey",
+      "breakpoints": true
     }
   ]
 }

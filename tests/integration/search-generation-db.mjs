@@ -85,6 +85,16 @@ try {
   const reserved = await control();
   assert.equal(reserved.generationToken, proposal.generationToken);
   assert.equal((await db.select().from(searchGenerationHistory)).length, 1);
+  await assert.rejects(db.transaction(async (tx) => {
+    const replacement = { transitionToken: randomUUID(), generationToken: randomUUID(),
+      physicalIndex: `station-mail-v2-g${randomUUID().replaceAll('-', '')}` };
+    const updated = await casDisabledSearchGeneration(tx, reserved,
+      { stage: 'disabled_intent', ...replacement });
+    assert.equal(updated.generationToken, replacement.generationToken,
+      'P1 may replace an unregistered intent before dispatch');
+    throw new Error('rollback P1 replacement probe');
+  }), /rollback P1 replacement probe/);
+  assert.equal((await control()).generationToken, proposal.generationToken);
   assert.equal(await db.transaction((tx) => casDisabledSearchGeneration(tx, initial,
     { stage: 'disabled' })), null, 'stale revision cannot change current generation');
   assert.equal(await db.transaction((tx) => casDisabledSearchGeneration(tx,
@@ -94,16 +104,34 @@ try {
   const disabled = await db.transaction((tx) => casDisabledSearchGeneration(tx, reserved,
     { stage: 'disabled' }));
   assert.equal(disabled?.generationToken, null);
+  await assert.rejects(db.transaction(async (tx) => {
+    const unavailable = await casDisabledSearchGeneration(tx, disabled, { stage: 'unavailable' });
+    const replacement = { transitionToken: randomUUID(), generationToken: randomUUID(),
+      physicalIndex: `station-mail-v2-g${randomUUID().replaceAll('-', '')}` };
+    const updated = await casDisabledSearchGeneration(tx, unavailable,
+      { stage: 'disabled_intent', ...replacement });
+    assert.equal(updated.generationToken, replacement.generationToken,
+      'P1 may replace an unavailable unregistered intent');
+    throw new Error('rollback P1 unavailable replacement probe');
+  }), /rollback P1 unavailable replacement probe/);
   await assert.rejects(db.transaction((tx) => casDisabledSearchGeneration(tx, disabled, proposal)),
     (error) => pgCode(error) === '23505', 'reserved names/tokens cannot be reused');
   assert.equal((await control()).revision, disabled.revision, 'failed reuse rolls back CAS');
 
-  await db.update(searchGenerationControl).set({ revision: 2_147_483_647 });
-  const exhausted = await control();
-  await assert.rejects(db.transaction((tx) => casDisabledSearchGeneration(tx, exhausted,
-    { stage: 'unavailable' })), /revision exhausted/);
-  assert.equal((await control()).revision, 2_147_483_647, 'overflow rolls back');
-  await db.update(searchGenerationControl).set({ revision: disabled.revision });
+  await assert.rejects(db.transaction(async (tx) => {
+    // Fixture-only counter setup, rolled back with the entire transaction.
+    await tx.execute(sql`alter table search_generation_control disable trigger search_generation_control_guard_trigger`);
+    await tx.update(searchGenerationControl).set({ revision: 2_147_483_647 });
+    await tx.execute(sql`alter table search_generation_control enable trigger search_generation_control_guard_trigger`);
+    const [exhausted] = await tx.select().from(searchGenerationControl);
+    await assert.rejects(casDisabledSearchGeneration(tx, exhausted,
+      { stage: 'unavailable' }), /revision exhausted/);
+    await assert.rejects(tx.update(searchGenerationControl).set({ revision: 1 }),
+      (error) => /generation revision exhausted/.test(error.cause?.message ?? ''),
+      'direct DML cannot wrap an exhausted revision');
+    throw new Error('rollback fixture counter setup');
+  }), /rollback fixture counter setup/);
+  assert.equal((await control()).revision, disabled.revision, 'overflow setup rolls back');
 
   const accountId = randomUUID(), itemId = randomUUID();
   await assert.rejects(db.insert(searchDocuments).values({ accountId, itemId,
@@ -113,6 +141,7 @@ try {
   assert.equal((await db.select().from(searchDocuments)).length, 0);
 
   await assert.rejects(db.transaction(async (tx) => {
+    await tx.execute(sql`alter table search_generation_control disable trigger search_generation_control_guard_trigger`);
     await tx.delete(searchGenerationControl);
     await lockSearchGenerationControl(tx);
   }), /Missing search generation control/, 'missing singleton denies in the transaction');

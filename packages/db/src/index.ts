@@ -10,7 +10,11 @@ export { drafts, draftAttachments, outboundOperations } from './schema.js';
 export { mailChangeOperations } from './schema.js';
 export { collectDraftAttachmentBlobs } from './draft-attachment-collector.js';
 export { collectOutboundOperations } from './outbound-collector.js';
-export { searchDocuments, searchEpochs, searchGenerationControl, searchGenerationHistory } from './schema.js';
+export { searchDocuments, searchEpochs, searchGenerationControl, searchGenerationHistory, searchGenerationDispatch } from './schema.js';
+export { enrollLegacySearchGeneration, reserveSearchGeneration, advanceSearchGeneration,
+  armSearchGenerationDispatch, updateSearchGenerationDispatch,
+  recordSearchGenerationCertEvidence } from './search-generation-admin.js';
+export { buildSearchGenerationManifest, searchGenerationDispatchSpec } from './search-generation-manifest.js';
 export { lockSearchGenerationControl, casDisabledSearchGeneration,
   type SearchGenerationExpectation } from './search-generation.js';
 export { establishSearchAccountEpoch, bumpSearchGlobalEpoch, bumpSearchAccountEpoch, dirtySearchItems,
