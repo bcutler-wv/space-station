@@ -92,6 +92,56 @@ export const syncEvents = pgTable('sync_events', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [check('sync_events_kind', sql`${t.kind} in ('sync-progress', 'mail-changed')`)]);
 
+// Inactive M2 search foundation. Operational rows deliberately outlive source rows.
+export const searchEpochs = pgTable('search_epochs', {
+  scope: text('scope').primaryKey(),
+  epoch: integer('epoch').notNull().default(1),
+  sweepTarget: integer('sweep_target').notNull().default(1),
+  sweepTargetGlobal: integer('sweep_target_global').notNull().default(1),
+  sweepCursorAccount: text('sweep_cursor_account'),
+  sweepCursorItem: text('sweep_cursor_item'),
+  sweepFinishedEpoch: integer('sweep_finished_epoch').notNull().default(0),
+  sweepFinishedGlobal: integer('sweep_finished_global').notNull().default(0),
+  physicalProfile: text('physical_profile'),
+}, (t) => [
+  check('search_epochs_positive', sql`${t.epoch} > 0 and ${t.sweepTarget} > 0 and ${t.sweepTargetGlobal} > 0 and ${t.sweepFinishedEpoch} >= 0 and ${t.sweepFinishedGlobal} >= 0`),
+  check('search_epochs_cursor_pair', sql`(${t.sweepCursorAccount} is null) = (${t.sweepCursorItem} is null)`),
+  check('search_epochs_scope_bound', sql`length(${t.scope}) <= 64`),
+]);
+
+export const searchDocuments = pgTable('search_documents', {
+  accountId: text('account_id').notNull(),
+  itemId: text('item_id').notNull(),
+  documentId: text('document_id').notNull(),
+  desiredRevision: integer('desired_revision').notNull().default(1),
+  desiredState: text('desired_state').notNull().default('dirty'),
+  globalEpoch: integer('global_epoch').notNull().default(0),
+  accountEpoch: integer('account_epoch').notNull().default(0),
+  sourceSequence: integer('source_sequence'),
+  actionEpoch: integer('action_epoch'),
+  observedActionEpoch: integer('observed_action_epoch'),
+  observedAuthorizationGeneration: integer('observed_authorization_generation'),
+  authorizationGeneration: integer('authorization_generation'),
+  sourceParseStatus: text('source_parse_status'),
+  sourceDeleted: boolean('source_deleted'),
+  acknowledgedRevision: integer('acknowledged_revision'),
+  acknowledgedGlobalEpoch: integer('acknowledged_global_epoch'),
+  acknowledgedAccountEpoch: integer('acknowledged_account_epoch'),
+  claimToken: text('claim_token'),
+  claimUntil: timestamp('claim_until', { withTimezone: true }),
+  retryCount: integer('retry_count').notNull().default(0),
+  retryAt: timestamp('retry_at', { withTimezone: true }),
+  errorCode: text('error_code'),
+}, (t) => [
+  primaryKey({ columns: [t.accountId, t.itemId] }),
+  uniqueIndex('search_documents_document_id_unique').on(t.documentId),
+  index('search_documents_dirty_idx').on(t.desiredState, t.accountId, t.itemId),
+  check('search_documents_revision_positive', sql`${t.desiredRevision} > 0 and (${t.acknowledgedRevision} is null or ${t.acknowledgedRevision} > 0 and ${t.acknowledgedRevision} <= ${t.desiredRevision})`),
+  check('search_documents_state', sql`${t.desiredState} in ('dirty', 'eligible', 'purge')`),
+  check('search_documents_retry_nonnegative', sql`${t.retryCount} >= 0`),
+  check('search_documents_operational_bounds', sql`length(${t.accountId}) <= 64 and length(${t.itemId}) <= 64 and length(${t.documentId}) <= 128 and (${t.errorCode} is null or length(${t.errorCode}) <= 32) and (${t.claimToken} is null or length(${t.claimToken}) <= 128)`),
+]);
+
 export const authChallenges = pgTable("auth_challenges", {
   id: text("id").primaryKey(),
   challengeHash: text("challenge_hash").notNull(),
@@ -268,6 +318,7 @@ export const items = pgTable('items', {
   index('items_reader_account_thread_live_idx').on(t.accountId, t.threadId, t.deletedAt, t.internalAt, t.id),
   index('items_observation_refresh_idx').on(t.accountId, t.collectionId, t.id)
     .where(sql`${t.deletedAt} is null and ${t.parseStatus} = 'supported'`),
+  index('items_search_reconcile_idx').on(t.accountId, t.id),
   unique('items_id_account_unique').on(t.id, t.accountId),
   foreignKey({ columns: [t.threadId, t.accountId, t.collectionId], foreignColumns: [threads.id, threads.accountId, threads.collectionId] }),
   foreignKey({ columns: [t.fromPersonId, t.accountId], foreignColumns: [people.id, people.accountId] }),

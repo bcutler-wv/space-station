@@ -334,7 +334,7 @@ export async function applyMailPage(db: Database, store: PrivateBlobStore, page:
 const DENIED = { canIndex: false, canUseAi: false, canEmbed: false } as const;
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 
-async function evaluateStoredMailPrivacySnapshot(db: Transaction, itemId: string) {
+async function evaluateStoredMailPrivacySnapshot(db: Transaction, itemId: string, expectedOrigin?: string) {
   const [item] = await db.select({ accountId: items.accountId, deletedAt: items.deletedAt,
     parseStatus: items.parseStatus, senderIdentitiesComplete: items.senderIdentitiesComplete })
     .from(items).where(eq(items.id, itemId));
@@ -343,7 +343,7 @@ async function evaluateStoredMailPrivacySnapshot(db: Transaction, itemId: string
   const [marker] = await db.select({ value: settings.value }).from(settings).where(eq(settings.key, 'first_orbit_setup_v1'));
   const defaults = z.object({ version: z.literal(1), orbitId: z.string().uuid(), confirmedOrigin: z.url(),
     globalDefaults: privacyDefaultsSchema }).safeParse(marker?.value);
-  if (!account || !defaults.success) return DENIED;
+  if (!account || !defaults.success || (expectedOrigin !== undefined && defaults.data.confirmedOrigin !== expectedOrigin)) return DENIED;
   const memberships = await db.select({ orbitId: itemOrbits.orbitId }).from(itemOrbits).where(eq(itemOrbits.itemId, itemId)).limit(65);
   if (memberships.length > 64) return DENIED;
   const orbitIds = [...new Set(memberships.map((row) => row.orbitId))];
@@ -390,9 +390,7 @@ export async function evaluateStoredMailPrivacy(db: Database, itemId: string) {
 
 // A grant is current only inside this transaction. Later index publication and
 // serving must recheck it; a cached result cannot survive an action or rule edit.
-export async function evaluateDerivedMailEligibility(db: Database, itemId: string) {
-  return db.transaction(async (tx) => {
-    await boundPrivacySnapshot(tx);
+export async function evaluateDerivedMailEligibilityInTransaction(tx: Transaction, itemId: string, expectedOrigin?: string) {
     const [item] = await tx.select({ accountId: items.accountId, deletedAt: items.deletedAt,
       parseStatus: items.parseStatus, actionEpoch: items.actionEpoch,
       observedActionEpoch: items.observedActionEpoch,
@@ -411,7 +409,13 @@ export async function evaluateDerivedMailEligibility(db: Database, itemId: strin
       .where(and(eq(mailChangeOperations.itemId, itemId),
         sql`${mailChangeOperations.state} in ('pending', 'in_flight', 'outcome_unknown')`)).limit(1);
     if (unresolved) return DENIED;
-    return evaluateStoredMailPrivacySnapshot(tx, itemId);
+    return evaluateStoredMailPrivacySnapshot(tx, itemId, expectedOrigin);
+}
+
+export async function evaluateDerivedMailEligibility(db: Database, itemId: string) {
+  return db.transaction(async (tx) => {
+    await boundPrivacySnapshot(tx);
+    return evaluateDerivedMailEligibilityInTransaction(tx, itemId);
   }, privacySnapshot);
 }
 

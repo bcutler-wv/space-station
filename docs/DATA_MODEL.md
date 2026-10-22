@@ -37,6 +37,8 @@ An account belongs to exactly one Orbit. An item can appear in several Orbits th
 
 Global exclusions and every matching Orbit's AI/index policy compose by **most restrictive effect**. Routing changes and tightened policy enqueue invalidation of affected search documents, embeddings, extracted attachment text, AI outputs, summaries, briefings, and citation caches before new retrieval. Keep source records if permitted for ordinary mail/calendar use; erase prohibited derived records and rebuild only when policy allows. See SECURITY.md.
 
+The inactive M2 search foundation has `search_epochs` and `search_documents`. The epoch rows hold global/account version and bounded reconciliation cursors. Each document row holds opaque account/item/document IDs, a checked positive desired revision, desired state, epoch pair, metadata-only source/action witness, and bounded operational status. There is no source foreign key or cascade: a deleted source leaves a content-free `purge` row. These rows are not permission grants and production source writes do not yet maintain them; atomic hooks are the separately reviewed next slice.
+
 ## People and organizations
 
 | Table | Key fields |

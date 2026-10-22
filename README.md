@@ -6,7 +6,7 @@ Station is a self-hosted mission control for your work. It brings your email, ca
 >
 > **Name:** "Station" is a working name. The product name lives in one config constant so it can change later.
 
-M2 search work has a pure OpenSearch query compiler and an Astra-reviewed private runtime foundation awaiting Ubuntu validation. The current Mail UI still uses its existing subject filter; no search indexer or result-serving path is enabled.
+M2 search work has a pure OpenSearch query compiler and a private runtime foundation that passed its Ubuntu security, role, restart and configuration-drift gate. The current Mail UI still uses its existing subject filter; no search indexer or result-serving path is enabled.
 
 ## Planned product
 
