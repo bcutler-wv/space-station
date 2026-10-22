@@ -259,10 +259,11 @@ jobs:
           name: google-browser-screenshots
           path: test-results/google-browser/*.png
           if-no-files-found: ignore
+      - run: docker compose run --rm -T --no-deps --user "$(id -u):$(id -g)" -v "$PWD/.cache/bootstrap:/run/bootstrap" app node apps/server/dist/bootstrap-cli.js /run/bootstrap/runtime-e2e-token
       - run: pnpm test:e2e
         env:
           STATION_E2E_BASE_URL: https://localhost:8080
-          STATION_E2E_BOOTSTRAP_PATH: .cache/bootstrap/token
+          STATION_E2E_BOOTSTRAP_PATH: .cache/bootstrap/runtime-e2e-token
       - if: always()
         run: docker rm -f station-passkey-app || true
       - if: always()
