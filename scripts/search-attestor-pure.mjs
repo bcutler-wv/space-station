@@ -191,6 +191,24 @@ export function validatePreparedAttestorManifest(snapshot, invocationId, manifes
   } catch { fail(); }
 }
 
+/** Shape only: offline transfer has no raw snapshot and cannot attest the digest. */
+export function validateOfflineAttestorManifest(invocationId, manifest) {
+  try {
+    if (typeof invocationId !== 'string' || !UUID.test(invocationId)) fail();
+    const received = canonical(manifest).value;
+    exact(received, ['version', 'invocationId', 'rawDigest', 'identity', 'expected', 'publicFiles']);
+    if (received.version !== 'station-attestor-manifest-v1' ||
+        received.invocationId !== invocationId ||
+        typeof received.rawDigest !== 'string' || !/^[0-9a-f]{64}$/.test(received.rawDigest)) fail();
+    validateIdentity(received.identity);
+    validateExpected(received.expected);
+    buildExpectedSecurityPolicy(received.expected);
+    const wanted = canonical(publicFiles(received.expected)).value;
+    if (JSON.stringify(received.publicFiles) !== JSON.stringify(wanted)) fail();
+    return received;
+  } catch { fail(); }
+}
+
 /** Compare an already bounded fixed observer result to every ready history entry. */
 export function compareReadyAttestorObservation(expected, observed) {
   try {
