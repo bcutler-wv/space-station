@@ -63,6 +63,7 @@ jobs:
       - run: node --test tests/support/search-attestor-pure.test.mjs
       - run: node --test tests/support/search-attestor-command.test.mjs
       - run: node --test tests/support/search-attestor-transfer.test.mjs
+      - run: node tests/support/search-attestor-public-staging.test.mjs
       - run: node tests/integration/search-attestor-job-lock.mjs
       - run: node tests/integration/search-generation-identity.mjs
       - run: node tests/integration/mail-parser.mjs

@@ -167,6 +167,29 @@ async function verifyClientPurpose(caBytes, leafBytes, scratchRoot = '/tmp', pur
   }
 }
 
+/** Validate an already captured, manifest-derived public PEM set. No source paths enter OpenSSL. */
+export async function validateCapturedAttestorPublic(manifest, bytes, now,
+  scratchRoot = '/tmp', purposeExec = execFileAsync) {
+  try {
+    validateCapturedAttestorPublicAtTime(manifest, bytes, now);
+    await verifyClientPurpose(bytes.get('ca.pem'), manifest.publicFiles.filter(row => row.role !== 'ca')
+      .map(row => bytes.get(row.path)), scratchRoot, purposeExec);
+  } catch { fail(); }
+}
+
+/** Fresh synchronous certificate check after any external purpose process completes. */
+export function validateCapturedAttestorPublicAtTime(manifest, bytes, now) {
+  try {
+    if (!(bytes instanceof Map) || bytes.size !== manifest.publicFiles.length ||
+        manifest.publicFiles.some(row => !bytes.has(row.path))) fail();
+    const ca = validateCa(bytes.get('ca.pem'), now);
+    for (const row of manifest.publicFiles) {
+      if (row.role === 'ca') continue;
+      validateLeaf(bytes.get(row.path), ca, row.principal, row.fingerprint, now);
+    }
+  } catch { fail(); }
+}
+
 async function publicInventory(root, expected, adminRoot, uid, gid, now, adminOwnership,
   scratchRoot, purposeExec) {
   const rootStat = await fixedDirectory(root, uid, gid, 0o700);
@@ -204,13 +227,7 @@ async function publicInventory(root, expected, adminRoot, uid, gid, now, adminOw
     seen.set(path, item.stat);
     if (!item.bytes.equals(bytes.get(name === 'ca.pem' ? 'ca.pem' : 'v1/admin.pem'))) fail();
   }
-  const ca = validateCa(bytes.get('ca.pem'), now);
-  for (const row of expected.publicFiles) {
-    if (row.role === 'ca') continue;
-    validateLeaf(bytes.get(row.path), ca, row.principal, row.fingerprint, now);
-  }
-  await verifyClientPurpose(bytes.get('ca.pem'), expected.publicFiles.filter(row => row.role !== 'ca')
-    .map(row => bytes.get(row.path)), scratchRoot, purposeExec);
+  await validateCapturedAttestorPublic(expected, bytes, now, scratchRoot, purposeExec);
   return async finalNow => {
     for (const [path, stat] of seen) if (!same(stat, await lstat(path)) ||
         await realpath(path) !== resolve(path)) fail();
