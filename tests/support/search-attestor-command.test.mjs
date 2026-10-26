@@ -30,9 +30,9 @@ const replaceReadOnly = async (path, bytes) => {
 test('dedicated attestor image has the reviewed OpenSSL package', () => {
   if (process.env.SEARCH_ATTESTOR_IMAGE_PROOF !== '1') return;
   assert.equal(execFileSync('dpkg-query', ['-W', '-f=${Version}', 'openssl'],
-    { encoding: 'utf8', timeout: 5_000 }), '3.0.22-1~deb12u1');
+    { encoding: 'utf8', timeout: 5_000 }), '3.0.22-1~deb12u2');
   assert.equal(execFileSync('dpkg-query', ['-W', '-f=${Version}', 'libssl3'],
-    { encoding: 'utf8', timeout: 5_000 }), '3.0.22-1~deb12u1');
+    { encoding: 'utf8', timeout: 5_000 }), '3.0.22-1~deb12u2');
   assert.match(execFileSync('/usr/bin/openssl', ['version'],
     { encoding: 'utf8', timeout: 5_000 }), /^OpenSSL 3\.0\.22\b/);
 });

@@ -16,9 +16,9 @@ CMD ["node", "apps/server/dist/main.js"]
 FROM runtime AS search-attestor
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      openssl=3.0.22-1~deb12u1 libssl3=3.0.22-1~deb12u1 \
-    && test "$(dpkg-query -W -f='${Version}' openssl)" = '3.0.22-1~deb12u1' \
-    && test "$(dpkg-query -W -f='${Version}' libssl3)" = '3.0.22-1~deb12u1' \
+      openssl=3.0.22-1~deb12u2 libssl3=3.0.22-1~deb12u2 \
+    && test "$(dpkg-query -W -f='${Version}' openssl)" = '3.0.22-1~deb12u2' \
+    && test "$(dpkg-query -W -f='${Version}' libssl3)" = '3.0.22-1~deb12u2' \
     && rm -rf /var/lib/apt/lists/*
 USER node
 
