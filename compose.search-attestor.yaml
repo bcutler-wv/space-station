@@ -1,0 +1,123 @@
+services:
+  search-attestor-prepare:
+    profiles: [search-attestor]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-attestor-prepare.mjs"]
+    user: "${APP_UID:?Set APP_UID}:${APP_GID:?Set APP_GID}"
+    volumes:
+      - type: bind
+        source: ./.cache/search-db/initial-v1/verifier.password
+        target: /run/search-db/password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_ATTESTOR_INVOCATION_ROOT:?Set STATION_ATTESTOR_INVOCATION_ROOT}
+        target: /run/search-attestor
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_ATTESTOR_INVOCATION_ROOT:?Set STATION_ATTESTOR_INVOCATION_ROOT}/manifest
+        target: /run/search-attestor/manifest
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,uid=${APP_UID:?Set APP_UID},gid=${APP_GID:?Set APP_GID},mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [search_admin_db]
+    restart: "no"
+
+  search-attestor-transfer:
+    profiles: [search-attestor]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-attestor-transfer.mjs"]
+    user: "0:0"
+    volumes:
+      - type: bind
+        source: ./.cache/search-db/initial-v1/verifier.password
+        target: /run/search-transfer-password/password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_ATTESTOR_INVOCATION_ROOT:?Set STATION_ATTESTOR_INVOCATION_ROOT}/invocation
+        target: /run/search-transfer-invocation/invocation
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_ATTESTOR_INVOCATION_ROOT:?Set STATION_ATTESTOR_INVOCATION_ROOT}/manifest/manifest.json
+        target: /run/search-transfer-manifest/manifest.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_ATTESTOR_PUBLIC_ROOT:?Set STATION_ATTESTOR_PUBLIC_ROOT}
+        target: /run/search-transfer-public
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: search_attestor_input
+        target: /run/search-attestor
+        volume:
+          nocopy: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,uid=0,gid=0,mode=0700
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    network_mode: none
+    restart: "no"
+
+  search-engine-attestor:
+    profiles: [search-attestor]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-attestor-combined.mjs"]
+    user: "1000:1000"
+    volumes:
+      - type: volume
+        source: search_attestor_input
+        target: /run/search-attestor
+        read_only: true
+        volume:
+          nocopy: true
+      - type: volume
+        source: search_admin_certs
+        target: /run/station-admin
+        read_only: true
+      - type: volume
+        source: search_security_state
+        target: /run/station-state
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [search_admin_db, search_internal]
+    restart: "no"
+
+volumes:
+  search_attestor_input:
+    external: true
+    name: ${STATION_ATTESTOR_VOLUME_NAME:?Set STATION_ATTESTOR_VOLUME_NAME}
