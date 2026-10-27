@@ -7,6 +7,7 @@ import { Client } from '@opensearch-project/opensearch';
 import { makeV2Eligible, makeV2Fence, createV2IndexBody,
   verifyV2IndexProfile } from '../../packages/search/dist/index.js';
 import { boundedSearchSdkRequest, SearchEngineError } from '../../packages/search/dist/opensearch-runtime.js';
+import { createLiteralV2IndexOnce } from '../../packages/search/dist/opensearch-create-index.js';
 import { assertCompleteSecurityCollections } from '../support/opensearch-generation-collections.mjs';
 import { staticRoles } from '../../packages/search/dist/opensearch-static-roles.js';
 
@@ -150,9 +151,15 @@ try {
 
   phase = 'fixture setup';
   for (const g of generations) {
-    const created = await sdk(admin, (c, options) => c.indices.create({ index: g.index,
-      body: createV2IndexBody(g.index) }, options));
-    assert.equal(created.acknowledged, true);
+    if (g.slot === 0) {
+      const created = await createLiteralV2IndexOnce(admin.indices, g.index);
+      assert.match(created.uuid, /^[A-Za-z0-9_-]{1,128}$/,
+        'fixed SDK adapter actual create/readback shape');
+    } else {
+      const created = await sdk(admin, (c, options) => c.indices.create({ index: g.index,
+        body: createV2IndexBody(g.index) }, options));
+      assert.equal(created.acknowledged, true);
+    }
     owned.indexes.push(g.index);
     const profile = await sdk(admin, (c, options) => c.indices.get({ index: g.index }, options), 128_000);
     verifyV2IndexProfile(profile, g.index, null);

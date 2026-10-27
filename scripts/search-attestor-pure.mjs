@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { classifySearchGenerationRegistry } from '../packages/db/dist/search-generation-oracle.js';
+import { buildSearchGenerationManifest } from '../packages/db/dist/search-generation-manifest.js';
 import { buildExpectedSecurityPolicy, compareObservedSecurityCollections } from '../packages/search/dist/opensearch-generation-policy.js';
 import { verifyProfile } from '../packages/search/dist/opensearch-runtime.js';
 import { verifyV2IndexProfile } from '../packages/search/dist/opensearch-v2-profile.js';
@@ -73,18 +74,18 @@ function timestamp(text, date) {
       text.replace(/\.(\d{3})\d{3}Z$/, '.$1Z') !== Date.prototype.toISOString.call(date)) fail();
 }
 
-function validateIdentity(identity) {
+function validateIdentity(identity, expectedRole = 'station_search_verifier') {
   exact(identity, ['sessionUser', 'currentUser', 'database', 'databaseOid', 'databaseOwner']);
-  if (identity.sessionUser !== 'station_search_verifier' || identity.currentUser !== identity.sessionUser ||
+  if (identity.sessionUser !== expectedRole || identity.currentUser !== expectedRole ||
       identity.database !== 'station' || identity.databaseOwner !== 'station' ||
       !Number.isSafeInteger(identity.databaseOid) || identity.databaseOid < 1) fail();
 }
 
-function validateSnapshot(snapshot) {
+function validateSnapshot(snapshot, requireReady = true) {
   canonical(snapshot);
   exact(snapshot, ['control', 'history', 'dispatch', 'identity', 'exactTimestamps']);
   const { control, history, dispatch, identity, exactTimestamps } = snapshot;
-  validateIdentity(identity);
+  validateIdentity(identity, requireReady ? 'station_search_verifier' : 'station_search_transition');
   if (!Array.isArray(history) || !Array.isArray(dispatch) || history.length > 512 || dispatch.length > 2_560) fail();
   exact(exactTimestamps, ['control', 'history', 'dispatch']);
   const sideControl = exact(exactTimestamps.control, ['singleton', 'updatedAt']);
@@ -112,8 +113,8 @@ function validateSnapshot(snapshot) {
     timestamp(side.createdAt, row.createdAt);
   }
   const classified = classifySearchGenerationRegistry({ control, history, dispatch });
-  if (classified.status !== 'ready') fail();
-  return classified.expected;
+  if (requireReady && classified.status !== 'ready' || classified.status === 'incident') fail();
+  return classified;
 }
 
 function publicFiles(expected) {
@@ -165,7 +166,7 @@ function validateExpected(expected) {
 
 function derive(snapshot, invocationId) {
   if (typeof invocationId !== 'string' || !UUID.test(invocationId)) fail();
-  const expected = validateSnapshot(snapshot);
+  const expected = validateSnapshot(snapshot).expected;
   const raw = canonical({ version: 'station-attestor-raw-v1', invocationId, snapshot });
   const derived = canonical(expected);
   const files = publicFiles(expected);
@@ -234,6 +235,79 @@ export function compareReadyAttestorObservation(expected, observed) {
     }
     return 'exact';
   } catch { fail(); }
+}
+
+/** Partial create evidence is deliberately disjoint from registry readiness. */
+export function assessCreateIndexEvidence(snapshot, observed, expectation) {
+  try {
+    canonical(expectation);
+    exact(expectation, ['phase', 'revision', 'stage', 'transitionToken', 'sourceToken',
+      'sourceIndex', 'candidateToken', 'candidateIndex', 'dispatchId', 'ownerId', 'createdUuid']);
+    if (!['precreate', 'postcreate'].includes(expectation.phase) ||
+        !Number.isSafeInteger(expectation.revision) || expectation.revision < 1 ||
+        !['disabled_intent', 'create_requested'].includes(expectation.stage) ||
+        !UUID.test(expectation.transitionToken) ||
+        typeof expectation.sourceToken !== 'string' ||
+        typeof expectation.sourceIndex !== 'string' ||
+        !UUID.test(expectation.candidateToken) ||
+        typeof expectation.candidateIndex !== 'string' ||
+        (expectation.dispatchId !== null && !UUID.test(expectation.dispatchId)) ||
+        (expectation.ownerId !== null && !UUID.test(expectation.ownerId)) ||
+        (expectation.dispatchId === null) !== (expectation.ownerId === null) ||
+        (expectation.phase === 'precreate' ? expectation.createdUuid !== null :
+          typeof expectation.createdUuid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(expectation.createdUuid))) fail();
+    const classified = validateSnapshot(snapshot, false);
+    if (classified.status !== 'incomplete' ||
+        !['transition_in_progress', 'armed', 'sent_unknown'].includes(classified.reason)) fail();
+    const { control, history, dispatch } = snapshot;
+    if (control.revision !== expectation.revision || control.stage !== expectation.stage ||
+        control.transitionToken !== expectation.transitionToken ||
+        control.sourceGenerationToken !== expectation.sourceToken ||
+        control.generationToken !== expectation.candidateToken ||
+        control.publicationEnabled !== false || control.servingReady !== false) fail();
+    const candidate = history.find(row => row.generationToken === expectation.candidateToken);
+    const source = history.find(row => row.generationToken === expectation.sourceToken);
+    if (!candidate || !source || source.physicalIndex !== expectation.sourceIndex ||
+        candidate.physicalIndex !== expectation.candidateIndex ||
+        source.lifecycle !== 'roles_attested' ||
+        candidate.lifecycle !== 'reserved' || candidate.indexUuid !== null ||
+        candidate.writerCertFingerprint !== null || candidate.queryCertFingerprint !== null ||
+        candidate.profileId !== 'station-mail-v2' || control.profileId !== 'station-mail-v2' ||
+        control.physicalIndex !== candidate.physicalIndex || control.indexUuid !== null ||
+        history.some(row => row !== candidate && !['roles_attested', 'retired_retained', 'abandoned'].includes(row.lifecycle))) fail();
+    const create = dispatch.filter(row => row.generationToken === candidate.generationToken);
+    if (create.length > 1 || create.some(row => row.operation !== 'create_index')) fail();
+    if (control.stage === 'disabled_intent') {
+      if (expectation.phase !== 'precreate' || create.length || expectation.dispatchId !== null) fail();
+    } else if (control.stage === 'create_requested') {
+      const item = create[0];
+      if (!item || item.dispatchId !== expectation.dispatchId || item.ownerId !== expectation.ownerId ||
+          item.state !== (expectation.phase === 'precreate' ? 'armed' : 'sent_unknown')) fail();
+    } else fail();
+    canonical(observed, 2 * 1024 * 1024);
+    exact(observed, ['indexes', 'roles', 'mappings']);
+    const manifest = buildSearchGenerationManifest(history);
+    const prior = manifest.filter(row => row.token !== candidate.generationToken);
+    const expected = { version: 'station-generation-registry-v1', generations: prior.map(row => ({
+      ...row, presence: row.presence === 'absent' ? 'absent' : 'exact',
+    })) };
+    const policy = buildExpectedSecurityPolicy(expected);
+    if (compareObservedSecurityCollections(policy, observed.roles, observed.mappings) !== 'exact') fail();
+    const names = prior.filter(row => row.presence !== 'absent').map(row => row.index);
+    if (expectation.phase === 'postcreate') names.push(candidate.physicalIndex);
+    exact(observed.indexes, names);
+    for (const row of prior.filter(row => row.presence !== 'absent')) {
+      const body = { [row.index]: exact(observed.indexes[row.index], ['aliases', 'mappings', 'settings']) };
+      const found = row.profile === 'station-mail-v1' ? verifyProfile(body) :
+        verifyV2IndexProfile(body, row.index, row.uuid);
+      if (found !== row.uuid) fail();
+    }
+    if (expectation.phase === 'postcreate' &&
+        verifyV2IndexProfile({ [candidate.physicalIndex]:
+          exact(observed.indexes[candidate.physicalIndex], ['aliases', 'mappings', 'settings']) },
+        candidate.physicalIndex, expectation.createdUuid) !== expectation.createdUuid) fail();
+    return { status: 'create-evidence', phase: expectation.phase, ready: false };
+  } catch { return { status: 'create-evidence-rejected', ready: false }; }
 }
 
 /** Existing owner metadata uses decimal OID text; never coerce its 64-bit system ID. */

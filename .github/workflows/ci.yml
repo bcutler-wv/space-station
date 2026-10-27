@@ -61,6 +61,7 @@ jobs:
       - run: pnpm audit --audit-level high
       - run: pnpm check
       - run: node --test tests/support/search-attestor-pure.test.mjs
+      - run: node --test tests/support/search-create-evidence.test.mjs
       - run: node --test tests/support/search-attestor-command.test.mjs
       - run: node --test tests/support/search-attestor-transfer.test.mjs
       - run: node tests/support/search-attestor-public-staging.test.mjs
