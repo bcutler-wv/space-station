@@ -37,9 +37,12 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let attestorSuccess = false;
   let mode = 'unselected', attestorStage = 'preflight', attestorAttempted = false;
   let attestorDurablePhase = null, attestorCleanup = false, attestorTerminalAttempted = false;
+  let boundaryStage = 'preflight', boundaryAttempted = false, boundaryDurablePhase = null;
+  let boundaryCleanup = false, boundaryTerminalAttempted = false, boundarySuccess = false;
   const operationId = randomUUID();
   const releaseError = error => {
     if (mode === 'attestor') fail('attestor lock release');
+    if (mode === 'create-boundary') fail('create boundary lock release');
     throw error;
   };
   const assertOwned = async () => {
@@ -102,6 +105,39 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       attestorCleanup = true;
     },
   });
+  const boundary = Object.freeze({
+    invocationId: operationId,
+    async markDispatched(phase) {
+      if (!active || mode !== 'create-boundary' ||
+          phase !== 'transfer' && phase !== 'inspect' ||
+          boundaryStage !== (phase === 'transfer' ? 'preflight' : 'transfer-confirmed') ||
+          boundaryCleanup || boundaryTerminalAttempted) fail('create boundary dispatch');
+      boundaryAttempted = true;
+      boundaryStage = `${phase}-dispatched`;
+      boundaryDurablePhase = null;
+      await appendRecord({ role: 'create-boundary', phase, state: 'dispatched' });
+      boundaryDurablePhase = phase;
+    },
+    async confirmCompletion(phase) {
+      if (!active || mode !== 'create-boundary' ||
+          phase !== 'transfer' && phase !== 'inspect' ||
+          boundaryStage !== `${phase}-dispatched` || boundaryDurablePhase !== phase ||
+          boundaryTerminalAttempted) fail('create boundary completion');
+      boundaryTerminalAttempted = true;
+      await appendRecord({ role: 'create-boundary', phase, state: 'confirmed' });
+      boundaryStage = `${phase}-confirmed`;
+      boundaryDurablePhase = null;
+      boundaryTerminalAttempted = false;
+    },
+    async confirmOwnedCleanup() {
+      if (!active || mode !== 'create-boundary' ||
+          !['transfer-confirmed', 'inspect-confirmed'].includes(boundaryStage) ||
+          boundaryCleanup || boundaryTerminalAttempted) fail('create boundary cleanup');
+      boundaryTerminalAttempted = true;
+      await appendRecord({ role: 'create-boundary', phase: boundaryStage, state: 'cleanup-complete' });
+      boundaryCleanup = true;
+    },
+  });
   const token = Object.freeze({
     root, uid,
     beginAttestor() {
@@ -109,8 +145,13 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       mode = 'attestor';
       return attestor;
     },
+    beginCreateBoundary() {
+      if (!active || mode !== 'unselected' || dispatched) fail('create boundary mode');
+      mode = 'create-boundary';
+      return boundary;
+    },
     async markDispatched(role) {
-      if (mode === 'attestor' || dispatched || !['verifier', 'transition'].includes(role)) fail('job dispatch');
+      if (mode !== 'unselected' || dispatched || !['verifier', 'transition'].includes(role)) fail('job dispatch');
       mode = 'single';
       const record = JSON.stringify({ version: 1, operationId, pid: process.pid, role, state: 'dispatched' });
       await handle.writeFile(`\n${record}\n`);
@@ -134,15 +175,17 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (mode === 'attestor' && (attestorStage !== 'attestor-confirmed' || !attestorCleanup))
       fail('attestor incomplete');
     if (mode === 'attestor') attestorSuccess = true;
+    if (mode === 'create-boundary' &&
+        (boundaryStage !== 'inspect-confirmed' || !boundaryCleanup)) fail('create boundary incomplete');
+    if (mode === 'create-boundary') boundarySuccess = true;
     return result;
   } finally {
     active = false;
     held.delete(token);
     const original = await handle.stat().catch(() => null);
     await handle.close().catch(() => {});
-    const canRelease = mode === 'attestor'
-      ? !attestorAttempted || attestorCleanup
-      : !dispatched || confirmed;
+    const canRelease = mode === 'attestor' ? !attestorAttempted || attestorCleanup :
+      mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup : !dispatched || confirmed;
     let released = false;
     if (prepared && canRelease && original) {
       const currentRoot = await lstat(root).catch(() => null);
@@ -156,7 +199,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
             current.uid === uid && (current.mode & 0o777) === 0o600 &&
             current.dev === original.dev && current.ino === original.ino) {
           try {
-            if (mode === 'attestor' && fixtureFaultAt === 'before-release-rm')
+            if ((mode === 'attestor' || mode === 'create-boundary') && fixtureFaultAt === 'before-release-rm')
               fail('fixture release fault');
             await rm(lockPath);
             await syncDirectory(root);
@@ -168,5 +211,6 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       }
     }
     if (attestorSuccess && !released) fail('attestor lock release');
+    if (boundarySuccess && !released) fail('create boundary lock release');
   }
 }

@@ -1,0 +1,79 @@
+services:
+  search-create-transfer:
+    profiles: [search-create-boundary]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-create-boundary-transfer.mjs"]
+    user: "0:0"
+    volumes:
+      - type: bind
+        source: ./.cache/search-db/initial-v1/transition.password
+        target: /run/create-transfer-password/password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${STATION_CREATE_INVOCATION_ROOT:?Set STATION_CREATE_INVOCATION_ROOT}/invocation
+        target: /run/create-transfer-invocation/invocation
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: search_create_input
+        target: /run/create-boundary
+        volume:
+          nocopy: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,uid=0,gid=0,mode=0700
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    network_mode: none
+    restart: "no"
+
+  search-create-boundary:
+    profiles: [search-create-boundary]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-create-boundary.mjs"]
+    user: "1000:1000"
+    volumes:
+      - type: volume
+        source: search_create_input
+        target: /run/create-boundary
+        read_only: true
+        volume:
+          nocopy: true
+      - type: volume
+        source: search_admin_certs
+        target: /run/station-admin
+        read_only: true
+        volume:
+          nocopy: true
+      - type: volume
+        source: search_security_state
+        target: /run/station-state
+        read_only: true
+        volume:
+          nocopy: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [search_admin_db, search_internal]
+    restart: "no"
+
+volumes:
+  search_create_input:
+    external: true
+    name: ${STATION_CREATE_VOLUME_NAME:?Set STATION_CREATE_VOLUME_NAME}

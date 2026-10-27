@@ -62,6 +62,10 @@ jobs:
       - run: pnpm check
       - run: node --test tests/support/search-attestor-pure.test.mjs
       - run: node --test tests/support/search-create-evidence.test.mjs
+      - run: node --test tests/support/search-create-boundary-lock.test.mjs
+      - run: node --test tests/support/search-create-boundary-transfer.test.mjs
+      - run: node --test tests/support/search-create-boundary-core.test.mjs
+      - run: node --test tests/support/search-create-boundary-service-config.test.mjs
       - run: node --test tests/support/search-attestor-command.test.mjs
       - run: node --test tests/support/search-attestor-transfer.test.mjs
       - run: node tests/support/search-attestor-public-staging.test.mjs
@@ -92,6 +96,7 @@ jobs:
           station-search-attestor-fixture
           node --test tests/support/search-attestor-command.test.mjs
       - run: bash tests/support/search-attestor-render-proof.sh
+      - run: bash tests/support/search-create-boundary-render-proof.sh
 
   search-attestor-delivery:
     runs-on: ubuntu-latest

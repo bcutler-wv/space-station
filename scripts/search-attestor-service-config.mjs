@@ -41,6 +41,9 @@ function volume(mount, source, target, readOnly, nocopy) {
         mount.volume !== undefined && !keys(mount.volume, []))) fail();
 }
 
+// Fixed create-boundary configuration reuses these exact mount primitives.
+export { keys, list, mountsByTarget, bind, volume };
+
 function common(service, name, user, command, memory, pids, cpus, tmpfs, repository,
   transfer = false) {
   const expected = ['build', 'command', 'user', 'volumes', 'read_only', 'tmpfs', 'cap_drop',
