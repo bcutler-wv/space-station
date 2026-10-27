@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import process from 'node:process';
+import test from 'node:test';
+import { fileURLToPath, URL } from 'node:url';
+import { filteredDeliveryDiagnostics } from './search-attestor-delivery-diagnostic-filter.mjs';
+
+const helper = fileURLToPath(new URL('./search-attestor-delivery-diagnostic-filter.mjs', import.meta.url));
+
+test('failure output forwards only exact finite diagnostics, never a fake secret', async t => {
+  await mkdir(path.resolve('.cache/results'), { recursive: true });
+  const root = await mkdtemp(path.resolve('.cache/results/attestor-diagnostic-filter-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const log = path.join(root, 'private.log');
+  const fakeSecret = 'FAKE_PRIVATE_SECRET_0123456789';
+  const body = [
+    `Docker failed: ${fakeSecret}`,
+    'Attestor delivery diagnostic lock-stage=prepare-dispatched.',
+    'Attestor delivery diagnostic phase-1-count=1.',
+    'Attestor delivery diagnostic phase-1-exit=137.',
+    'Attestor delivery diagnostic phase-1-tmpfs-match=false.',
+    `Attestor delivery diagnostic lock-stage=${fakeSecret}.`,
+    `Attestor delivery diagnostic scoped-config=valid.${fakeSecret}`,
+    `Attestor delivery fixture failed at complete-cli.${fakeSecret}`,
+    'Attestor delivery diagnostic arbitrary=true.',
+    'Attestor delivery diagnostic phase-4-count=1.',
+    'Attestor delivery fixture failed at complete-cli.',
+  ].join('\n');
+  await writeFile(log, body);
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [helper, log], { encoding: 'utf8', env });
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(result.stdout.trimEnd().split('\n'), filteredDeliveryDiagnostics(body));
+  assert.deepEqual(filteredDeliveryDiagnostics(body), [
+    'Attestor delivery diagnostic lock-stage=prepare-dispatched.',
+    'Attestor delivery diagnostic phase-1-count=1.',
+    'Attestor delivery diagnostic phase-1-exit=137.',
+    'Attestor delivery diagnostic phase-1-tmpfs-match=false.',
+    'Attestor delivery fixture failed at complete-cli.',
+  ]);
+  assert.equal(result.stdout.includes(fakeSecret), false);
+});

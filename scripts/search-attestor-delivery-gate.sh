@@ -129,7 +129,8 @@ cleanup() {
     chmod "${ancestor_modes[i]}" -- "${ancestor_paths[i]}" || status=1
   done
   if [[ $status != 0 ]]; then
-    grep '^Attestor delivery fixture failed at ' "$private_log" | tail -n 1 >&2 || true
+    "$(command -v node)" "$runner_root/tests/support/search-attestor-delivery-diagnostic-filter.mjs" \
+      "$private_log" >&2 2>/dev/null || echo 'Attestor delivery diagnostics unavailable.' >&2
     rm -rf -- "$gate_root" || status=1
     echo "Attestor delivery gate failed at pair=$pair phase=$phase; private log removed." >&2
   else

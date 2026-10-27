@@ -8,6 +8,8 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { runAttestorOwner } from '../../scripts/search-attestor-owner-core.mjs';
 import { createAttestorDockerAdapter } from '../../scripts/search-attestor-owner-docker.mjs';
+import { createSearchAdminDockerAdapter } from '../../scripts/search-admin-credentials.mjs';
+import { verifyAttestorServiceConfig } from '../../scripts/search-attestor-service-config.mjs';
 
 // Real Docker/PG16/OpenSearch delivery. Only the disposable failure cases
 // intercept a CLI response after its actual Docker operation has been sent.
@@ -276,6 +278,173 @@ await networkProof();
 checkpoint = 'complete-cli';
 const successful = await command('node', ['scripts/search-attestor-owner.mjs'], process.env, 245_000);
 secretFree(successful.stdout, successful.stderr);
+if (successful.code !== 0) {
+  // Read-only fixture forensics. Never print retained records, Docker output,
+  // paths, IDs, or the fixed owner's private subprocess errors.
+  const emit = (name, value) => process.stdout.write(`Attestor delivery diagnostic ${name}=${value}.\n`);
+  const count = async directory => await readdir(directory).then(items => Math.min(items.length, 99), () => -1);
+  const inspectDocker = async args => {
+    const result = await command('docker', args, process.env, 5000);
+    if (result.code !== 0 || result.signal) throw new Error('diagnostic unavailable');
+    return result.stdout;
+  };
+  let invocationId = '00000000-0000-4000-8000-000000000001';
+  let lockStage;
+  try {
+    const body = await readFile(lock, 'utf8');
+    assert.ok(body.length <= 8192);
+    const records = body.trim().split(/\n+/).map(line => JSON.parse(line));
+    assert.ok(records.length >= 1 && records.length <= 8);
+    assert.ok(records.every(item => item.version === 1 &&
+      /^[0-9a-f-]{36}$/.test(item.operationId)));
+    invocationId = records[0].operationId;
+    const last = records.at(-1);
+    lockStage = last.phase && ['prepare', 'transfer', 'attestor'].includes(last.phase) &&
+      ['dispatched', 'confirmed'].includes(last.state)
+      ? `${last.phase}-${last.state}` : last.state === 'preflight' ? 'preflight' : 'other';
+  } catch { lockStage = await existing(lock) ? 'unreadable' : 'absent'; }
+  emit('lock-stage', lockStage);
+  emit('invocation-roots', await count(invocationParent));
+  emit('public-roots', await count(publicParent));
+  try {
+    const installation = await createSearchAdminDockerAdapter(process.getuid(), process.getgid());
+    const identity = await installation.identity();
+    const metadataBody = JSON.parse(originalMetadata.bytes.toString('utf8'));
+    emit('owner-installation', 'valid');
+    emit('credential-metadata-match', metadataBody.project === identity.project &&
+      metadataBody.databaseOid === identity.databaseOid &&
+      metadataBody.systemIdentifier === identity.systemIdentifier &&
+      metadataBody.uid === process.getuid() && metadataBody.gid === process.getgid());
+  } catch { emit('owner-installation', 'invalid'); }
+  for (const [index, service] of phaseServices.entries()) {
+    const phase = index + 1;
+    try {
+      const listing = (await inspectDocker(['ps', '-a', '--no-trunc', '--filter',
+        `label=com.docker.compose.project=${project}`, '--filter',
+        `label=com.docker.compose.service=${service}`, '--format', '{{.ID}}'])).trim();
+      const values = listing ? listing.split('\n') : [];
+      assert.ok(values.length <= 2 && values.every(value => id.test(value)));
+      emit(`phase-${phase}-count`, values.length);
+      if (values.length === 1) {
+        const item = JSON.parse(await inspectDocker(['container', 'inspect', values[0]]))[0];
+        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+        const expectedCommands = [
+          ['node', 'scripts/search-attestor-prepare.mjs'],
+          ['node', 'scripts/search-attestor-transfer.mjs'],
+          ['node', 'scripts/search-attestor-combined.mjs'],
+        ];
+        const expectedTargets = [
+          ['/run/search-attestor', '/run/search-attestor/manifest', '/run/search-db/password'],
+          ['/run/search-attestor', '/run/search-transfer-invocation/invocation',
+            '/run/search-transfer-manifest/manifest.json', '/run/search-transfer-password/password',
+            '/run/search-transfer-public'],
+          ['/run/search-attestor', '/run/station-admin', '/run/station-state'],
+        ];
+        const expectedNetworks = [
+          [`${project}_search_admin_db`], [],
+          [`${project}_search_admin_db`, `${project}_search_internal`],
+        ];
+        const tmpfsOptions = phase === 1
+          ? `rw,noexec,nosuid,size=8m,uid=${process.getuid()},gid=${process.getgid()},mode=0700`
+          : phase === 2 ? 'rw,noexec,nosuid,size=8m,uid=0,gid=0,mode=0700'
+            : 'rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700';
+        const status = ['created', 'running', 'exited', 'dead'].includes(item?.State?.Status)
+          ? item.State.Status : 'other';
+        emit(`phase-${phase}-state`, status);
+        emit(`phase-${phase}-exit`, Number.isInteger(item?.State?.ExitCode) ?
+          item.State.ExitCode : 'unknown');
+        emit(`phase-${phase}-user-match`, item?.Config?.User ===
+          (phase === 1 ? `${process.getuid()}:${process.getgid()}` :
+            phase === 2 ? '0:0' : '1000:1000'));
+        emit(`phase-${phase}-command-match`, same(item?.Config?.Cmd, expectedCommands[phase - 1]));
+        emit(`phase-${phase}-labels-match`,
+          item?.Config?.Labels?.['com.docker.compose.project'] === project &&
+          item?.Config?.Labels?.['com.docker.compose.service'] === service);
+        try {
+          const built = JSON.parse(await inspectDocker(['image', 'inspect', `${project}-${service}`]))[0];
+          emit(`phase-${phase}-image-match`, item?.Image === built?.Id &&
+            same(item?.Config?.Env, built?.Config?.Env) &&
+            same(item?.Config?.Entrypoint, built?.Config?.Entrypoint));
+        } catch { emit(`phase-${phase}-image-match`, 'unavailable'); }
+        emit(`phase-${phase}-host-policy-match`, item?.HostConfig?.Privileged === false &&
+          item.HostConfig.ReadonlyRootfs === true &&
+          same(item.HostConfig.CapDrop?.map(value => value.toUpperCase()), ['ALL']) &&
+          same((item.HostConfig.CapAdd ?? []).map(value => value.toUpperCase()).sort(),
+            phase === 2 ? ['CHOWN', 'DAC_OVERRIDE'] : []) &&
+          item.HostConfig.PidsLimit === (phase === 3 ? 128 : 64) &&
+          item.HostConfig.Memory === (phase === 3 ? 536870912 : 268435456) &&
+          item.HostConfig.NanoCpus === (phase === 3 ? 1e9 : 5e8) &&
+          item.HostConfig.RestartPolicy?.Name === 'no' &&
+          same(item.HostConfig.SecurityOpt, ['no-new-privileges:true']));
+        emit(`phase-${phase}-tmpfs-match`, item?.HostConfig?.Tmpfs?.['/tmp'] === tmpfsOptions &&
+          Object.keys(item.HostConfig.Tmpfs).length === 1);
+        emit(`phase-${phase}-mount-count`, Array.isArray(item?.Mounts) ? item.Mounts.length : -1);
+        emit(`phase-${phase}-mount-targets-match`, same(item?.Mounts?.map(value =>
+          value.Destination).sort(), expectedTargets[phase - 1]));
+        emit(`phase-${phase}-host-mount-targets-match`, same(item?.HostConfig?.Mounts?.map(value =>
+          value.Target).sort(), expectedTargets[phase - 1]));
+        emit(`phase-${phase}-tmpfs-count`, item?.HostConfig?.Tmpfs &&
+          typeof item.HostConfig.Tmpfs === 'object' ? Object.keys(item.HostConfig.Tmpfs).length : -1);
+        emit(`phase-${phase}-network-count`, item?.NetworkSettings?.Networks &&
+          typeof item.NetworkSettings.Networks === 'object' ?
+          Object.keys(item.NetworkSettings.Networks).length : -1);
+        emit(`phase-${phase}-network-names-match`, same(Object.keys(
+          item?.NetworkSettings?.Networks ?? {}).filter(name => name !== 'none').sort(),
+        expectedNetworks[phase - 1]));
+      }
+    } catch { emit(`phase-${phase}-inspection`, 'unavailable'); }
+  }
+  try {
+    const listing = (await inspectDocker(['volume', 'ls', '--filter',
+      `label=station.attestor.project=${project}`, '--format', '{{.Name}}'])).trim();
+    const volumes = listing ? listing.split('\n') : [];
+    assert.ok(volumes.length <= 32 && volumes.every(value => volumePattern.test(value)));
+    emit('invocation-volumes', volumes.length);
+  }
+  catch { emit('invocation-volumes', 'unavailable'); }
+  try {
+    const env = { ...process.env,
+      STATION_ATTESTOR_INVOCATION_ROOT: path.join(invocationParent, invocationId),
+      STATION_ATTESTOR_PUBLIC_ROOT: path.join(publicParent, invocationId),
+      STATION_ATTESTOR_VOLUME_NAME: `${project}_search_attestor_${invocationId.replaceAll('-', '')}` };
+    const result = await command('docker', ['compose', '-f', 'compose.yaml',
+      '-f', 'compose.search-attestor.yaml', '-p', project, '--profile', 'search-attestor',
+      'config', '--format', 'json', ...phaseServices], env, 5000);
+    if (result.code !== 0 || result.stderr !== '') emit('scoped-config', 'command-failed');
+    else {
+      verifyAttestorServiceConfig(JSON.parse(result.stdout), { project,
+        uid: process.getuid(), gid: process.getgid(), repository, invocationId,
+        invocationRoot: env.STATION_ATTESTOR_INVOCATION_ROOT,
+        publicRoot: env.STATION_ATTESTOR_PUBLIC_ROOT,
+        volumeName: env.STATION_ATTESTOR_VOLUME_NAME });
+      emit('scoped-config', 'valid');
+    }
+  } catch { emit('scoped-config', 'invalid'); }
+  for (const [index, name] of ['search_admin_db', 'search_internal'].entries()) {
+    try {
+      const item = JSON.parse(await inspectDocker(['network', 'inspect', `${project}_${name}`]))[0];
+      emit(`network-${index + 1}-identity`, /^[0-9a-f]{64}$/.test(item?.Id) &&
+        item.Internal === true && item.Labels?.['com.docker.compose.project'] === project &&
+        item.Labels?.['com.docker.compose.network'] === name);
+    } catch { emit(`network-${index + 1}-identity`, 'unavailable'); }
+  }
+  for (const [index, name] of ['search_admin_certs', 'search_security_state'].entries()) {
+    try {
+      const item = JSON.parse(await inspectDocker(['volume', 'inspect', `${project}_${name}`]))[0];
+      emit(`volume-${index + 1}-identity`, item?.Driver === 'local' && item.Scope === 'local' &&
+        item.Labels?.['com.docker.compose.project'] === project &&
+        item.Labels?.['com.docker.compose.volume'] === name);
+    } catch { emit(`volume-${index + 1}-identity`, 'unavailable'); }
+  }
+  for (const [index, name] of phaseServices.entries()) {
+    try {
+      const item = JSON.parse(await inspectDocker(['image', 'inspect', `${project}-${name}`]))[0];
+      emit(`image-${index + 1}-identity`, /^sha256:[0-9a-f]{64}$/.test(item?.Id) &&
+        JSON.stringify(item.Config?.Cmd) === '["node","apps/server/dist/main.js"]' &&
+        JSON.stringify(item.Config?.Entrypoint) === '["docker-entrypoint.sh"]');
+    } catch { emit(`image-${index + 1}-identity`, 'unavailable'); }
+  }
+}
 assert.ok(successful.code === 0, 'fixed CLI did not complete');
 assert.ok(successful.stdout === 'Private search attestor owner verification completed.\n');
 assert.ok(successful.stderr === '');
