@@ -77,6 +77,13 @@ function container(phase, mutation) {
   if (mutation === 'volume-subpath' && phase === 'transfer')
     result.HostConfig.Mounts.find(mount => mount.Target === '/run/search-attestor')
       .VolumeOptions.Subpath = 'other';
+  if (mutation === 'combined-missing-nocopy' && phase === 'attestor')
+    result.HostConfig.Mounts.find(mount => mount.Target === '/run/station-admin')
+      .VolumeOptions.NoCopy = false;
+  if (mutation === 'combined-legacy-binds' && phase === 'attestor') {
+    const mount = result.HostConfig.Mounts.splice(1, 1)[0];
+    result.HostConfig.Binds = [`${mount.Source}:${mount.Target}:ro`];
+  }
   if (phase === 'transfer' && mutation === 'legacy-capability-spelling')
     result.HostConfig.CapAdd = ['CHOWN', 'DAC_OVERRIDE'];
   if (phase === 'transfer' && mutation === 'missing-capability')
@@ -259,7 +266,8 @@ test('only the exact transfer capability set accepts canonical and Compose spell
 
 test('scripted Docker evidence rejects changed image, mount, network, terminal, logs, volume and references', async () => {
   for (const fault of ['container-id', 'config-drift', 'config-default-drift',
-    'image', 'mount', 'nocopy', 'volume-subpath', 'create-mountpoint',
+    'image', 'mount', 'nocopy', 'volume-subpath', 'combined-missing-nocopy',
+    'combined-legacy-binds', 'create-mountpoint',
     'bind-propagation', 'bind-nonrecursive', 'extra-host-mount', 'extra-binds',
     'bind-tmp', 'duplicate-inspect-mount', 'fabricated-tmpfs-inspect-mount',
     'missing-tmpfs', 'extra-tmpfs', 'wrong-tmpfs-options',

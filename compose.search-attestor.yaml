@@ -102,10 +102,14 @@ services:
         source: search_admin_certs
         target: /run/station-admin
         read_only: true
+        volume:
+          nocopy: true
       - type: volume
         source: search_security_state
         target: /run/station-state
         read_only: true
+        volume:
+          nocopy: true
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700

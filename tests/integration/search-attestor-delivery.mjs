@@ -620,6 +620,8 @@ async function actualPhaseEvidence(phase, containerId) {
     assert.deepEqual(Object.keys(item.NetworkSettings.Networks).sort(),
       [`${project}_search_admin_db`, `${project}_search_internal`].sort());
     assert.ok(mounts.every(value => value.ReadOnly === true));
+    assert.ok(mounts.every(value => value.Type === 'volume' &&
+      value.VolumeOptions?.NoCopy === true));
   }
   assert.equal(Object.keys(item.HostConfig.PortBindings ?? {}).length, 0);
 }

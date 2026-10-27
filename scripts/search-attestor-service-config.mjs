@@ -147,9 +147,9 @@ export function verifyAttestorServiceConfig(config, expected) {
     volume(combinedMounts.get('/run/search-attestor'), 'search_attestor_input',
       '/run/search-attestor', true, true);
     volume(combinedMounts.get('/run/station-admin'), 'search_admin_certs',
-      '/run/station-admin', true, false);
+      '/run/station-admin', true, true);
     volume(combinedMounts.get('/run/station-state'), 'search_security_state',
-      '/run/station-state', true, false);
+      '/run/station-state', true, true);
     return true;
   } catch { fail(); }
 }

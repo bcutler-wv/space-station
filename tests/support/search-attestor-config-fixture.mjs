@@ -40,8 +40,8 @@ export function attestorConfig({ repository, project, invocationId, uid, gid }) 
     'search-attestor-combined', 536870912, 128, 1,
     '/tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700'),
   volumes: [volume('search_attestor_input', '/run/search-attestor', true, true),
-    volume('search_admin_certs', '/run/station-admin'),
-    volume('search_security_state', '/run/station-state')] };
+    volume('search_admin_certs', '/run/station-admin', true, true),
+    volume('search_security_state', '/run/station-state', true, true)] };
   return { name: project, services: { 'search-attestor-prepare': prepare,
     'search-attestor-transfer': transfer, 'search-engine-attestor': combined },
   networks: { search_admin_db: { name: `${project}_search_admin_db`, internal: true },
