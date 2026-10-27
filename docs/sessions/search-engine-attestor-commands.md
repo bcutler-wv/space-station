@@ -16,4 +16,6 @@ The later 0.62.0 Ubuntu run `40365548631` stopped in the dedicated-image build b
 
 The 0.63.1 repair passed dedicated-image job `121734050203` in run `40368244379` at `70297ea`. Both exact package checks and both isolated fixtures passed under the same restricted container settings. Astra accepted the image repair; full-workflow regression completion and combined DB/engine delivery remain separate.
 
+That 0.63.1 workflow subsequently passed all eight jobs. Astra verified full regression completion on 2026-10-26. Combined DB/engine delivery remains pending C4e.
+
 The OpenSSL subprocess has a five-second timeout, SIGKILL termination and bounded output. Scratch cleanup checks the captured canonical directory and inode before every unlink, requires each captured regular single-link file to retain its identity, and leaves unexpected replacement paths untouched. A timed-out whole command cannot claim completed cleanup; the future container launcher must treat that as uncertain completion.

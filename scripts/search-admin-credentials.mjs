@@ -252,7 +252,9 @@ export async function createSearchAdminDockerAdapter(uid, gid) {
       `DO $clear$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='${name}') THEN
         EXECUTE 'ALTER ROLE ${name} PASSWORD NULL'; END IF; END $clear$;`, 'role credential clearing', true);
   };
-  return { identity: async () => installation, containerId: async () => id, attestAuthentication: hba,
+  return { identity: async () => installation, containerId: async () => id,
+    adminNetwork: async () => { await unchangedEndpoint(); return { id: adminId, ip }; },
+    attestAuthentication: hba,
     targetContainersAbsent, assertRetiredContainer, terminateTargetSessions, targetSessionsZero, roleEvidence,
     audit, auditRecovery, applyPolicy, setPassword, setLogin, authenticate, authenticateRejected,
     preflightCreate, disableRoles, disableAndClearRoles };
