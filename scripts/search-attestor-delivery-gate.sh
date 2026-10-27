@@ -54,6 +54,18 @@ run_pair() {
     env -i PATH="$PATH" HOME="$pair_home" APP_UID="$pair_uid" APP_GID="$pair_gid" "$@"
   fi
 }
+run_step() {
+  phase=$1
+  shift
+  echo "Attestor delivery checkpoint pair=$pair step=$phase started."
+  if "$@" >> "$private_log" 2>&1; then
+    echo "Attestor delivery checkpoint pair=$pair step=$phase passed."
+  else
+    local code=$?
+    echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
+    exit "$code"
+  fi
+}
 cleanup_pair() {
   if [[ -n $checkout && -f $checkout/.env && -d $pair_home ]]; then
     (cd "$checkout" && run_pair env STATION_ATTESTOR_INVOCATION_ROOT="$checkout/.cache" \
@@ -130,19 +142,22 @@ trap cleanup EXIT
 make_traversable "$runner_root"
 make_traversable "$gate_root"
 
-# The runner's Compose plugin can live in a user directory. A private copy
-# lets UID 1000 use the same verified executable without DOCKER_CONFIG.
+# The runner's CLI plugins can live in a user directory. Private copies let
+# UID 1000 use the same Compose and Buildx executables without DOCKER_CONFIG.
+phase=plugin-discovery
 plugin_json="$gate_root/plugins.json"
 docker info --format '{{json .ClientInfo.Plugins}}' > "$plugin_json"
-compose_plugin=$(node -e '
+plugin_path() { node -e '
   const fs=require("node:fs");
   const all=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-  const selected=all.filter(x=>x.Name==="compose" && typeof x.Path==="string" && x.Path.startsWith("/"));
+  const selected=all.filter(x=>x.Name===process.argv[2] && typeof x.Path==="string" && x.Path.startsWith("/"));
   if(selected.length!==1)process.exit(1);
   process.stdout.write(selected[0].Path);
-' "$plugin_json")
-compose_plugin=$(realpath -e -- "$compose_plugin")
+' "$plugin_json" "$1"; }
+compose_plugin=$(realpath -e -- "$(plugin_path compose)")
+buildx_plugin=$(realpath -e -- "$(plugin_path buildx)")
 test -f "$compose_plugin" && test -x "$compose_plugin"
+test -f "$buildx_plugin" && test -x "$buildx_plugin"
 
 for pair in default runner; do
   phase=clone
@@ -163,47 +178,81 @@ for pair in default runner; do
   sudo chown -R "$pair_uid:$pair_gid" "$checkout"
   sudo chmod 755 "$checkout"
   pair_home="$gate_root/home-$pair"
-  sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker/cli-plugins"
-  sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
+  run_step private-home-root sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home"
+  run_step private-home-docker sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker"
+  run_step private-home-plugins sudo install -d -m 0700 -o "$pair_uid" -g "$pair_gid" "$pair_home/.docker/cli-plugins"
+  run_step compose-plugin-copy sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
     "$compose_plugin" "$pair_home/.docker/cli-plugins/docker-compose"
+  run_step buildx-plugin-copy sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
+    "$buildx_plugin" "$pair_home/.docker/cli-plugins/docker-buildx"
+  for private_directory in "$pair_home" "$pair_home/.docker" "$pair_home/.docker/cli-plugins"; do
+    phase=private-home-owner
+    if [[ $(stat -c '%u:%g' -- "$private_directory") != "$pair_uid:$pair_gid" ]]; then
+      echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=ownership." >&2
+      exit 1
+    fi
+    run_step private-home-write run_pair test -w "$private_directory"
+  done
   cd "$checkout"
-  phase=setup
-  run_pair node scripts/init-env.mjs >> "$private_log" 2>&1
-  run_pair node scripts/init-search-security.mjs >> "$private_log" 2>&1
-  run_pair env STATION_ATTESTOR_INVOCATION_ROOT="$checkout/.cache" \
+  run_step compose-plugin run_pair docker compose version
+  run_step buildx-plugin run_pair docker buildx version
+  run_step init-env run_pair node scripts/init-env.mjs
+  run_step init-search-security run_pair node scripts/init-search-security.mjs
+  run_step image-build run_pair env STATION_ATTESTOR_INVOCATION_ROOT="$checkout/.cache" \
     STATION_ATTESTOR_PUBLIC_ROOT="$checkout/.cache" \
     STATION_ATTESTOR_VOLUME_NAME="${name}_search_attestor_buildplaceholder" \
     docker compose -f compose.yaml -f compose.search-attestor.yaml \
     --profile search --profile search-attestor build \
     search-init search-profile-introduce search-profile-bootstrap \
-    search-attestor-prepare search-attestor-transfer search-engine-attestor >> "$private_log" 2>&1
-  run_pair docker compose up -d --wait postgres >> "$private_log" 2>&1
-  postgres_id=$(run_pair docker compose ps -q postgres)
-  [[ $postgres_id =~ ^[0-9a-f]{64}$ ]]
+    search-attestor-prepare search-attestor-transfer search-engine-attestor
+  run_step postgres-start run_pair docker compose up -d --wait postgres
+  phase=postgres-id
+  if postgres_id=$(run_pair docker compose ps -q postgres 2>> "$private_log"); then
+    if [[ $postgres_id =~ ^[0-9a-f]{64}$ ]]; then
+      echo "Attestor delivery checkpoint pair=$pair step=$phase passed."
+    else
+      echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=identity." >&2
+      exit 1
+    fi
+  else
+    code=$?
+    echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
+    exit "$code"
+  fi
+  migration_count=0
   for migration in packages/db/drizzle/[0-9]*.sql; do
-    run_pair docker exec -i "$postgres_id" psql -X -U station -d station -v ON_ERROR_STOP=1 \
-      < "$migration" >> "$private_log" 2>&1
+    migration_count=$((migration_count + 1))
+    run_step "migration-$migration_count" run_pair docker exec -i "$postgres_id" \
+      psql -X -U station -d station -v ON_ERROR_STOP=1 < "$migration"
   done
-  run_pair node scripts/search-admin-credentials.mjs create \
-    --uid "$pair_uid" --gid "$pair_gid" >> "$private_log" 2>&1
+  run_step credentials-create run_pair node scripts/search-admin-credentials.mjs create \
+    --uid "$pair_uid" --gid "$pair_gid"
   # E0b stays root:1000 for the fixed consumer under either owner pair.
-  run_pair env APP_GID=1000 docker compose --profile search run --rm -T --no-deps search-init >> "$private_log" 2>&1
-  run_pair docker compose --profile search up -d --no-deps opensearch >> "$private_log" 2>&1
-  run_pair docker compose --profile search run --rm -T --no-deps search-security-bootstrap >> "$private_log" 2>&1
-  run_pair docker compose --profile search --profile search-introduce run --rm -T --no-deps \
-    search-profile-introduce >> "$private_log" 2>&1
-  run_pair docker compose --profile search run --rm -T --no-deps search-profile-bootstrap >> "$private_log" 2>&1
-  phase=legacy-enrollment
-  marker=$(run_pair docker compose --profile search run --rm -T --no-deps \
-    --entrypoint cat search-profile-bootstrap /run/station-state/v1-profile-complete)
+  run_step search-init run_pair env APP_GID=1000 docker compose --profile search run --rm -T --no-deps search-init
+  run_step opensearch-start run_pair docker compose --profile search up -d --no-deps opensearch
+  run_step security-bootstrap run_pair docker compose --profile search run --rm -T --no-deps search-security-bootstrap
+  run_step profile-introduce run_pair docker compose --profile search --profile search-introduce run --rm -T --no-deps \
+    search-profile-introduce
+  run_step profile-bootstrap run_pair docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
+  phase=legacy-marker
+  if marker=$(run_pair docker compose --profile search run --rm -T --no-deps \
+    --entrypoint cat search-profile-bootstrap /run/station-state/v1-profile-complete 2>> "$private_log"); then
+    echo "Attestor delivery checkpoint pair=$pair step=$phase passed."
+  else
+    code=$?
+    echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
+    exit "$code"
+  fi
+  phase=legacy-marker-identity
   index_uuid=$(tail -n 1 <<< "$marker")
-  [[ $index_uuid =~ ^[A-Za-z0-9_-]{1,128}$ ]]
-  run_pair docker exec "$postgres_id" psql -X -U station -d station -v ON_ERROR_STOP=1 -q \
-    -c "BEGIN; INSERT INTO search_generation_history (generation_token,physical_index,profile_id,index_uuid,lifecycle) VALUES ('legacy-v1','station-mail-v1','station-mail-v1','$index_uuid','roles_attested'); UPDATE search_generation_control SET source_generation_token='legacy-v1',revision=revision+1 WHERE singleton=1 AND stage='disabled' AND source_generation_token IS NULL; COMMIT;" >> "$private_log" 2>&1
-  phase=delivery
-  run_pair node tests/integration/search-attestor-delivery.mjs >> "$private_log" 2>&1
-  phase=secret-scan
-  sudo "$(command -v node)" tests/support/search-attestor-delivery-log-scan.mjs "$private_log" >> "$private_log" 2>&1
+  if [[ ! $index_uuid =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+    echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=identity." >&2
+    exit 1
+  fi
+  run_step legacy-enrollment run_pair docker exec "$postgres_id" psql -X -U station -d station -v ON_ERROR_STOP=1 -q \
+    -c "BEGIN; INSERT INTO search_generation_history (generation_token,physical_index,profile_id,index_uuid,lifecycle) VALUES ('legacy-v1','station-mail-v1','station-mail-v1','$index_uuid','roles_attested'); UPDATE search_generation_control SET source_generation_token='legacy-v1',revision=revision+1 WHERE singleton=1 AND stage='disabled' AND source_generation_token IS NULL; COMMIT;"
+  run_step delivery run_pair node tests/integration/search-attestor-delivery.mjs
+  run_step secret-scan sudo "$(command -v node)" tests/support/search-attestor-delivery-log-scan.mjs "$private_log"
   phase=teardown
   cleanup_pair
   [[ $teardown_failed == 0 ]]
