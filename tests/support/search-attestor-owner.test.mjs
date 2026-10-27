@@ -6,6 +6,7 @@ import process from 'node:process';
 import { test } from 'node:test';
 import { makePreparedAttestorManifest } from '../../scripts/search-attestor-pure.mjs';
 import { runAttestorOwner } from '../../scripts/search-attestor-owner-core.mjs';
+import { ownerDiagnosticLine } from '../../scripts/search-attestor-owner-diagnostic.mjs';
 
 const instant = new Date('2026-10-22T18:00:00.123Z');
 const micro = '2026-10-22T18:00:00.123456Z';
@@ -127,4 +128,19 @@ test('fixed three-phase success and conservative uncertain outcomes', async () =
       if (retained) assert.ok((await readdir(path.dirname(item.lock()))).includes('.job-operation.lock'));
     } finally { await item.dispose(); }
   }
+});
+
+test('direct failure retains exact phase stage and suppresses injected message', async () => {
+  const item = await fixture('lost-transfer');
+  try {
+    await assert.rejects(item.run(), error => {
+      assert.equal(error.stage, 'transfer-run');
+      assert.equal(error.reason, 'unknown');
+      assert.equal(ownerDiagnosticLine(error),
+        'Private search attestor owner diagnostic stage=transfer-run reason=unknown.\n');
+      assert.equal(ownerDiagnosticLine(error).includes('injected'), false);
+      return true;
+    });
+    assert.deepEqual(item.sent, ['prepare', 'transfer']);
+  } finally { await item.dispose(); }
 });

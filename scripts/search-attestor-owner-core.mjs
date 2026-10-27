@@ -7,8 +7,9 @@ import process from 'node:process';
 import { withSearchAdminJobLock } from './search-admin-job-lock.mjs';
 import { validateOfflineAttestorManifest, matchOwnerDatabaseOid } from './search-attestor-pure.mjs';
 import { stageAttestorPublic } from './search-attestor-public-staging.mjs';
+import { AttestorOwnerDiagnosticError, ownerDiagnostic } from './search-attestor-owner-diagnostic.mjs';
 
-const fail = () => { throw new Error('Private search attestor owner operation failed.'); };
+const fail = () => { throw new AttestorOwnerDiagnosticError('input', 'invariant'); };
 const sameDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino &&
   a.uid === b.uid && a.gid === b.gid && a.mode === b.mode;
 const sameFile = (a, b) => sameDirectory(a, b) && a.nlink === b.nlink &&
@@ -121,66 +122,75 @@ async function cleanupInvocation(item, uid, gid, manifest) {
 /** Three fixed dispatches. Dependencies are a private deterministic test seam. */
 export async function runAttestorOwner({ repository, uid, gid, adapterFactory,
   stage = stageAttestorPublic, lock = withSearchAdminJobLock }) {
+  let diagnosticStage = 'input';
+  const at = async (name, operation) => {
+    diagnosticStage = name;
+    return await operation();
+  };
   try {
     if (path.resolve(repository) !== repository || !Number.isSafeInteger(uid) ||
         !Number.isSafeInteger(gid) || uid !== process.getuid?.() || gid !== process.getgid?.() ||
         uid < 1 || gid < 1 || typeof adapterFactory !== 'function') fail();
     const deadline = performance.now() + WHOLE_MS;
-    const tick = () => { if (performance.now() >= deadline) fail(); };
+    const tick = () => { if (performance.now() >= deadline)
+      throw new AttestorOwnerDiagnosticError('deadline', 'deadline'); };
     const root = path.join(repository, '.cache/search-db');
+    diagnosticStage = 'lock';
     return await lock({ root, uid }, async jobLock => {
       const attestor = jobLock.beginAttestor();
       const invocationId = attestor.invocationId;
       if (!UUID.test(invocationId)) fail();
       let local, localRootCreated = false, prepareAttempted = false;
       try {
-      const adapter = await adapterFactory({ repository, uid, gid, jobLock, invocationId,
-        deadline, tick });
-      await adapter.verifyOwner(); tick();
-      const owner = await adapter.captureOwner(); tick();
-      local = await makeInvocation(repository, invocationId, uid, gid,
-        () => { localRootCreated = true; });
+      const adapter = await at('owner-verify', () => adapterFactory({ repository, uid, gid, jobLock, invocationId,
+        deadline, tick }));
+      await at('owner-verify', () => adapter.verifyOwner()); tick();
+      const owner = await at('owner-capture', () => adapter.captureOwner()); tick();
+      local = await at('invocation', () => makeInvocation(repository, invocationId, uid, gid,
+        () => { localRootCreated = true; }));
       local.databaseOid = owner.databaseOid;
       const publicParent = path.join(repository, '.cache/search-attestor-public');
       await createParent(publicParent, path.join(repository, '.cache'), uid, gid);
       const volumeName = `${owner.project}_search_attestor_${invocationId.replaceAll('-', '')}`;
-      await adapter.preflight({ invocationRoot: local.root,
-        publicRoot: path.join(publicParent, invocationId), volumeName }); tick();
+      await at('preflight', () => adapter.preflight({ invocationRoot: local.root,
+        publicRoot: path.join(publicParent, invocationId), volumeName })); tick();
       await checkInvocation(local, uid, gid);
-      await adapter.recheckOwner(owner); tick();
+      await at('preflight', () => adapter.recheckOwner(owner)); tick();
       prepareAttempted = true;
-      await attestor.markDispatched('prepare');
-      const prepare = await adapter.runPhase('prepare'); tick();
-      await adapter.recheckOwner(owner);
-      await attestor.confirmCompletion('prepare');
-      const prepared = await readManifest(local, uid, gid, invocationId);
-      const publicStage = await stage({ v1Root: path.join(repository, '.cache/search-security'),
+      await at('prepare-dispatch', () => attestor.markDispatched('prepare'));
+      const prepare = await at('prepare-run', () => adapter.runPhase('prepare')); tick();
+      await at('prepare-confirm', () => adapter.recheckOwner(owner));
+      await at('prepare-confirm', () => attestor.confirmCompletion('prepare'));
+      const prepared = await at('prepare-manifest', () => readManifest(local, uid, gid, invocationId));
+      const publicStage = await at('public-stage', () => stage({ v1Root: path.join(repository, '.cache/search-security'),
         generationsRoot: path.join(repository, '.cache/search-generations'),
-        destinationParent: publicParent, invocationId, manifest: prepared.manifest });
-      await adapter.volumeAbsent(volumeName); tick();
+        destinationParent: publicParent, invocationId, manifest: prepared.manifest }));
+      await at('volume-absence', () => adapter.volumeAbsent(volumeName)); tick();
       await checkInvocation(local, uid, gid, prepared.file);
-      await publicStage.recheck(); await adapter.recheckOwner(owner); tick();
-      await attestor.markDispatched('transfer');
-      const volume = await adapter.createVolume(volumeName); tick();
-      await adapter.checkVolume(volume); tick();
-      const transfer = await adapter.runPhase('transfer'); tick();
-      await adapter.checkVolume(volume);
-      await adapter.recheckOwner(owner);
-      await attestor.confirmCompletion('transfer');
+      await at('transfer-dispatch', () => publicStage.recheck());
+      await at('transfer-dispatch', () => adapter.recheckOwner(owner)); tick();
+      await at('transfer-dispatch', () => attestor.markDispatched('transfer'));
+      const volume = await at('volume-create', () => adapter.createVolume(volumeName)); tick();
+      await at('transfer-volume', () => adapter.checkVolume(volume)); tick();
+      const transfer = await at('transfer-run', () => adapter.runPhase('transfer')); tick();
+      await at('transfer-postflight', () => adapter.checkVolume(volume));
+      await at('transfer-postflight', () => adapter.recheckOwner(owner));
+      await at('transfer-confirm', () => attestor.confirmCompletion('transfer'));
       await checkInvocation(local, uid, gid, prepared.file);
-      await publicStage.recheck(); await adapter.checkVolume(volume);
-      await adapter.recheckOwner(owner); tick();
-      await attestor.markDispatched('attestor');
-      const final = await adapter.runPhase('attestor'); tick();
-      await adapter.recheckOwner(owner);
-      await adapter.checkVolume(volume);
+      await at('attestor-dispatch', () => publicStage.recheck());
+      await at('attestor-dispatch', () => adapter.checkVolume(volume));
+      await at('attestor-dispatch', () => adapter.recheckOwner(owner)); tick();
+      await at('attestor-dispatch', () => attestor.markDispatched('attestor'));
+      const final = await at('attestor-run', () => adapter.runPhase('attestor')); tick();
+      await at('attestor-postflight', () => adapter.recheckOwner(owner));
+      await at('attestor-postflight', () => adapter.checkVolume(volume));
       await checkInvocation(local, uid, gid, prepared.file);
-      await publicStage.recheck();
-      await attestor.confirmCompletion('attestor');
-      await adapter.cleanupRemote([prepare, transfer, final], volume); tick();
-      await publicStage.cleanup(); tick();
-      await cleanupInvocation(local, uid, gid, prepared.file); tick();
-      await attestor.confirmOwnedCleanup();
+      await at('attestor-postflight', () => publicStage.recheck());
+      await at('attestor-confirm', () => attestor.confirmCompletion('attestor'));
+      await at('remote-cleanup', () => adapter.cleanupRemote([prepare, transfer, final], volume)); tick();
+      await at('local-cleanup', () => publicStage.cleanup()); tick();
+      await at('local-cleanup', () => cleanupInvocation(local, uid, gid, prepared.file)); tick();
+      await at('local-cleanup', () => attestor.confirmOwnedCleanup());
       tick();
       return { state: 'verified', invocationId };
       } catch (error) {
@@ -190,10 +200,13 @@ export async function runAttestorOwner({ repository, uid, gid, adapterFactory,
             try { await cleanupInvocation(local, uid, gid); cleaned = true; }
             catch { /* An uncertain local tree retains the global lock. */ }
           }
-          if (!cleaned) await attestor.markDispatched('prepare');
+          if (!cleaned) {
+            try { await attestor.markDispatched('prepare'); }
+            catch { /* Retain the first failure category; the lock remains uncertain. */ }
+          }
         }
         throw error;
       }
     });
-  } catch { fail(); }
+  } catch (error) { throw ownerDiagnostic(error, diagnosticStage); }
 }

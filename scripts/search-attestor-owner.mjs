@@ -5,10 +5,12 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { runAttestorOwner } from './search-attestor-owner-core.mjs';
 import { createAttestorDockerAdapter } from './search-attestor-owner-docker.mjs';
+import { ownerDiagnosticLine } from './search-attestor-owner-diagnostic.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const deadline = setTimeout(() => {
   process.stderr.write('Private search attestor owner operation failed; inspect private retained evidence.\n');
+  process.stderr.write('Private search attestor owner diagnostic stage=deadline reason=deadline.\n');
   process.exit(1);
 }, 240_000);
 try {
@@ -19,7 +21,8 @@ try {
   await runAttestorOwner({ repository, uid: process.getuid(), gid: process.getgid(),
     adapterFactory: createAttestorDockerAdapter });
   process.stdout.write('Private search attestor owner verification completed.\n');
-} catch {
+} catch (error) {
   process.stderr.write('Private search attestor owner operation failed; inspect private retained evidence.\n');
+  process.stderr.write(ownerDiagnosticLine(error));
   process.exitCode = 1;
 } finally { clearTimeout(deadline); }

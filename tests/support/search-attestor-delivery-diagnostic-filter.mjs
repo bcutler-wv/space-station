@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
+import { isOwnerDiagnosticLine } from '../../scripts/search-attestor-owner-diagnostic.mjs';
 
 const bool = /^(?:true|false)$/;
 const count = /^(?:-1|[0-9]{1,2})$/;
@@ -50,6 +51,11 @@ export function filteredDeliveryDiagnostics(log) {
     if (checkpoint && phases.has(checkpoint[1])) {
       if (!seen.has('checkpoint')) lines.push(line);
       seen.add('checkpoint');
+      continue;
+    }
+    if (isOwnerDiagnosticLine(line)) {
+      if (!seen.has('owner-diagnostic')) lines.push(line);
+      seen.add('owner-diagnostic');
       continue;
     }
     const match = /^Attestor delivery diagnostic ([a-z0-9-]+)=([a-z0-9-]+)\.$/.exec(line);

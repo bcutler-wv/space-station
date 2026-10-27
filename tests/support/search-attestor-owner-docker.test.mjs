@@ -251,3 +251,17 @@ test('scripted Docker evidence rejects changed image, mount, network, terminal, 
     assert.ok(item.calls.filter(x => x.includes(' run --detach ')).length <= 3, fault);
   }
 });
+
+test('direct adapter failures identify the first fixed inspection or response category', async () => {
+  for (const [fault, reason] of [
+    ['mount', 'started-inspect-mounts'],
+    ['terminal', 'finished-inspect-terminal'],
+    ['logs', 'logs-stdout'],
+  ]) {
+    await assert.rejects(fixture(fault).run(), error => {
+      assert.equal(error.reason, reason);
+      assert.equal(error.message, 'Private search attestor owner operation failed.');
+      return true;
+    }, fault);
+  }
+});

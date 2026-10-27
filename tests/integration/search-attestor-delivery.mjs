@@ -8,6 +8,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { runAttestorOwner } from '../../scripts/search-attestor-owner-core.mjs';
 import { createAttestorDockerAdapter } from '../../scripts/search-attestor-owner-docker.mjs';
+import { capturedOwnerDiagnostic, isOwnerDiagnosticLine } from '../../scripts/search-attestor-owner-diagnostic.mjs';
 import { createSearchAdminDockerAdapter } from '../../scripts/search-admin-credentials.mjs';
 import { verifyAttestorServiceConfig } from '../../scripts/search-attestor-service-config.mjs';
 
@@ -290,6 +291,7 @@ checkpoint = 'complete-cli';
 const successful = await command('node', ['scripts/search-attestor-owner.mjs'], process.env, 245_000);
 secretFree(successful.stdout, successful.stderr);
 if (successful.code !== 0) {
+  process.stdout.write(capturedOwnerDiagnostic(successful.stderr));
   // Read-only fixture forensics. Never print retained records, Docker output,
   // paths, IDs, or the fixed owner's private subprocess errors.
   const emit = (name, value) => process.stdout.write(`Attestor delivery diagnostic ${name}=${value}.\n`);
@@ -767,7 +769,8 @@ for (const mode of ['fresh', 'unintroduced', 'incomplete']) {
   secretFree(rejected.stdout, rejected.stderr);
   assert.equal(rejected.code, 1, `${mode} retained marker must reject`);
   assert.ok(rejected.stdout === '');
-  assert.ok(rejected.stderr === fixedFailure);
+  assert.ok(rejected.stderr.startsWith(fixedFailure));
+  assert.ok(isOwnerDiagnosticLine(rejected.stderr.slice(fixedFailure.length).trimEnd()));
   await retained();
   const containers = await serviceContainers();
   assert.equal(containers['search-attestor-prepare'].length, 1);

@@ -9,8 +9,9 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { createSearchAdminDockerAdapter } from './search-admin-credentials.mjs';
 import { operateSearchAdminCredentialsAlreadyJobLocked } from './search-admin-credential-core.mjs';
 import { verifyAttestorServiceConfig } from './search-attestor-service-config.mjs';
+import { AttestorOwnerDiagnosticError, ownerDiagnostic } from './search-attestor-owner-diagnostic.mjs';
 
-const fail = () => { throw new Error('Private search attestor Docker evidence failed.'); };
+const fail = (reason = 'invariant') => { throw new AttestorOwnerDiagnosticError('input', reason); };
 const idPattern = /^[0-9a-f]{64}$/;
 const imagePattern = /^sha256:[0-9a-f]{64}$/;
 const containerPattern = /^[0-9a-f]{12,64}$/;
@@ -96,7 +97,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
   const credentialCapture = options.credentialCapture ?? captureCredential;
   const runCommand = options.command ?? (async (args, env, timeoutMs = 10_000) => {
     const remaining = Math.min(timeoutMs, Math.floor(deadline - performance.now()));
-    if (remaining < 1) fail();
+    if (remaining < 1) fail('deadline');
     const child = spawn('docker', args, { cwd: repository, env,
       stdio: ['ignore', 'pipe', 'pipe'] });
     const outputs = [[], []]; let sizes = [0, 0], overflow = false, timedOut = false;
@@ -112,21 +113,38 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
       const exit = await new Promise((resolve, reject) => {
         child.once('error', reject);
         child.once('close', (code, signal) => resolve({ code, signal }));
-      });
-      if (overflow || timedOut || exit.signal) fail();
+      }).catch(() => fail('spawn'));
+      if (overflow || timedOut) fail('timeout');
+      if (exit.signal) fail('spawn');
       return { ...exit, stdout: Buffer.concat(outputs[0]).toString('utf8'),
         stderr: Buffer.concat(outputs[1]).toString('utf8') };
     } finally { clearTimeout(timer); }
   });
   const docker = async (args, timeoutMs = 10_000) => {
     tick();
-    const response = await runCommand(args, environment(process.env, trusted), timeoutMs);
+    let response;
+    try { response = await runCommand(args, environment(process.env, trusted), timeoutMs); }
+    catch (error) {
+      if (error instanceof AttestorOwnerDiagnosticError) throw error;
+      throw ownerDiagnostic(error);
+    }
     tick();
     if (!response || response.code !== 0 || response.signal ||
         typeof response.stdout !== 'string' || typeof response.stderr !== 'string' ||
         Buffer.byteLength(response.stdout) > 256 * 1024 ||
-        Buffer.byteLength(response.stderr) > 256 * 1024) fail();
+        Buffer.byteLength(response.stderr) > 256 * 1024) fail('command-response');
     return response;
+  };
+  const atReason = async (reason, operation) => {
+    try { return await operation(); }
+    catch (error) {
+      if (error instanceof AttestorOwnerDiagnosticError) {
+        if (error.reason === 'deadline') throw error;
+        if (error.reason === 'timeout' || error.reason === 'spawn')
+          fail(`${reason}-${error.reason}`);
+      }
+      fail(reason);
+    }
   };
   const composeArgs = ['compose', '-f', 'compose.yaml', '-f', 'compose.search-attestor.yaml'];
   let installation, retained, project, adminNetwork, postgresId, normalized,
@@ -135,7 +153,8 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
   const compose = (args, timeout) => docker([...composeArgs, '-p', project,
     '--profile', 'search-attestor', ...args], timeout);
   const inspect = async id => oneJson((await docker(['container', 'inspect', id])).stdout);
-  const inspectVolume = async name => oneJson((await docker(['volume', 'inspect', name])).stdout);
+  const inspectVolume = async name => atReason('inspect-response', async () =>
+    oneJson((await docker(['volume', 'inspect', name])).stdout));
   const sameVolume = (a, b) => a.Name === b.Name && a.Driver === b.Driver &&
     a.Scope === b.Scope && a.CreatedAt === b.CreatedAt && a.Mountpoint === b.Mountpoint &&
     equal(a.Labels, b.Labels) && equal(a.Options, b.Options);
@@ -145,9 +164,10 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
         !keys(item.Labels, ['station.attestor.project', 'station.attestor.invocation']) ||
         item.Labels['station.attestor.project'] !== project ||
         item.Labels['station.attestor.invocation'] !== invocationId ||
-        item.Options !== null && !keys(item.Options, [])) fail();
+        item.Options !== null && !keys(item.Options, [])) fail('volume');
   };
   const checkContainer = (item, phase, id, terminal) => {
+    const reject = reason => fail(reason);
     const expected = normalized.services[fixedNames[phase]];
     if (item.Id !== id || !item.Config || !item.HostConfig || !item.NetworkSettings ||
         item.Image !== images[phase] || !imagePattern.test(item.Image) ||
@@ -171,31 +191,31 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
         item.HostConfig.PidMode !== '' ||
         item.HostConfig.IpcMode !== 'private' ||
         Object.keys(item.HostConfig.PortBindings ?? {}).length !== 0 ||
-        Object.values(item.NetworkSettings.Ports ?? {}).some(value => value !== null)) fail();
+        Object.values(item.NetworkSettings.Ports ?? {}).some(value => value !== null)) reject('inspect-policy');
     const wantedTmpfs = expected.tmpfs[0].slice('/tmp:'.length);
     if (!keys(item.HostConfig.Tmpfs, ['/tmp']) ||
-        item.HostConfig.Tmpfs['/tmp'] !== wantedTmpfs) fail();
+        item.HostConfig.Tmpfs['/tmp'] !== wantedTmpfs) reject('inspect-tmpfs');
     const actualMounts = new Map();
     for (const mount of item.Mounts ?? []) {
-      if (actualMounts.has(mount.Destination)) fail();
+      if (actualMounts.has(mount.Destination)) reject('inspect-mounts');
       actualMounts.set(mount.Destination, mount);
     }
-    if (actualMounts.size !== expected.volumes.length) fail();
+    if (actualMounts.size !== expected.volumes.length) reject('inspect-mounts');
     for (const mount of expected.volumes) {
       const actual = actualMounts.get(mount.target);
       const source = mount.type === 'bind' ? mount.source :
         normalized.volumes[mount.source]?.name;
       if (!actual || actual.Type !== mount.type || actual.Destination !== mount.target ||
           (mount.type === 'bind' ? actual.Source !== source : actual.Name !== source) ||
-          actual.RW !== !mount.read_only) fail();
+          actual.RW !== !mount.read_only) reject('inspect-mounts');
     }
     const hostMounts = item.HostConfig.Mounts;
     if (!Array.isArray(hostMounts) || hostMounts.length !== expected.volumes.length ||
         (item.HostConfig.Binds ?? []).length !== 0 ||
-        (item.HostConfig.VolumesFrom ?? []).length !== 0) fail();
+        (item.HostConfig.VolumesFrom ?? []).length !== 0) reject('inspect-host-mounts');
     const byTarget = new Map();
     for (const mount of hostMounts) {
-      if (!mount || typeof mount.Target !== 'string' || byTarget.has(mount.Target)) fail();
+      if (!mount || typeof mount.Target !== 'string' || byTarget.has(mount.Target)) reject('inspect-host-mounts');
       byTarget.set(mount.Target, mount);
     }
     for (const wanted of expected.volumes) {
@@ -208,7 +228,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
             ![undefined, false].includes(actual.ReadOnly)) ||
           ![undefined, '', 'default'].includes(actual.Consistency) ||
           actual.TmpfsOptions != null || actual.ImageOptions != null ||
-          actual.ClusterOptions != null) fail();
+          actual.ClusterOptions != null) reject('inspect-host-mounts');
       if (wanted.type === 'bind') {
         const opts = actual.BindOptions;
         if (actual.VolumeOptions != null || opts != null &&
@@ -218,7 +238,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
               ![undefined, false].includes(opts.NonRecursive) ||
               ![undefined, false].includes(opts.CreateMountpoint) ||
               ![undefined, false].includes(opts.ReadOnlyNonRecursive) ||
-              ![undefined, false].includes(opts.ReadOnlyForceRecursive))) fail();
+              ![undefined, false].includes(opts.ReadOnlyForceRecursive))) reject('inspect-host-mounts');
       } else {
         const opts = actual.VolumeOptions;
         if (actual.BindOptions != null ||
@@ -227,7 +247,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
             opts != null && (!keysSubset(opts, ['NoCopy', 'Labels', 'Subpath', 'DriverConfig']) ||
               opts.Labels != null && !keys(opts.Labels, []) ||
               ![undefined, ''].includes(opts.Subpath) ||
-              opts.DriverConfig != null)) fail();
+              opts.DriverConfig != null)) reject('inspect-host-mounts');
       }
     }
     const networkMap = item.NetworkSettings.Networks ?? {};
@@ -238,15 +258,24 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
     if (phase === 'transfer') {
       if (item.HostConfig.NetworkMode !== 'none' ||
           !(keys(networkMap, []) && actualNetworks.length === 0 ||
-            keys(networkMap, ['none']) && equal(actualNetworks, expectedNetworks))) fail();
-    } else if (!equal(actualNetworks, expectedNetworks)) fail();
+            keys(networkMap, ['none']) && equal(actualNetworks, expectedNetworks))) reject('inspect-network');
+    } else if (!equal(actualNetworks, expectedNetworks)) reject('inspect-network');
     if (terminal && (item.State?.Status !== 'exited' || item.State?.ExitCode !== 0 ||
         !item.State?.StartedAt || !item.State?.FinishedAt ||
         item.State.StartedAt === '0001-01-01T00:00:00Z' ||
         item.State.FinishedAt === '0001-01-01T00:00:00Z' ||
         item.State.Running !== false || item.State.OOMKilled !== false ||
         item.State.Dead !== false || item.State.Error !== '' ||
-        item.RestartCount !== 0)) fail();
+        item.RestartCount !== 0)) reject('inspect-terminal');
+  };
+  const checkAt = (when, item, phase, id, terminal) => {
+    try { checkContainer(item, phase, id, terminal); }
+    catch (error) {
+      if (error instanceof AttestorOwnerDiagnosticError &&
+          error.reason.startsWith('inspect-'))
+        fail(`${when}-${error.reason}`);
+      throw error;
+    }
   };
   const recheckInfrastructure = async () => {
     for (const name of ['search_admin_db', 'search_internal', 'none']) {
@@ -296,13 +325,13 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
           !sameStat(current.metadata.stat, retained.metadata.stat) ||
           !sameStat(current.verifier.stat, retained.verifier.stat) ||
           !current.metadata.bytes.equals(retained.metadata.bytes) ||
-          !current.verifier.bytes.equals(retained.verifier.bytes)) fail();
+          !current.verifier.bytes.equals(retained.verifier.bytes)) fail('owner');
       const fresh = await ownerFactory(uid, gid);
       const identity = await fresh.identity();
       if (identity.project !== owner.project || identity.databaseOid !== owner.databaseOid ||
-          !equal(identity, await installation.identity())) fail();
-      if (await fresh.containerId() !== postgresId) fail();
-      if (!equal(await fresh.adminNetwork(), owner.adminNetwork)) fail();
+          !equal(identity, await installation.identity())) fail('owner');
+      if (await fresh.containerId() !== postgresId) fail('owner');
+      if (!equal(await fresh.adminNetwork(), owner.adminNetwork)) fail('owner');
       await verifyCredentials({ action: 'verify',
         root: path.join(repository, '.cache/search-db'), uid, gid,
         adapter: fresh, jobLock });
@@ -350,17 +379,17 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
       }
     },
     async volumeAbsent(name) {
-      if (name !== volumeName) fail();
+      if (name !== volumeName) fail('volume');
       const result = await docker(['volume', 'ls', '--format', '{{.Name}}']);
       if (listed(result.stdout.trim(), /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/, 4096)
-        .includes(name)) fail();
+        .includes(name)) fail('volume');
     },
     async createVolume(name) {
-      if (name !== volumeName) fail();
+      if (name !== volumeName) fail('volume');
       const result = await docker(['volume', 'create', '--driver', 'local',
         '--label', `station.attestor.project=${project}`,
         '--label', `station.attestor.invocation=${invocationId}`, name]);
-      if (result.stdout !== `${name}\n` || result.stderr !== '') fail();
+      if (result.stdout !== `${name}\n` || result.stderr !== '') fail('volume');
       const item = await inspectVolume(name);
       expectVolume(item);
       return item;
@@ -368,32 +397,38 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
     async checkVolume(captured) {
       const current = await inspectVolume(volumeName);
       expectVolume(current);
-      if (!sameVolume(current, captured)) fail();
+      if (!sameVolume(current, captured)) fail('volume');
     },
     async runPhase(phase) {
       if (!Object.hasOwn(fixedNames, phase)) fail();
-      const rendered = await compose(['config', '--format', 'json',
-        ...Object.values(fixedNames)]);
-      if (rendered.stderr !== '') fail();
-      const currentConfig = JSON.parse(rendered.stdout);
-      verifyAttestorServiceConfig(currentConfig, { project, uid, gid, repository,
-        invocationId, invocationRoot: trusted.STATION_ATTESTOR_INVOCATION_ROOT,
-        publicRoot: trusted.STATION_ATTESTOR_PUBLIC_ROOT, volumeName });
-      if (!equal(currentConfig, normalized)) fail();
-      await recheckInfrastructure();
-      const response = await compose(['run', '--detach', '--no-deps', '--pull', 'never',
-        fixedNames[phase]], 20_000);
-      if (!idPattern.test(response.stdout.trim()) || response.stderr !== '' ||
-          response.stdout !== `${response.stdout.trim()}\n`) fail();
+      await atReason('config', async () => {
+        const rendered = await compose(['config', '--format', 'json',
+          ...Object.values(fixedNames)]);
+        if (rendered.stderr !== '') fail('config');
+        const currentConfig = JSON.parse(rendered.stdout);
+        verifyAttestorServiceConfig(currentConfig, { project, uid, gid, repository,
+          invocationId, invocationRoot: trusted.STATION_ATTESTOR_INVOCATION_ROOT,
+          publicRoot: trusted.STATION_ATTESTOR_PUBLIC_ROOT, volumeName });
+        if (!equal(currentConfig, normalized)) fail('config');
+      });
+      await atReason('infrastructure', () => recheckInfrastructure());
+      const response = await atReason('dispatch-command', () => compose([
+        'run', '--detach', '--no-deps', '--pull', 'never', fixedNames[phase]], 20_000));
+      if (response.stderr !== '') fail('dispatch-stderr');
+      if (!idPattern.test(response.stdout.trim()) ||
+          response.stdout !== `${response.stdout.trim()}\n`) fail('dispatch-stdout');
       const id = response.stdout.trim();
-      const started = await inspect(id);
-      checkContainer(started, phase, id, false);
-      const waited = await docker(['container', 'wait', id], phase === 'attestor' ? 90_000 : 80_000);
-      if (waited.stdout !== '0\n' || waited.stderr !== '') fail();
-      const finished = await inspect(id);
-      checkContainer(finished, phase, id, true);
-      const logs = await docker(['container', 'logs', id]);
-      if (logs.stdout !== fixedOutput[phase] || logs.stderr !== '') fail();
+      const started = await atReason('started-inspect-response', () => inspect(id));
+      checkAt('started', started, phase, id, false);
+      const waited = await atReason('wait-command', () => docker(['container', 'wait', id],
+        phase === 'attestor' ? 90_000 : 80_000));
+      if (waited.stderr !== '') fail('wait-stderr');
+      if (waited.stdout !== '0\n') fail('wait-exit');
+      const finished = await atReason('finished-inspect-response', () => inspect(id));
+      checkAt('finished', finished, phase, id, true);
+      const logs = await atReason('logs-command', () => docker(['container', 'logs', id]));
+      if (logs.stderr !== '') fail('logs-stderr');
+      if (logs.stdout !== fixedOutput[phase]) fail('logs-stdout');
       return { id, phase, image: finished.Image,
         created: finished.Created, labels: finished.Config.Labels,
         startedAt: finished.State.StartedAt, finishedAt: finished.State.FinishedAt };
