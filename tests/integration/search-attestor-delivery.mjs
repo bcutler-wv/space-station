@@ -41,6 +41,17 @@ const coreFailure = 'Private search attestor owner operation failed.';
 const id = /^[0-9a-f]{64}$/;
 const volumePattern = new RegExp(`^${project}_search_attestor_[0-9a-f]{32}$`);
 const phaseServices = ['search-attestor-prepare', 'search-attestor-transfer', 'search-engine-attestor'];
+const exactAddedCapabilities = (value, phase) => {
+  const observed = value ?? [];
+  const wanted = phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : [];
+  if (!Array.isArray(observed) || observed.length !== wanted.length) return false;
+  const names = observed.map(item => {
+    if (item === 'CHOWN' || item === 'CAP_CHOWN') return 'CHOWN';
+    if (item === 'DAC_OVERRIDE' || item === 'CAP_DAC_OVERRIDE') return 'DAC_OVERRIDE';
+    return null;
+  });
+  return JSON.stringify(names.sort()) === JSON.stringify(wanted);
+};
 
 async function command(binary, args, env = process.env, timeoutMs = 30_000) {
   const child = spawn(binary, args, { cwd: repository, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -366,16 +377,28 @@ if (successful.code !== 0) {
             same(item?.Config?.Env, built?.Config?.Env) &&
             same(item?.Config?.Entrypoint, built?.Config?.Entrypoint));
         } catch { emit(`phase-${phase}-image-match`, 'unavailable'); }
-        emit(`phase-${phase}-host-policy-match`, item?.HostConfig?.Privileged === false &&
-          item.HostConfig.ReadonlyRootfs === true &&
-          same(item.HostConfig.CapDrop?.map(value => value.toUpperCase()), ['ALL']) &&
-          same((item.HostConfig.CapAdd ?? []).map(value => value.toUpperCase()).sort(),
-            phase === 2 ? ['CHOWN', 'DAC_OVERRIDE'] : []) &&
-          item.HostConfig.PidsLimit === (phase === 3 ? 128 : 64) &&
+        const capAddMatch = exactAddedCapabilities(item?.HostConfig?.CapAdd,
+          phase === 2 ? 'transfer' : 'other');
+        const capDropMatch = same(item?.HostConfig?.CapDrop?.map(value => value.toUpperCase()), ['ALL']);
+        const resourceMatch = item?.HostConfig?.PidsLimit === (phase === 3 ? 128 : 64) &&
           item.HostConfig.Memory === (phase === 3 ? 536870912 : 268435456) &&
-          item.HostConfig.NanoCpus === (phase === 3 ? 1e9 : 5e8) &&
+          item.HostConfig.NanoCpus === (phase === 3 ? 1e9 : 5e8);
+        const hostSafetyMatch = item?.HostConfig?.Privileged === false &&
+          item.HostConfig.ReadonlyRootfs === true &&
           item.HostConfig.RestartPolicy?.Name === 'no' &&
-          same(item.HostConfig.SecurityOpt, ['no-new-privileges:true']));
+          same(item.HostConfig.SecurityOpt, ['no-new-privileges:true']);
+        const isolationMatch = (item?.HostConfig?.Devices ?? []).length === 0 &&
+          (item?.HostConfig?.GroupAdd ?? []).length === 0 &&
+          item?.HostConfig?.PidMode === '' && item?.HostConfig?.IpcMode === 'private' &&
+          Object.keys(item?.HostConfig?.PortBindings ?? {}).length === 0 &&
+          Object.values(item?.NetworkSettings?.Ports ?? {}).every(value => value === null);
+        emit(`phase-${phase}-host-policy-match`, capAddMatch && capDropMatch &&
+          resourceMatch && hostSafetyMatch && isolationMatch);
+        emit(`phase-${phase}-cap-add-match`, capAddMatch);
+        emit(`phase-${phase}-cap-drop-match`, capDropMatch);
+        emit(`phase-${phase}-resources-match`, resourceMatch);
+        emit(`phase-${phase}-host-safety-match`, hostSafetyMatch);
+        emit(`phase-${phase}-isolation-match`, isolationMatch);
         emit(`phase-${phase}-tmpfs-match`, item?.HostConfig?.Tmpfs?.['/tmp'] === tmpfsOptions &&
           Object.keys(item.HostConfig.Tmpfs).length === 1);
         emit(`phase-${phase}-mount-count`, Array.isArray(item?.Mounts) ? item.Mounts.length : -1);
@@ -469,8 +492,7 @@ async function actualPhaseEvidence(phase, containerId) {
   assert.equal(item.Config.User, phase === 'prepare' ? `${process.getuid()}:${process.getgid()}` :
     phase === 'transfer' ? '0:0' : '1000:1000');
   assert.deepEqual(item.HostConfig.CapDrop, ['ALL']);
-  assert.deepEqual((item.HostConfig.CapAdd ?? []).sort(),
-    phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : []);
+  assert.equal(exactAddedCapabilities(item.HostConfig.CapAdd, phase), true);
   const mounts = item.HostConfig.Mounts;
   assert.ok(Array.isArray(mounts));
   const targets = mounts.map(value => value.Target).sort();

@@ -23,6 +23,17 @@ const commands = { prepare: ['node', 'scripts/search-attestor-prepare.mjs'],
   transfer: ['node', 'scripts/search-attestor-transfer.mjs'],
   attestor: ['node', 'scripts/search-attestor-combined.mjs'] };
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const exactCapAdd = (value, phase) => {
+  const wanted = phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : [];
+  const observed = value ?? [];
+  if (!Array.isArray(observed) || observed.length !== wanted.length) return false;
+  const names = observed.map(item => {
+    if (item === 'CHOWN' || item === 'CAP_CHOWN') return 'CHOWN';
+    if (item === 'DAC_OVERRIDE' || item === 'CAP_DAC_OVERRIDE') return 'DAC_OVERRIDE';
+    return null;
+  });
+  return equal(names.sort(), wanted);
+};
 const keys = (value, expected) => value && typeof value === 'object' &&
   !Array.isArray(value) && equal(Object.keys(value).sort(), [...expected].sort());
 const keysSubset = (value, allowed) => value && typeof value === 'object' &&
@@ -149,8 +160,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
         item.Config.Labels?.['com.docker.compose.service'] !== fixedNames[phase] ||
         item.HostConfig.Privileged !== false || item.HostConfig.ReadonlyRootfs !== true ||
         !equal(item.HostConfig.CapDrop?.map(x => x.toUpperCase()), ['ALL']) ||
-        !equal((item.HostConfig.CapAdd ?? []).map(x => x.toUpperCase()).sort(),
-          phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : []) ||
+        !exactCapAdd(item.HostConfig.CapAdd, phase) ||
         item.HostConfig.PidsLimit !== (phase === 'attestor' ? 128 : 64) ||
         item.HostConfig.Memory !== (phase === 'attestor' ? 536870912 : 268435456) ||
         item.HostConfig.NanoCpus !== (phase === 'attestor' ? 1e9 : 5e8) ||

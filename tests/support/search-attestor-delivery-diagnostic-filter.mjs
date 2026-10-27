@@ -29,6 +29,7 @@ function allowed(name, value) {
   if (field === 'inspection') return value === 'unavailable';
   if (field === 'image-match') return availability.test(value);
   return ['user-match', 'command-match', 'labels-match', 'host-policy-match',
+    'cap-add-match', 'cap-drop-match', 'resources-match', 'host-safety-match', 'isolation-match',
     'tmpfs-match', 'mount-targets-match', 'host-mount-targets-match',
     'network-names-match'].includes(field) && bool.test(value);
 }

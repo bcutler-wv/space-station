@@ -54,7 +54,7 @@ function container(phase, mutation) {
       Labels: { 'com.docker.compose.project': project,
         'com.docker.compose.service': service[phase] } },
     HostConfig: { Privileged: false, ReadonlyRootfs: true, CapDrop: ['ALL'],
-      CapAdd: phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : [],
+      CapAdd: phase === 'transfer' ? ['CAP_CHOWN', 'CAP_DAC_OVERRIDE'] : [],
       PidsLimit: spec.pids_limit, Memory: Number(spec.mem_limit), NanoCpus: spec.cpus * 1e9,
       RestartPolicy: { Name: 'no' }, SecurityOpt: ['no-new-privileges:true'],
       Devices: [], GroupAdd: [], PidMode: '', IpcMode: 'private', PortBindings: {},
@@ -77,6 +77,18 @@ function container(phase, mutation) {
   if (mutation === 'volume-subpath' && phase === 'transfer')
     result.HostConfig.Mounts.find(mount => mount.Target === '/run/search-attestor')
       .VolumeOptions.Subpath = 'other';
+  if (phase === 'transfer' && mutation === 'legacy-capability-spelling')
+    result.HostConfig.CapAdd = ['CHOWN', 'DAC_OVERRIDE'];
+  if (phase === 'transfer' && mutation === 'missing-capability')
+    result.HostConfig.CapAdd = ['CAP_CHOWN'];
+  if (phase === 'transfer' && mutation === 'extra-capability')
+    result.HostConfig.CapAdd.push('CAP_SYS_ADMIN');
+  if (phase === 'transfer' && mutation === 'duplicate-capability')
+    result.HostConfig.CapAdd = ['CAP_CHOWN', 'CHOWN'];
+  if (phase === 'transfer' && mutation === 'wrong-capability')
+    result.HostConfig.CapAdd = ['CAP_CHOWN', 'CAP_DAC_READ_SEARCH'];
+  if (phase === 'prepare' && mutation === 'extra-prepare-capability')
+    result.HostConfig.CapAdd = ['CAP_CHOWN'];
   if (mutation === 'create-mountpoint' && phase === 'prepare')
     result.HostConfig.Mounts[0].BindOptions.CreateMountpoint = true;
   if (mutation === 'bind-propagation' && phase === 'prepare')
@@ -215,6 +227,14 @@ test('scripted Docker evidence accepts only exact fixed phases and captured clea
 
 test('documented safe Docker mount defaults remain accepted', async () => {
   await fixture('safe-defaults').run();
+});
+
+test('only the exact transfer capability set accepts canonical and Compose spellings', async () => {
+  await fixture('legacy-capability-spelling').run();
+  for (const fault of ['missing-capability', 'extra-capability',
+    'duplicate-capability', 'wrong-capability', 'extra-prepare-capability']) {
+    await assert.rejects(fixture(fault).run(), undefined, fault);
+  }
 });
 
 test('scripted Docker evidence rejects changed image, mount, network, terminal, logs, volume and references', async () => {
