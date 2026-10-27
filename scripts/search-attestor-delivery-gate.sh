@@ -185,13 +185,26 @@ for pair in default runner; do
     "$compose_plugin" "$pair_home/.docker/cli-plugins/docker-compose"
   run_step buildx-plugin-copy sudo install -m 0700 -o "$pair_uid" -g "$pair_gid" \
     "$buildx_plugin" "$pair_home/.docker/cli-plugins/docker-buildx"
+  private_index=0
   for private_directory in "$pair_home" "$pair_home/.docker" "$pair_home/.docker/cli-plugins"; do
-    phase=private-home-owner
-    if [[ $(stat -c '%u:%g' -- "$private_directory") != "$pair_uid:$pair_gid" ]]; then
-      echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=ownership." >&2
-      exit 1
+    private_index=$((private_index + 1))
+    phase="private-home-owner-$private_index"
+    if private_metadata=$(sudo stat -c '%u:%g:%a' -- "$private_directory" 2>> "$private_log"); then
+      if [[ ! $private_metadata =~ ^[0-9]+:[0-9]+:[0-7]{3,4}$ ]]; then
+        echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=metadata-shape." >&2
+        exit 1
+      fi
+      echo "Attestor delivery checkpoint pair=$pair step=$phase observed=$private_metadata expected=$pair_uid:$pair_gid:700."
+      if [[ $private_metadata != "$pair_uid:$pair_gid:700" ]]; then
+        echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=ownership-or-mode." >&2
+        exit 1
+      fi
+    else
+      code=$?
+      echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
+      exit "$code"
     fi
-    run_step private-home-write run_pair test -w "$private_directory"
+    run_step "private-home-write-$private_index" run_pair test -w "$private_directory"
   done
   cd "$checkout"
   run_step compose-plugin run_pair docker compose version
