@@ -43,7 +43,6 @@ function container(phase, mutation) {
       config.volumes[mount.source].name,
     Name: mount.type === 'volume' ? config.volumes[mount.source].name : undefined,
     RW: !mount.read_only }));
-  mounts.push({ Type: 'tmpfs', Destination: '/tmp', RW: true });
   const networks = phase === 'transfer' ? { none: { NetworkID: networkIds.none } } :
     Object.fromEntries((phase === 'prepare' ? ['search_admin_db'] :
       ['search_admin_db', 'search_internal']).map(name => [name,
@@ -86,6 +85,18 @@ function container(phase, mutation) {
     result.HostConfig.Mounts[0].BindOptions.NonRecursive = true;
   if (mutation === 'extra-host-mount' && phase === 'prepare')
     result.HostConfig.Mounts.push({ Type: 'bind', Source: '/tmp/other', Target: '/run/extra' });
+  if (phase === 'prepare' && mutation === 'bind-tmp') {
+    result.HostConfig.Mounts.push({ Type: 'bind', Source: '/tmp/other', Target: '/tmp' });
+    result.Mounts.push({ Type: 'bind', Source: '/tmp/other', Destination: '/tmp', RW: true });
+  }
+  if (phase === 'prepare' && mutation === 'duplicate-inspect-mount')
+    result.Mounts.push({ ...result.Mounts[0] });
+  if (phase === 'prepare' && mutation === 'fabricated-tmpfs-inspect-mount')
+    result.Mounts.push({ Type: 'tmpfs', Destination: '/tmp', RW: true });
+  if (phase === 'prepare' && mutation === 'missing-tmpfs') delete result.HostConfig.Tmpfs['/tmp'];
+  if (phase === 'prepare' && mutation === 'extra-tmpfs') result.HostConfig.Tmpfs['/other'] = 'rw';
+  if (phase === 'prepare' && mutation === 'wrong-tmpfs-options')
+    result.HostConfig.Tmpfs['/tmp'] = 'rw,exec,nosuid,size=8m';
   if (mutation === 'extra-binds' && phase === 'prepare')
     result.HostConfig.Binds = ['/tmp/other:/run/extra:rw'];
   if (mutation === 'safe-defaults') for (const hostMount of result.HostConfig.Mounts) {
@@ -210,6 +221,8 @@ test('scripted Docker evidence rejects changed image, mount, network, terminal, 
   for (const fault of ['container-id', 'config-drift', 'config-default-drift',
     'image', 'mount', 'nocopy', 'volume-subpath', 'create-mountpoint',
     'bind-propagation', 'bind-nonrecursive', 'extra-host-mount', 'extra-binds',
+    'bind-tmp', 'duplicate-inspect-mount', 'fabricated-tmpfs-inspect-mount',
+    'missing-tmpfs', 'extra-tmpfs', 'wrong-tmpfs-options',
     'network', 'terminal', 'logs', 'volume',
     'references', 'lost-volume-create', 'lost-prepare']) {
     const item = fixture(fault);

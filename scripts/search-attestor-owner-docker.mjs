@@ -170,9 +170,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
       if (actualMounts.has(mount.Destination)) fail();
       actualMounts.set(mount.Destination, mount);
     }
-    if (actualMounts.size !== expected.volumes.length + 1 ||
-        actualMounts.get('/tmp')?.Type !== 'tmpfs' ||
-        actualMounts.get('/tmp')?.RW !== true) fail();
+    if (actualMounts.size !== expected.volumes.length) fail();
     for (const mount of expected.volumes) {
       const actual = actualMounts.get(mount.target);
       const source = mount.type === 'bind' ? mount.source :
