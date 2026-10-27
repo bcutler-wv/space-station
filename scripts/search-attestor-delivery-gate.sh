@@ -232,12 +232,32 @@ for pair in default runner; do
     echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
     exit "$code"
   fi
+  phase=migration-enumeration
+  if migration_lines=$(run_pair bash -c 'printf "%s\n" packages/db/drizzle/[0-9]*.sql' 2>> "$private_log"); then
+    if [[ ${#migration_lines} -gt 8192 ]]; then
+      echo "Attestor delivery checkpoint pair=$pair step=$phase failed class=inventory-size." >&2
+      exit 1
+    fi
+  else
+    code=$?
+    echo "Attestor delivery checkpoint pair=$pair step=$phase failed exit=$code." >&2
+    exit "$code"
+  fi
   migration_count=0
-  for migration in packages/db/drizzle/[0-9]*.sql; do
+  while IFS= read -r migration; do
     migration_count=$((migration_count + 1))
-    run_step "migration-$migration_count" run_pair docker exec -i "$postgres_id" \
-      psql -X -U station -d station -v ON_ERROR_STOP=1 < "$migration"
-  done
+    if [[ $migration_count -gt 64 || ! $migration =~ ^packages/db/drizzle/[0-9]{4}_[a-z0-9_]+\.sql$ ]]; then
+      echo "Attestor delivery checkpoint pair=$pair step=migration-enumeration failed class=inventory-shape." >&2
+      exit 1
+    fi
+    run_step "migration-$migration_count" run_pair bash -c \
+      'exec docker exec -i "$1" psql -X -U station -d station -v ON_ERROR_STOP=1 < "$2"' \
+      _ "$postgres_id" "$migration"
+  done <<< "$migration_lines"
+  if [[ $migration_count -lt 1 ]]; then
+    echo "Attestor delivery checkpoint pair=$pair step=migration-enumeration failed class=empty-inventory." >&2
+    exit 1
+  fi
   run_step credentials-create run_pair node scripts/search-admin-credentials.mjs create \
     --uid "$pair_uid" --gid "$pair_gid"
   # E0b stays root:1000 for the fixed consumer under either owner pair.
