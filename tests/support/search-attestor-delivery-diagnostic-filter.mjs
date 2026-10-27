@@ -28,10 +28,16 @@ function allowed(name, value) {
   if (field === 'state') return /^(?:created|running|exited|dead|other)$/.test(value);
   if (field === 'inspection') return value === 'unavailable';
   if (field === 'image-match') return availability.test(value);
-  return ['user-match', 'command-match', 'labels-match', 'host-policy-match',
+  return ['inspect-id-match', 'user-match', 'command-match', 'labels-match', 'host-policy-match',
     'cap-add-match', 'cap-drop-match', 'resources-match', 'host-safety-match', 'isolation-match',
     'tmpfs-match', 'mount-targets-match', 'host-mount-targets-match',
-    'network-names-match'].includes(field) && bool.test(value);
+    'effective-mount-inventory-match', 'host-mount-inventory-match',
+    'effective-mount-source-match', 'effective-mount-rw-match',
+    'host-mount-source-match', 'host-mount-readonly-match', 'host-mount-options-match',
+    'host-common-options-match', 'bind-options-match', 'volume-nocopy-match',
+    'volume-extra-options-match',
+    'network-names-match'].includes(field) && bool.test(value) ||
+    ['network-id-match', 'network-mode-match'].includes(field) && availability.test(value);
 }
 
 export function filteredDeliveryDiagnostics(log) {
@@ -50,7 +56,7 @@ export function filteredDeliveryDiagnostics(log) {
     if (!match || !allowed(match[1], match[2]) || seen.has(match[1])) continue;
     seen.add(match[1]);
     lines.push(line);
-    if (lines.length >= 80) break;
+    if (lines.length >= 128) break;
   }
   return lines;
 }

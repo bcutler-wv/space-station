@@ -22,6 +22,10 @@ test('failure output forwards only exact finite diagnostics, never a fake secret
     'Attestor delivery diagnostic phase-1-exit=137.',
     'Attestor delivery diagnostic phase-1-tmpfs-match=false.',
     'Attestor delivery diagnostic phase-2-cap-add-match=false.',
+    'Attestor delivery diagnostic phase-2-host-mount-options-match=false.',
+    'Attestor delivery diagnostic phase-2-network-id-match=false.',
+    'Attestor delivery diagnostic phase-2-effective-mount-source-match=false.',
+    'Attestor delivery diagnostic phase-2-volume-nocopy-match=false.',
     `Attestor delivery diagnostic lock-stage=${fakeSecret}.`,
     `Attestor delivery diagnostic scoped-config=valid.${fakeSecret}`,
     `Attestor delivery fixture failed at complete-cli.${fakeSecret}`,
@@ -42,6 +46,10 @@ test('failure output forwards only exact finite diagnostics, never a fake secret
     'Attestor delivery diagnostic phase-1-exit=137.',
     'Attestor delivery diagnostic phase-1-tmpfs-match=false.',
     'Attestor delivery diagnostic phase-2-cap-add-match=false.',
+    'Attestor delivery diagnostic phase-2-host-mount-options-match=false.',
+    'Attestor delivery diagnostic phase-2-network-id-match=false.',
+    'Attestor delivery diagnostic phase-2-effective-mount-source-match=false.',
+    'Attestor delivery diagnostic phase-2-volume-nocopy-match=false.',
     'Attestor delivery fixture failed at complete-cli.',
   ]);
   assert.equal(result.stdout.includes(fakeSecret), false);

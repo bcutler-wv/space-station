@@ -317,6 +317,27 @@ if (successful.code !== 0) {
   emit('lock-stage', lockStage);
   emit('invocation-roots', await count(invocationParent));
   emit('public-roots', await count(publicParent));
+  let scopedConfig;
+  try {
+    const env = { ...process.env,
+      STATION_ATTESTOR_INVOCATION_ROOT: path.join(invocationParent, invocationId),
+      STATION_ATTESTOR_PUBLIC_ROOT: path.join(publicParent, invocationId),
+      STATION_ATTESTOR_VOLUME_NAME: `${project}_search_attestor_${invocationId.replaceAll('-', '')}` };
+    const result = await command('docker', ['compose', '-f', 'compose.yaml',
+      '-f', 'compose.search-attestor.yaml', '-p', project, '--profile', 'search-attestor',
+      'config', '--format', 'json', ...phaseServices], env, 5000);
+    if (result.code !== 0 || result.stderr !== '') emit('scoped-config', 'command-failed');
+    else {
+      const candidate = JSON.parse(result.stdout);
+      verifyAttestorServiceConfig(candidate, { project,
+        uid: process.getuid(), gid: process.getgid(), repository, invocationId,
+        invocationRoot: env.STATION_ATTESTOR_INVOCATION_ROOT,
+        publicRoot: env.STATION_ATTESTOR_PUBLIC_ROOT,
+        volumeName: env.STATION_ATTESTOR_VOLUME_NAME });
+      scopedConfig = candidate;
+      emit('scoped-config', 'valid');
+    }
+  } catch { emit('scoped-config', 'invalid'); }
   try {
     const installation = await createSearchAdminDockerAdapter(process.getuid(), process.getgid());
     const identity = await installation.identity();
@@ -362,6 +383,7 @@ if (successful.code !== 0) {
         const status = ['created', 'running', 'exited', 'dead'].includes(item?.State?.Status)
           ? item.State.Status : 'other';
         emit(`phase-${phase}-state`, status);
+        emit(`phase-${phase}-inspect-id-match`, item?.Id === values[0]);
         emit(`phase-${phase}-exit`, Number.isInteger(item?.State?.ExitCode) ?
           item.State.ExitCode : 'unknown');
         emit(`phase-${phase}-user-match`, item?.Config?.User ===
@@ -406,6 +428,86 @@ if (successful.code !== 0) {
           value.Destination).sort(), expectedTargets[phase - 1]));
         emit(`phase-${phase}-host-mount-targets-match`, same(item?.HostConfig?.Mounts?.map(value =>
           value.Target).sort(), expectedTargets[phase - 1]));
+        if (scopedConfig) {
+          const expectedMounts = scopedConfig.services[service].volumes;
+          const effective = item?.Mounts ?? [];
+          const host = item?.HostConfig?.Mounts ?? [];
+          const sourceFor = mount => mount.type === 'bind' ? mount.source :
+            scopedConfig.volumes[mount.source]?.name;
+          const effectiveInventory = Array.isArray(effective) &&
+            effective.length === expectedMounts.length &&
+            new Set(effective.map(value => value.Destination)).size === effective.length;
+          const hostInventory = Array.isArray(host) && host.length === expectedMounts.length &&
+            new Set(host.map(value => value.Target)).size === host.length &&
+            (item?.HostConfig?.Binds ?? []).length === 0 &&
+            (item?.HostConfig?.VolumesFrom ?? []).length === 0;
+          emit(`phase-${phase}-effective-mount-inventory-match`, effectiveInventory);
+          emit(`phase-${phase}-host-mount-inventory-match`, hostInventory);
+          emit(`phase-${phase}-effective-mount-source-match`, effectiveInventory &&
+            expectedMounts.every(wanted => {
+              const actual = effective.find(value => value.Destination === wanted.target);
+              return actual?.Type === wanted.type && actual.Destination === wanted.target &&
+                (wanted.type === 'bind' ? actual.Source === sourceFor(wanted) :
+                  actual.Name === sourceFor(wanted));
+            }));
+          emit(`phase-${phase}-effective-mount-rw-match`, effectiveInventory &&
+            expectedMounts.every(wanted => effective.find(value =>
+              value.Destination === wanted.target)?.RW === !wanted.read_only));
+          emit(`phase-${phase}-host-mount-source-match`, hostInventory &&
+            expectedMounts.every(wanted => {
+              const actual = host.find(value => value.Target === wanted.target);
+              return actual?.Type === wanted.type && actual.Source === sourceFor(wanted) &&
+                actual.Target === wanted.target;
+            }));
+          emit(`phase-${phase}-host-mount-readonly-match`, hostInventory &&
+            expectedMounts.every(wanted => {
+              const actual = host.find(value => value.Target === wanted.target);
+              return wanted.read_only ? actual?.ReadOnly === true :
+                [undefined, false].includes(actual?.ReadOnly);
+            }));
+          const empty = value => value && typeof value === 'object' &&
+            !Array.isArray(value) && Object.keys(value).length === 0;
+          const subset = (value, names) => value && typeof value === 'object' &&
+            !Array.isArray(value) && Object.keys(value).every(key => names.includes(key));
+          const commonOptionsMatch = hostInventory && host.every(actual => actual &&
+            [undefined, '', 'default'].includes(actual.Consistency) &&
+            actual.TmpfsOptions == null && actual.ImageOptions == null &&
+            actual.ClusterOptions == null);
+          const bindOptionsMatch = hostInventory && expectedMounts.filter(wanted =>
+            wanted.type === 'bind').every(wanted => {
+            const actual = host.find(value => value.Target === wanted.target);
+            const opts = actual?.BindOptions;
+            return actual?.VolumeOptions == null && (opts == null ||
+              subset(opts, ['Propagation', 'NonRecursive', 'CreateMountpoint',
+                'ReadOnlyNonRecursive', 'ReadOnlyForceRecursive']) &&
+              [undefined, '', 'rprivate'].includes(opts.Propagation) &&
+              [undefined, false].includes(opts.NonRecursive) &&
+              [undefined, false].includes(opts.CreateMountpoint) &&
+              [undefined, false].includes(opts.ReadOnlyNonRecursive) &&
+              [undefined, false].includes(opts.ReadOnlyForceRecursive));
+          });
+          const volumeNocopyMatch = hostInventory && expectedMounts.filter(wanted =>
+            wanted.type === 'volume').every(wanted => {
+            const opts = host.find(value => value.Target === wanted.target)?.VolumeOptions;
+            return wanted.volume?.nocopy === true ? opts?.NoCopy === true :
+              opts == null || [undefined, false].includes(opts.NoCopy);
+          });
+          const volumeExtraOptionsMatch = hostInventory && expectedMounts.filter(wanted =>
+            wanted.type === 'volume').every(wanted => {
+            const actual = host.find(value => value.Target === wanted.target);
+            const opts = actual?.VolumeOptions;
+            return actual?.BindOptions == null && (opts == null ||
+              subset(opts, ['NoCopy', 'Labels', 'Subpath', 'DriverConfig']) &&
+              (opts.Labels == null || empty(opts.Labels)) &&
+              [undefined, ''].includes(opts.Subpath) && opts.DriverConfig == null);
+          });
+          emit(`phase-${phase}-host-mount-options-match`, commonOptionsMatch &&
+            bindOptionsMatch && volumeNocopyMatch && volumeExtraOptionsMatch);
+          emit(`phase-${phase}-host-common-options-match`, commonOptionsMatch);
+          emit(`phase-${phase}-bind-options-match`, bindOptionsMatch);
+          emit(`phase-${phase}-volume-nocopy-match`, volumeNocopyMatch);
+          emit(`phase-${phase}-volume-extra-options-match`, volumeExtraOptionsMatch);
+        }
         emit(`phase-${phase}-tmpfs-count`, item?.HostConfig?.Tmpfs &&
           typeof item.HostConfig.Tmpfs === 'object' ? Object.keys(item.HostConfig.Tmpfs).length : -1);
         emit(`phase-${phase}-network-count`, item?.NetworkSettings?.Networks &&
@@ -414,6 +516,27 @@ if (successful.code !== 0) {
         emit(`phase-${phase}-network-names-match`, same(Object.keys(
           item?.NetworkSettings?.Networks ?? {}).filter(name => name !== 'none').sort(),
         expectedNetworks[phase - 1]));
+        const expectedNetworkNames = phase === 2 ? ['none'] :
+          phase === 1 ? ['search_admin_db'] : ['search_admin_db', 'search_internal'];
+        try {
+          const ids = await Promise.all(expectedNetworkNames.map(async name => {
+            const observed = JSON.parse(await inspectDocker(['network', 'inspect',
+              name === 'none' ? name : `${project}_${name}`]))[0];
+            return [name === 'none' ? 'none' : `${project}_${name}`, observed?.Id];
+          }));
+          const map = item?.NetworkSettings?.Networks ?? {};
+          const actualIds = Object.values(map).map(value => value.NetworkID).sort();
+          const wantedIds = ids.map(([, value]) => value).sort();
+          emit(`phase-${phase}-network-id-match`, phase === 2 ?
+            Object.keys(map).length === 0 ||
+              Object.keys(map).length === 1 && map.none?.NetworkID === ids[0][1] :
+            same(actualIds, wantedIds));
+          emit(`phase-${phase}-network-mode-match`, phase === 2 ?
+            item?.HostConfig?.NetworkMode === 'none' : true);
+        } catch {
+          emit(`phase-${phase}-network-id-match`, 'unavailable');
+          emit(`phase-${phase}-network-mode-match`, 'unavailable');
+        }
       }
     } catch { emit(`phase-${phase}-inspection`, 'unavailable'); }
   }
@@ -425,24 +548,6 @@ if (successful.code !== 0) {
     emit('invocation-volumes', volumes.length);
   }
   catch { emit('invocation-volumes', 'unavailable'); }
-  try {
-    const env = { ...process.env,
-      STATION_ATTESTOR_INVOCATION_ROOT: path.join(invocationParent, invocationId),
-      STATION_ATTESTOR_PUBLIC_ROOT: path.join(publicParent, invocationId),
-      STATION_ATTESTOR_VOLUME_NAME: `${project}_search_attestor_${invocationId.replaceAll('-', '')}` };
-    const result = await command('docker', ['compose', '-f', 'compose.yaml',
-      '-f', 'compose.search-attestor.yaml', '-p', project, '--profile', 'search-attestor',
-      'config', '--format', 'json', ...phaseServices], env, 5000);
-    if (result.code !== 0 || result.stderr !== '') emit('scoped-config', 'command-failed');
-    else {
-      verifyAttestorServiceConfig(JSON.parse(result.stdout), { project,
-        uid: process.getuid(), gid: process.getgid(), repository, invocationId,
-        invocationRoot: env.STATION_ATTESTOR_INVOCATION_ROOT,
-        publicRoot: env.STATION_ATTESTOR_PUBLIC_ROOT,
-        volumeName: env.STATION_ATTESTOR_VOLUME_NAME });
-      emit('scoped-config', 'valid');
-    }
-  } catch { emit('scoped-config', 'invalid'); }
   for (const [index, name] of ['search_admin_db', 'search_internal'].entries()) {
     try {
       const item = JSON.parse(await inspectDocker(['network', 'inspect', `${project}_${name}`]))[0];
