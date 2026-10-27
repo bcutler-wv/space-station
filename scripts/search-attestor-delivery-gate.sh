@@ -168,7 +168,7 @@ for pair in default runner; do
   mkdir -m 700 -- "$checkout"
   tar -C "$runner_root" --exclude=.git --exclude=.cache --exclude=node_modules \
     --exclude=LOCAL.md --exclude=.env --exclude=results --exclude=test-results \
-    --exclude=playwright-report -cf - . | tar -C "$checkout" -xf -
+    --exclude=playwright-report -cf - . | tar -C "$checkout" -xpf -
   ln -s "$runner_root/node_modules" "$checkout/node_modules"
   while IFS= read -r -d '' module_dir; do
     relative=${module_dir#"$runner_root"/}
@@ -218,6 +218,13 @@ for pair in default runner; do
     --profile search --profile search-attestor build \
     search-init search-profile-introduce search-profile-bootstrap \
     search-attestor-prepare search-attestor-transfer search-engine-attestor
+  run_step image-code-readability run_pair docker run --rm --pull never --network none \
+    --read-only --user 1000:1000 --entrypoint node "${name}-search-profile-introduce" \
+    -e 'const fs=require("node:fs"); const c=fs.constants;
+      for(const p of ["/app/packages","/app/packages/search","/app/packages/search/dist"])
+        fs.accessSync(p,c.R_OK|c.X_OK);
+      fs.accessSync("/app/packages/search/dist/opensearch-introduce.js",c.R_OK);
+      process.stdout.write("Fixed profile code is UID1000-readable.\n");'
   run_step postgres-start run_pair docker compose up -d --wait postgres
   phase=postgres-id
   if postgres_id=$(run_pair docker compose ps -q postgres 2>> "$private_log"); then
