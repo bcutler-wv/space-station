@@ -124,13 +124,18 @@ function container(phase, mutation) {
 }
 
 function fixture(fault) {
-  const calls = [], seen = new Set();
+  const calls = [], envScopes = [], seen = new Set();
   let created = false, removed = false, invocationVolumeInspects = 0;
   let ownerCalls = 0, configCalls = 0;
   const reply = stdout => ({ code: 0, signal: null, stdout, stderr: '' });
-  const command = async args => {
+  const command = async (args, env) => {
     calls.push(args.join(' '));
     const joined = args.join(' ');
+    if (args[0] === 'compose') {
+      const isRun = joined.includes(' run --detach --no-deps --pull never ');
+      envScopes.push({ isRun, ignore: env.COMPOSE_IGNORE_ORPHANS });
+      assert.equal(env.COMPOSE_IGNORE_ORPHANS, isRun ? 'true' : undefined);
+    } else assert.equal(env.COMPOSE_IGNORE_ORPHANS, undefined);
     if (joined.includes(' config --format json ')) {
       configCalls++;
       const rendered = structuredClone(config);
@@ -213,7 +218,7 @@ function fixture(fault) {
     const final = await adapter.runPhase('attestor');
     await adapter.cleanupRemote([prepare, transfer, final], made);
   };
-  return { run, calls, seen };
+  return { run, calls, envScopes, seen };
 }
 
 test('scripted Docker evidence accepts only exact fixed phases and captured cleanup', async () => {
@@ -223,10 +228,25 @@ test('scripted Docker evidence accepts only exact fixed phases and captured clea
   assert.equal(item.calls.filter(x => x.includes(' volume create ')).length, 0);
   assert.equal(item.calls.filter(x => x.startsWith('volume create ')).length, 1);
   assert.equal(item.calls.filter(x => x.includes(' run --detach ')).length, 3);
+  assert.deepEqual(item.envScopes.filter(x => x.isRun), [
+    { isRun: true, ignore: 'true' },
+    { isRun: true, ignore: 'true' },
+    { isRun: true, ignore: 'true' },
+  ]);
 });
 
 test('documented safe Docker mount defaults remain accepted', async () => {
   await fixture('safe-defaults').run();
+});
+
+test('caller Compose environment remains rejected despite fixed internal warning control', () => {
+  const previous = process.env.COMPOSE_IGNORE_ORPHANS;
+  process.env.COMPOSE_IGNORE_ORPHANS = 'false';
+  try { assert.throws(() => fixture(), { message: 'Private search attestor owner operation failed.' }); }
+  finally {
+    if (previous === undefined) delete process.env.COMPOSE_IGNORE_ORPHANS;
+    else process.env.COMPOSE_IGNORE_ORPHANS = previous;
+  }
 });
 
 test('only the exact transfer capability set accepts canonical and Compose spellings', async () => {

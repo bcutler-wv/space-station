@@ -120,10 +120,14 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
         stderr: Buffer.concat(outputs[1]).toString('utf8') };
     } finally { clearTimeout(timer); }
   });
-  const docker = async (args, timeoutMs = 10_000) => {
+  const docker = async (args, timeoutMs = 10_000, ignoreRetainedOneOffWarning = false) => {
     tick();
     let response;
-    try { response = await runCommand(args, environment(process.env, trusted), timeoutMs); }
+    const commandEnvironment = environment(process.env, trusted);
+    // Compose calls a retained, exited one-off an orphan on the next phase.
+    // Suppress only that warning on fixed detached sends; never remove it.
+    if (ignoreRetainedOneOffWarning) commandEnvironment.COMPOSE_IGNORE_ORPHANS = 'true';
+    try { response = await runCommand(args, commandEnvironment, timeoutMs); }
     catch (error) {
       if (error instanceof AttestorOwnerDiagnosticError) throw error;
       throw ownerDiagnostic(error);
@@ -151,7 +155,7 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
     volumeName, networkIds, volumeIds, images;
   let trusted = { APP_UID: String(uid), APP_GID: String(gid) };
   const compose = (args, timeout) => docker([...composeArgs, '-p', project,
-    '--profile', 'search-attestor', ...args], timeout);
+    '--profile', 'search-attestor', ...args], timeout, args[0] === 'run');
   const inspect = async id => oneJson((await docker(['container', 'inspect', id])).stdout);
   const inspectVolume = async name => atReason('inspect-response', async () =>
     oneJson((await docker(['volume', 'inspect', name])).stdout));
