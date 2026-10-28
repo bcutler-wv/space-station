@@ -66,6 +66,10 @@ jobs:
       - run: node --test tests/support/search-create-boundary-transfer.test.mjs
       - run: node --test tests/support/search-create-boundary-core.test.mjs
       - run: node --test tests/support/search-create-boundary-service-config.test.mjs
+      - run: node --test tests/support/search-create-boundary-owner.test.mjs
+      - run: node --test tests/support/search-create-boundary-owner-docker.test.mjs
+      - run: node --test tests/support/search-create-boundary-delivery-diagnostic-filter.test.mjs
+      - run: node --test tests/support/search-create-boundary-app-worker-config.test.mjs
       - run: node --test tests/support/search-attestor-command.test.mjs
       - run: node --test tests/support/search-attestor-transfer.test.mjs
       - run: node tests/support/search-attestor-public-staging.test.mjs
@@ -115,6 +119,24 @@ jobs:
       - run: pnpm build
       - run: sudo sysctl -w vm.max_map_count=262144
       - run: timeout --signal=TERM --kill-after=20s 3300s bash scripts/search-attestor-delivery-gate.sh
+
+  search-create-boundary-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: scaffold
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: sudo sysctl -w vm.max_map_count=262144
+      - run: timeout --signal=TERM --kill-after=20s 3300s bash scripts/search-create-boundary-delivery-gate.sh
 
   process-recovery:
     runs-on: ubuntu-latest

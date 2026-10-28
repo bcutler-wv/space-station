@@ -26,6 +26,8 @@ for test_id in 1000 1001; do
     --profile search-create-boundary config --format json \
     search-create-transfer search-create-boundary |
     node "$repo_root/tests/support/search-create-boundary-render-check.mjs" "$test_id"
+  "${compose[@]}" -p create_fixture -f compose.yaml config --format json app worker |
+    node "$repo_root/tests/support/search-create-boundary-app-worker-config.mjs" "$test_root"
 done
 unset STATION_CREATE_INVOCATION_ROOT STATION_CREATE_VOLUME_NAME
 "${compose[@]}" -p create_fixture -f compose.yaml config --quiet

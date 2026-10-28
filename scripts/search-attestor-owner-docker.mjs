@@ -1,15 +1,14 @@
-import { spawn } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { performance } from 'node:perf_hooks';
 import process from 'node:process';
-import { clearTimeout, setTimeout } from 'node:timers';
 import { createSearchAdminDockerAdapter } from './search-admin-credentials.mjs';
+import { runBoundedOwnerDockerCommand } from './search-owner-docker-command.mjs';
 import { operateSearchAdminCredentialsAlreadyJobLocked } from './search-admin-credential-core.mjs';
 import { verifyAttestorServiceConfig } from './search-attestor-service-config.mjs';
 import { AttestorOwnerDiagnosticError, ownerDiagnostic } from './search-attestor-owner-diagnostic.mjs';
+import { equal, keys, sameStat, sameVolume, verifyOwnerContainerPolicy } from './search-owner-docker-policy.mjs';
 
 const fail = (reason = 'invariant') => { throw new AttestorOwnerDiagnosticError('input', reason); };
 const idPattern = /^[0-9a-f]{64}$/;
@@ -23,22 +22,6 @@ const fixedOutput = { prepare: 'Private search attestor preparation completed.\n
 const commands = { prepare: ['node', 'scripts/search-attestor-prepare.mjs'],
   transfer: ['node', 'scripts/search-attestor-transfer.mjs'],
   attestor: ['node', 'scripts/search-attestor-combined.mjs'] };
-const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const exactCapAdd = (value, phase) => {
-  const wanted = phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : [];
-  const observed = value ?? [];
-  if (!Array.isArray(observed) || observed.length !== wanted.length) return false;
-  const names = observed.map(item => {
-    if (item === 'CHOWN' || item === 'CAP_CHOWN') return 'CHOWN';
-    if (item === 'DAC_OVERRIDE' || item === 'CAP_DAC_OVERRIDE') return 'DAC_OVERRIDE';
-    return null;
-  });
-  return equal(names.sort(), wanted);
-};
-const keys = (value, expected) => value && typeof value === 'object' &&
-  !Array.isArray(value) && equal(Object.keys(value).sort(), [...expected].sort());
-const keysSubset = (value, allowed) => value && typeof value === 'object' &&
-  !Array.isArray(value) && Object.keys(value).every(key => allowed.includes(key));
 const listed = (body, pattern, max) => {
   const lines = body === '' ? [] : body.split('\n');
   if (lines.length > max || lines.some(line => !pattern.test(line)) || new Set(lines).size !== lines.length) fail();
@@ -50,10 +33,6 @@ const oneJson = text => {
       typeof parsed[0] !== 'object') fail();
   return parsed[0];
 };
-const sameStat = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid &&
-  a.gid === b.gid && a.mode === b.mode && a.size === b.size && a.nlink === b.nlink &&
-  a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
-
 async function captureCredential(repository, uid, gid) {
   const root = path.join(repository, '.cache/search-db/initial-v1');
   const rootStat = await lstat(root);
@@ -95,31 +74,9 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
   const ownerFactory = options.ownerFactory ?? createSearchAdminDockerAdapter;
   const verifyCredentials = options.verifyCredentials ?? operateSearchAdminCredentialsAlreadyJobLocked;
   const credentialCapture = options.credentialCapture ?? captureCredential;
-  const runCommand = options.command ?? (async (args, env, timeoutMs = 10_000) => {
-    const remaining = Math.min(timeoutMs, Math.floor(deadline - performance.now()));
-    if (remaining < 1) fail('deadline');
-    const child = spawn('docker', args, { cwd: repository, env,
-      stdio: ['ignore', 'pipe', 'pipe'] });
-    const outputs = [[], []]; let sizes = [0, 0], overflow = false, timedOut = false;
-    const collect = (index, chunk) => {
-      sizes[index] += chunk.length;
-      if (sizes[index] > 256 * 1024) { overflow = true; child.kill('SIGKILL'); }
-      else outputs[index].push(chunk);
-    };
-    child.stdout.on('data', chunk => collect(0, chunk));
-    child.stderr.on('data', chunk => collect(1, chunk));
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, remaining);
-    try {
-      const exit = await new Promise((resolve, reject) => {
-        child.once('error', reject);
-        child.once('close', (code, signal) => resolve({ code, signal }));
-      }).catch(() => fail('spawn'));
-      if (overflow || timedOut) fail('timeout');
-      if (exit.signal) fail('spawn');
-      return { ...exit, stdout: Buffer.concat(outputs[0]).toString('utf8'),
-        stderr: Buffer.concat(outputs[1]).toString('utf8') };
-    } finally { clearTimeout(timer); }
-  });
+  const runCommand = options.command ?? ((args, env, timeoutMs = 10_000) =>
+    runBoundedOwnerDockerCommand({ repository, deadline, args, env, timeoutMs,
+      reject: kind => fail(kind) }));
   const docker = async (args, timeoutMs = 10_000, ignoreRetainedOneOffWarning = false) => {
     tick();
     let response;
@@ -159,9 +116,6 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
   const inspect = async id => oneJson((await docker(['container', 'inspect', id])).stdout);
   const inspectVolume = async name => atReason('inspect-response', async () =>
     oneJson((await docker(['volume', 'inspect', name])).stdout));
-  const sameVolume = (a, b) => a.Name === b.Name && a.Driver === b.Driver &&
-    a.Scope === b.Scope && a.CreatedAt === b.CreatedAt && a.Mountpoint === b.Mountpoint &&
-    equal(a.Labels, b.Labels) && equal(a.Options, b.Options);
   const expectVolume = item => {
     if (!item || item.Name !== volumeName || item.Driver !== 'local' ||
         item.Scope !== 'local' || !item.CreatedAt || typeof item.CreatedAt !== 'string' ||
@@ -171,106 +125,23 @@ export function createAttestorDockerAdapter({ repository, uid, gid, jobLock,
         item.Options !== null && !keys(item.Options, [])) fail('volume');
   };
   const checkContainer = (item, phase, id, terminal) => {
-    const reject = reason => fail(reason);
-    const expected = normalized.services[fixedNames[phase]];
-    if (item.Id !== id || !item.Config || !item.HostConfig || !item.NetworkSettings ||
-        item.Image !== images[phase] || !imagePattern.test(item.Image) ||
-        item.Config.User !== (phase === 'prepare' ? `${uid}:${gid}` :
-          phase === 'transfer' ? '0:0' : '1000:1000') ||
-        !equal(item.Config.Cmd, commands[phase]) ||
-        !equal(item.Config.Entrypoint, images.entrypoint[phase]) ||
-        !equal(item.Config.Env, images.env[phase]) ||
-        item.Config.Labels?.['com.docker.compose.project'] !== project ||
-        item.Config.Labels?.['com.docker.compose.service'] !== fixedNames[phase] ||
-        item.HostConfig.Privileged !== false || item.HostConfig.ReadonlyRootfs !== true ||
-        !equal(item.HostConfig.CapDrop?.map(x => x.toUpperCase()), ['ALL']) ||
-        !exactCapAdd(item.HostConfig.CapAdd, phase) ||
-        item.HostConfig.PidsLimit !== (phase === 'attestor' ? 128 : 64) ||
-        item.HostConfig.Memory !== (phase === 'attestor' ? 536870912 : 268435456) ||
-        item.HostConfig.NanoCpus !== (phase === 'attestor' ? 1e9 : 5e8) ||
-        item.HostConfig.RestartPolicy?.Name !== 'no' ||
-        !equal(item.HostConfig.SecurityOpt, ['no-new-privileges:true']) ||
-        (item.HostConfig.Devices ?? []).length !== 0 ||
-        (item.HostConfig.GroupAdd ?? []).length !== 0 ||
-        item.HostConfig.PidMode !== '' ||
-        item.HostConfig.IpcMode !== 'private' ||
-        Object.keys(item.HostConfig.PortBindings ?? {}).length !== 0 ||
-        Object.values(item.NetworkSettings.Ports ?? {}).some(value => value !== null)) reject('inspect-policy');
-    const wantedTmpfs = expected.tmpfs[0].slice('/tmp:'.length);
-    if (!keys(item.HostConfig.Tmpfs, ['/tmp']) ||
-        item.HostConfig.Tmpfs['/tmp'] !== wantedTmpfs) reject('inspect-tmpfs');
-    const actualMounts = new Map();
-    for (const mount of item.Mounts ?? []) {
-      if (actualMounts.has(mount.Destination)) reject('inspect-mounts');
-      actualMounts.set(mount.Destination, mount);
-    }
-    if (actualMounts.size !== expected.volumes.length) reject('inspect-mounts');
-    for (const mount of expected.volumes) {
-      const actual = actualMounts.get(mount.target);
-      const source = mount.type === 'bind' ? mount.source :
-        normalized.volumes[mount.source]?.name;
-      if (!actual || actual.Type !== mount.type || actual.Destination !== mount.target ||
-          (mount.type === 'bind' ? actual.Source !== source : actual.Name !== source) ||
-          actual.RW !== !mount.read_only) reject('inspect-mounts');
-    }
-    const hostMounts = item.HostConfig.Mounts;
-    if (!Array.isArray(hostMounts) || hostMounts.length !== expected.volumes.length ||
-        (item.HostConfig.Binds ?? []).length !== 0 ||
-        (item.HostConfig.VolumesFrom ?? []).length !== 0) reject('inspect-host-mounts');
-    const byTarget = new Map();
-    for (const mount of hostMounts) {
-      if (!mount || typeof mount.Target !== 'string' || byTarget.has(mount.Target)) reject('inspect-host-mounts');
-      byTarget.set(mount.Target, mount);
-    }
-    for (const wanted of expected.volumes) {
-      const actual = byTarget.get(wanted.target);
-      const source = wanted.type === 'bind' ? wanted.source :
-        normalized.volumes[wanted.source]?.name;
-      if (!actual || actual.Type !== wanted.type || actual.Source !== source ||
-          actual.Target !== wanted.target ||
-          (wanted.read_only ? actual.ReadOnly !== true :
-            ![undefined, false].includes(actual.ReadOnly)) ||
-          ![undefined, '', 'default'].includes(actual.Consistency) ||
-          actual.TmpfsOptions != null || actual.ImageOptions != null ||
-          actual.ClusterOptions != null) reject('inspect-host-mounts');
-      if (wanted.type === 'bind') {
-        const opts = actual.BindOptions;
-        if (actual.VolumeOptions != null || opts != null &&
-            (!keysSubset(opts, ['Propagation', 'NonRecursive', 'CreateMountpoint',
-              'ReadOnlyNonRecursive', 'ReadOnlyForceRecursive']) ||
-              ![undefined, '', 'rprivate'].includes(opts.Propagation) ||
-              ![undefined, false].includes(opts.NonRecursive) ||
-              ![undefined, false].includes(opts.CreateMountpoint) ||
-              ![undefined, false].includes(opts.ReadOnlyNonRecursive) ||
-              ![undefined, false].includes(opts.ReadOnlyForceRecursive))) reject('inspect-host-mounts');
-      } else {
-        const opts = actual.VolumeOptions;
-        if (actual.BindOptions != null ||
-            (wanted.volume?.nocopy === true ? opts == null || opts.NoCopy !== true :
-              opts != null && ![undefined, false].includes(opts.NoCopy)) ||
-            opts != null && (!keysSubset(opts, ['NoCopy', 'Labels', 'Subpath', 'DriverConfig']) ||
-              opts.Labels != null && !keys(opts.Labels, []) ||
-              ![undefined, ''].includes(opts.Subpath) ||
-              opts.DriverConfig != null)) reject('inspect-host-mounts');
-      }
-    }
-    const networkMap = item.NetworkSettings.Networks ?? {};
-    const actualNetworks = Object.values(networkMap).map(network => network.NetworkID).sort();
-    const expectedNetworks = phase === 'transfer' ? [networkIds.none] :
-      (phase === 'prepare' ? [networkIds.search_admin_db] :
-        [networkIds.search_admin_db, networkIds.search_internal]).sort();
-    if (phase === 'transfer') {
-      if (item.HostConfig.NetworkMode !== 'none' ||
-          !(keys(networkMap, []) && actualNetworks.length === 0 ||
-            keys(networkMap, ['none']) && equal(actualNetworks, expectedNetworks))) reject('inspect-network');
-    } else if (!equal(actualNetworks, expectedNetworks)) reject('inspect-network');
-    if (terminal && (item.State?.Status !== 'exited' || item.State?.ExitCode !== 0 ||
-        !item.State?.StartedAt || !item.State?.FinishedAt ||
-        item.State.StartedAt === '0001-01-01T00:00:00Z' ||
-        item.State.FinishedAt === '0001-01-01T00:00:00Z' ||
-        item.State.Running !== false || item.State.OOMKilled !== false ||
-        item.State.Dead !== false || item.State.Error !== '' ||
-        item.RestartCount !== 0)) reject('inspect-terminal');
+    const service = normalized.services[fixedNames[phase]];
+    verifyOwnerContainerPolicy(item, {
+      id, image: images[phase], env: images.env[phase],
+      entrypoint: images.entrypoint[phase], command: commands[phase],
+      user: phase === 'prepare' ? `${uid}:${gid}` : phase === 'transfer' ? '0:0' : '1000:1000',
+      project, service: fixedNames[phase],
+      capAdd: phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : [],
+      pids: phase === 'attestor' ? 128 : 64,
+      memory: phase === 'attestor' ? 536870912 : 268435456,
+      nanoCpus: phase === 'attestor' ? 1e9 : 5e8,
+      tmpfs: service.tmpfs[0].slice('/tmp:'.length), mounts: service.volumes,
+      volumes: normalized.volumes,
+      networks: phase === 'transfer' ? [networkIds.none] :
+        phase === 'prepare' ? [networkIds.search_admin_db] :
+          [networkIds.search_admin_db, networkIds.search_internal],
+      none: phase === 'transfer', terminal,
+    }, reason => fail(reason));
   };
   const checkAt = (when, item, phase, id, terminal) => {
     try { checkContainer(item, phase, id, terminal); }
