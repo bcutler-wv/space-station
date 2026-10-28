@@ -40,10 +40,18 @@ async function fixture(fault) {
       systemIdentifier: '123', owner: 'station' }),
     recheckOwner: async () => {
       if (fault === 'pending-replaced-final-owner' && cleanupRan && !replaced) {
-        replaced = true;
         const pending = path.join(repository, '.cache/search-create-intent/pending.json');
-        await rename(pending, `${pending}.moved`);
-        await copyFile(`${pending}.moved`, pending);
+        const scratch = path.join(repository, '.cache/search-create-intent-fixture');
+        await mkdir(scratch, { mode: 0o700 });
+        const moved = path.join(scratch, 'intent-original-pending');
+        const before = await lstat(pending);
+        const bytes = await readFile(pending);
+        await rename(pending, moved);
+        await copyFile(moved, pending);
+        assert.equal((await lstat(moved)).ino, before.ino);
+        assert.notEqual((await lstat(pending)).ino, before.ino);
+        assert.deepEqual(await readFile(pending), bytes);
+        replaced = true;
       }
     },
     recheckInfrastructure: async () => {},
@@ -65,7 +73,7 @@ async function fixture(fault) {
     if (fault === 'public-drift-cleanup' && cleanupRan) throw new Error('private secret');
     return true;
   } });
-  return { repository, sent,
+  return { repository, sent, wasReplaced: () => replaced,
     run: () => runCreateIntentPrepareOwner({ repository, uid: process.getuid(),
       gid: process.getgid(), adapterFactory, capturePublic }),
     lock: path.join(repository, '.cache/search-db/.job-operation.lock'),
@@ -107,6 +115,7 @@ test('uncertain prepare and cleanup retain global lock; cleanup ambiguity retain
       assert.deepEqual(item.sent, expected);
       assert.equal(await lstat(item.lock).then(() => true, () => false), true);
       assert.equal(await lstat(item.pending).then(() => true, () => false), hasPending);
+      if (fault === 'pending-replaced-final-owner') assert.equal(item.wasReplaced(), true);
     } finally { await item.dispose(); }
   }
 });

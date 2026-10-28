@@ -10,6 +10,7 @@ const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-c
   'unintroduced-rejection', 'incomplete-rejection', 'wrong-uuid-rejection', 'engine-drift',
   'host-identity-rejection', 'source-loss', 'mapping-drift']);
 const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-identity',
+  'intent-fixture-scratch',
   'intent-preexisting', 'intent-malformed-pending', 'intent-fresh-projection',
   'intent-fresh-owner', 'intent-fresh-transfer', 'intent-fresh-prepare',
   'intent-fresh-captured', 'intent-fresh-lock', 'intent-fresh-references',
@@ -26,7 +27,12 @@ const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-
   'intent-lost-volume-response',
   'intent-lost-transfer-response', 'intent-lost-prepare-response', 'intent-cleanup-response',
   'intent-pending-record', 'intent-pending-partial', 'intent-pending-inode',
-  'intent-pending-same-size', 'intent-missing-admin-public', 'intent-swapped-admin-public',
+  'intent-pending-inode-mutation', 'intent-pending-inode-retained',
+  'intent-pending-inode-unchanged', 'intent-pending-inode-cleanup',
+  'intent-pending-same-size', 'intent-pending-same-size-mutation',
+  'intent-pending-same-size-retained', 'intent-pending-same-size-unchanged',
+  'intent-pending-same-size-cleanup',
+  'intent-missing-admin-public', 'intent-swapped-admin-public',
   'intent-wrong-admin-private', 'intent-public-replaced-after-capture',
   'intent-expired-admin-public', 'intent-fingerprint', 'intent-final']);
 export function filteredCreateBoundaryDiagnostics(log) {

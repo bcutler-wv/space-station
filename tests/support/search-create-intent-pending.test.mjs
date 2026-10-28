@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm,
+import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename,
+  rmdir, rm,
   writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -51,16 +52,32 @@ test('post-write inode is captured from handle and cannot adopt same-byte replac
   await mkdir(path.join(repository, '.cache'), { mode: 0o755 });
   const uid = process.getuid(), gid = process.getgid();
   const prepared = await prepareCreateIntentPending(repository, uid, gid);
+  const scratch = path.join(repository, '.cache/search-create-intent-fixture');
+  await mkdir(scratch, { mode: 0o700 });
+  assert.equal((await lstat(scratch)).mode & 0o777, 0o700);
   const intent = { version: 1, project: 'fixture' };
   const sha = createHash('sha256').update(canonicalAttestorValue(intent).bytes).digest('hex');
+  let replaced = false;
   process.env.STATION_INTENT_PENDING_FIXTURE = '1';
   try {
     await assert.rejects(() => writeCreateIntentPending(prepared, intent, sha, uid, gid, {
       afterFileClose: async name => {
-        const moved = path.join(repository, '.cache/original-pending');
+        const moved = path.join(scratch, 'intent-original-pending');
+        const before = await lstat(name);
+        const bytes = await readFile(name);
         await rename(name, moved);
         await copyFile(moved, name);
+        const after = await lstat(name);
+        assert.equal((await lstat(moved)).ino, before.ino);
+        assert.notEqual(after.ino, before.ino);
+        assert.deepEqual(await readFile(name), bytes);
+        replaced = true;
       },
     }), { message: 'Private create intent pending file failed.' });
   } finally { delete process.env.STATION_INTENT_PENDING_FIXTURE; }
+  assert.equal(replaced, true);
+  await rm(path.join(scratch, 'intent-original-pending'));
+  assert.deepEqual(await readdir(scratch), []);
+  await rmdir(scratch);
+  await assert.rejects(() => lstat(scratch), { code: 'ENOENT' });
 });

@@ -20,3 +20,12 @@ test('only fixed intent checkpoint is forwarded and fake secret suffix is discar
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
     ['Create intent prepare fixture failed at intent-pending-inode.']);
 });
+test('fixed pending mutation checkpoints are forwarded without accepting arbitrary suffixes', () => {
+  for (const checkpoint of ['intent-fixture-scratch', 'intent-pending-inode-mutation',
+    'intent-pending-inode-retained', 'intent-pending-same-size-mutation']) {
+    const line = `Create intent prepare fixture failed at ${checkpoint}.`;
+    assert.deepEqual(filteredCreateBoundaryDiagnostics([line,
+      'Create intent prepare fixture failed at intent-pending-inode-private-secret.'].join('\n')),
+    [line]);
+  }
+});

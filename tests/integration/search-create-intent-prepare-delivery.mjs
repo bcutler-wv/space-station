@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { createHash, X509Certificate } from 'node:crypto';
-import { chmod, copyFile, lstat, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rmdir, rm,
+  writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
@@ -27,6 +28,7 @@ const token = '11111111-1111-4111-8111-111111111111';
 const image = `${project}-search-create-intent-prepare`;
 const lock = path.join(repository, '.cache/search-db/.job-operation.lock');
 const pending = path.join(repository, '.cache/search-create-intent/pending.json');
+const scratch = path.join(repository, '.cache/search-create-intent-fixture');
 const invocationParent = path.join(repository, '.cache/search-create-invocations');
 const source = path.join(repository, '.cache/search-security');
 const id = /^[0-9a-f]{64}$/;
@@ -427,7 +429,8 @@ const faultStages = Object.freeze({
   'public-replaced-after-capture': { create: 1, transfer: 1, prepare: 1, phase: 'prepare', state: 'confirmed' },
   'expired-admin-public': { create: 1, transfer: 1, prepare: 1, phase: 'prepare', state: 'confirmed' },
 });
-async function runFault(scenario, { lockFault, writePending: writer, capturePublic, mutate } = {}) {
+async function runFault(scenario, { lockFault, writePending: writer, capturePublic, mutate,
+  proveMutation } = {}) {
   checkpoint = `intent-${scenario}`;
   const expected = faultStages[scenario];
   assert.ok(expected);
@@ -486,6 +489,11 @@ async function runFault(scenario, { lockFault, writePending: writer, capturePubl
   assert.equal(records.at(-1).state, expected.state);
   if (scenario === 'pending-record') reached = records.at(-1).phase === 'pending';
   assert.equal(reached, true);
+  if (proveMutation) {
+    checkpoint = `intent-${scenario}-mutation`;
+    await proveMutation();
+  }
+  if (proveMutation) checkpoint = `intent-${scenario}-retained`;
   if (scenario === 'cleanup-response') {
     assert.equal(await exists(lock), true);
     assert.equal(await exists(pending), true);
@@ -497,7 +505,9 @@ async function runFault(scenario, { lockFault, writePending: writer, capturePubl
     scenario === 'pending-same-size' ||
     scenario === 'pending-inode' || scenario === 'pending-partial');
   if (mutate) await mutate();
+  if (proveMutation) checkpoint = `intent-${scenario}-unchanged`;
   await unchanged();
+  if (proveMutation) checkpoint = `intent-${scenario}-cleanup`;
   await cleanFault();
   assert.equal(await exists(lock), false);
   assert.deepEqual(await references(), { 'search-create-transfer': [],
@@ -507,6 +517,14 @@ async function runFault(scenario, { lockFault, writePending: writer, capturePubl
   process.stdout.write(`Real create-intent prepare fault passed: ${scenario}.\n`);
 }
 
+checkpoint = 'intent-fixture-scratch';
+await mkdir(scratch, { mode: 0o700 });
+const scratchStat = await lstat(scratch);
+assert.equal(scratchStat.isDirectory(), true);
+assert.equal(scratchStat.uid, uid);
+assert.equal(scratchStat.gid, gid);
+assert.equal(scratchStat.mode & 0o777, 0o700);
+
 for (const scenario of ['lost-volume-response', 'lost-transfer-response',
   'lost-prepare-response', 'cleanup-response']) await runFault(scenario);
 
@@ -515,22 +533,42 @@ await runFault('pending-partial', { writePending: { fixture: true,
   run: (prepared, intent, sha, ownerUid, ownerGid) => writeCreateIntentPending(
     prepared, intent, sha, ownerUid, ownerGid,
     { afterFileClose: async () => { throw Error('fixture private failure'); } }) } });
-const movedPending = path.join(repository, '.cache/results/intent-original-pending');
+const movedPending = path.join(scratch, 'intent-original-pending');
+assert.equal(await exists(movedPending), false);
+let inodeReplaced = false;
 await runFault('pending-inode', { writePending: { fixture: true,
   run: (prepared, intent, sha, ownerUid, ownerGid) => writeCreateIntentPending(
     prepared, intent, sha, ownerUid, ownerGid, { afterFileClose: async name => {
+      const before = await lstat(name);
+      const bytes = await readFile(name);
       await rename(name, movedPending); await copyFile(movedPending, name);
-    } }) }, mutate: async () => { await rm(movedPending); } });
+      const after = await lstat(name);
+      const moved = await lstat(movedPending);
+      assert.equal(moved.ino, before.ino);
+      assert.notEqual(after.ino, before.ino);
+      assert.equal(after.mode & 0o777, 0o400);
+      assert.deepEqual(await readFile(name), bytes);
+      inodeReplaced = true;
+    } }) }, proveMutation: () => assert.equal(inodeReplaced, true),
+  mutate: async () => { await rm(movedPending); } });
+let sameSizeChanged = false;
 await runFault('pending-same-size', { writePending: { fixture: false,
   run: async (...args) => {
     const saved = await writeCreateIntentPending(...args);
+    const before = await lstat(pending);
+    const original = await readFile(pending);
     await chmod(pending, 0o600);
     const bytes = await readFile(pending);
     bytes[0] = bytes[0] === 0x7b ? 0x5b : 0x7b;
     await writeFile(pending, bytes);
     await chmod(pending, 0o400);
+    const after = await lstat(pending);
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.size, before.size);
+    assert.notDeepEqual(bytes, original);
+    sameSizeChanged = true;
     return saved;
-  } } });
+  } }, proveMutation: () => assert.equal(sameSizeChanged, true) });
 
 const originalAdmin = await readFile(path.join(source, 'admin.pem'));
 const originalKey = await readFile(path.join(source, 'admin.key'));
@@ -567,7 +605,7 @@ await mutateSource('wrong-admin-private', 'admin.key', 'query.key');
 await mutateSource('public-replaced-after-capture', 'admin.pem', 'query.pem', true);
 
 checkpoint = 'intent-expired-admin-public';
-const expiredPath = path.join(repository, '.cache/results/intent-expired-admin.pem');
+const expiredPath = path.join(scratch, 'intent-expired-admin.pem');
 const expiredCommand = await command('openssl', ['x509', '-in', path.join(source, 'admin.pem'),
   '-CA', path.join(source, 'ca.pem'), '-CAkey', path.join(source, 'ca.key'),
   '-set_serial', '1234567', '-days', '0', '-out', expiredPath]);
@@ -615,4 +653,6 @@ assert.deepEqual(await references(), { 'search-create-transfer': [],
   'search-create-intent-prepare': [] });
 assert.deepEqual(await volumes(), []);
 await unchanged();
+assert.deepEqual(await readdir(scratch), []);
+await rmdir(scratch);
 process.stdout.write('Real create-intent prepare fault and preservation matrix passed.\n');
