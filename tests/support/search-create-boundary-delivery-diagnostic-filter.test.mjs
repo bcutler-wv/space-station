@@ -29,3 +29,13 @@ test('fixed pending mutation checkpoints are forwarded without accepting arbitra
     [line]);
   }
 });
+test('expired certificate setup and owner stages remain finite and redacted', () => {
+  for (const checkpoint of ['intent-expired-admin-request', 'intent-expired-admin-issue',
+    'intent-expired-admin-profile', 'intent-expired-admin-expiry',
+    'intent-expired-admin-public-retained', 'intent-expired-admin-restoration']) {
+    const line = `Create intent prepare fixture failed at ${checkpoint}.`;
+    assert.deepEqual(filteredCreateBoundaryDiagnostics([line,
+      'Create intent prepare fixture failed at intent-expired-admin-private-secret.'].join('\n')),
+    [line]);
+  }
+});

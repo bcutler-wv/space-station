@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
-import { createHash, X509Certificate } from 'node:crypto';
+import { createHash, createPublicKey, X509Certificate } from 'node:crypto';
 import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rmdir, rm,
   writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,6 +18,7 @@ import { validateCapturedAttestorPublicAtTime } from '../../scripts/search-attes
 import { sealCreateIntent } from '../../scripts/search-create-intent-pure.mjs';
 import { transferInvocationWritable } from '../support/search-create-intent-gate-mount-policy.mjs';
 import { sourceMutation } from '../support/search-create-intent-gate-source-mutation.mjs';
+import { issueExpiredAdmin } from '../support/search-create-intent-gate-expired-admin.mjs';
 
 // Disposable real Docker/PG16/OpenSearch TLS proof. Fault seams alter only
 // selected owner responses after their underlying Docker operation occurs.
@@ -602,25 +603,56 @@ await mutateSource('wrong-admin-private', 'admin.key', 'query.key');
 await mutateSource('public-replaced-after-capture', 'admin.pem', 'query.pem', true);
 
 checkpoint = 'intent-expired-admin-public';
-const expiredPath = path.join(scratch, 'intent-expired-admin.pem');
-const expiredCommand = await command('openssl', ['x509', '-in', path.join(source, 'admin.pem'),
-  '-CA', path.join(source, 'ca.pem'), '-CAkey', path.join(source, 'ca.key'),
-  '-set_serial', '1234567', '-days', '0', '-out', expiredPath]);
-secretFree(expiredCommand.stdout, expiredCommand.stderr);
-assert.equal(expiredCommand.code, 0);
-const expiryCheck = await command('openssl', ['x509', '-in', expiredPath, '-checkend', '1', '-noout']);
-assert.notEqual(expiryCheck.code, 0);
+const expiredPath = await issueExpiredAdmin(source, scratch, async args => {
+  const result = await command('openssl', args);
+  secretFree(result.stdout, result.stderr);
+  assert.equal(result.code, 0);
+}, stage => { checkpoint = `intent-expired-admin-${stage}`; });
+checkpoint = 'intent-expired-admin-profile';
 const expiredCertificate = new X509Certificate(await readFile(expiredPath));
+const caCertificate = new X509Certificate(await readFile(path.join(source, 'ca.pem')));
+assert.equal(expiredCertificate.subject, 'CN=station-search-admin');
+assert.equal(expiredCertificate.issuer, 'CN=station-search-ca');
+assert.equal(expiredCertificate.verify(caCertificate.publicKey), true);
+assert.equal(expiredCertificate.publicKey.export({ type: 'spki', format: 'der' }).equals(
+  createPublicKey(await readFile(path.join(source, 'admin.key')))
+    .export({ type: 'spki', format: 'der' })), true);
+const usages = await command('openssl', ['x509', '-in', expiredPath, '-noout',
+  '-ext', 'extendedKeyUsage']);
+secretFree(usages.stdout, usages.stderr);
+assert.equal(usages.code, 0);
+assert.equal(usages.stdout.includes('TLS Web Client Authentication'), true);
+assert.equal(usages.stdout.includes('TLS Web Server Authentication'), false);
+const constraints = await command('openssl', ['x509', '-in', expiredPath, '-noout',
+  '-ext', 'basicConstraints']);
+secretFree(constraints.stdout, constraints.stderr);
+assert.equal(constraints.code, 0);
+assert.equal(constraints.stdout.includes('CA:FALSE'), true);
+const keyUsage = await command('openssl', ['x509', '-in', expiredPath, '-noout',
+  '-ext', 'keyUsage']);
+secretFree(keyUsage.stdout, keyUsage.stderr);
+assert.equal(keyUsage.code, 0);
+assert.equal(keyUsage.stdout.includes('Digital Signature'), true);
+assert.equal(keyUsage.stdout.includes('Key Encipherment'), true);
+checkpoint = 'intent-expired-admin-expiry';
+const expiryCheck = await command('openssl', ['x509', '-in', expiredPath, '-checkend', '1', '-noout']);
+secretFree(expiryCheck.stdout, expiryCheck.stderr);
+assert.notEqual(expiryCheck.code, 0);
 if (Date.parse(expiredCertificate.validTo) >= Date.now())
   await new Promise(resolve => setTimeout(resolve, 1_200));
 assert.ok(Date.parse(expiredCertificate.validTo) < Date.now());
-await chmod(expiredPath, 0o600);
 const adminName = path.join(source, 'admin.pem');
 const originalName = `${adminName}.intent-original`;
+checkpoint = 'intent-expired-admin-mutation';
 await rename(adminName, originalName);
+let expiredMutated = false;
 try {
   await copyFile(expiredPath, adminName);
-  await runFault('expired-admin-public', { mutate: async () => {
+  assert.deepEqual(await readFile(adminName), await readFile(expiredPath));
+  expiredMutated = true;
+  await runFault('expired-admin-public', { proveMutation: () => assert.equal(expiredMutated, true),
+    mutate: async () => {
+    checkpoint = 'intent-expired-admin-restoration';
     await unchanged();
     await rm(adminName); await rename(originalName, adminName);
   } });

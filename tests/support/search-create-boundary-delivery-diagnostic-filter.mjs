@@ -34,7 +34,13 @@ const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-
   'intent-pending-same-size-cleanup',
   'intent-missing-admin-public', 'intent-swapped-admin-public',
   'intent-wrong-admin-private', 'intent-public-replaced-after-capture',
-  'intent-expired-admin-public', 'intent-fingerprint', 'intent-final']);
+  'intent-expired-admin-public', 'intent-expired-admin-request',
+  'intent-expired-admin-issue', 'intent-expired-admin-profile',
+  'intent-expired-admin-expiry', 'intent-expired-admin-mutation',
+  'intent-expired-admin-public-mutation', 'intent-expired-admin-public-retained',
+  'intent-expired-admin-restoration', 'intent-expired-admin-public-unchanged',
+  'intent-expired-admin-public-cleanup',
+  'intent-fingerprint', 'intent-final']);
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
