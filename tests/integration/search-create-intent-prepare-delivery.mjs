@@ -194,7 +194,8 @@ async function cleanFault() {
   }
   if (await exists(pending)) await rm(pending);
 }
-async function assertRetained(expectedPhases, expectedPending) {
+async function assertRetained(expectedPhases, expectedPending, fresh = false) {
+  if (fresh) checkpoint = 'intent-fresh-lock';
   assert.equal(await exists(lock), true);
   assert.equal((await lstat(lock)).mode & 0o777, 0o600);
   const records = (await readFile(lock, 'utf8')).trim().split(/\n+/).map(JSON.parse);
@@ -202,9 +203,12 @@ async function assertRetained(expectedPhases, expectedPending) {
   assert.ok(records.every(row => row.operationId === records[0].operationId));
   assert.equal(await exists(pending), expectedPending);
   const refs = await references();
+  if (fresh) checkpoint = 'intent-fresh-references';
   assert.equal(refs['search-create-transfer'].length, expectedPhases >= 1 ? 1 : 0);
   assert.equal(refs['search-create-intent-prepare'].length, expectedPhases >= 2 ? 1 : 0);
   for (const [service, values] of Object.entries(refs)) for (const value of values) {
+    if (fresh) checkpoint = service === 'search-create-transfer' ?
+      'intent-fresh-transfer-policy' : 'intent-fresh-prepare-policy';
     const exit = (await docker(['container', 'wait', value], 90_000)).trim();
     assert.equal(exit, '0');
     await phaseEvidence(service === 'search-create-transfer' ? 'transfer' : 'prepare', value);
@@ -233,7 +237,12 @@ async function phaseEvidence(phase, containerId) {
     ['/run/create-boundary', '/run/station-admin', '/run/station-state']);
   if (phase === 'transfer') {
     assert.equal(item.HostConfig.NetworkMode, 'none');
-    assert.deepEqual(Object.keys(item.NetworkSettings.Networks), ['none']);
+    const isolated = item.NetworkSettings.Networks ?? {};
+    const noneId = JSON.parse(await docker(['network', 'inspect', 'none']))[0].Id;
+    assert.match(noneId, id);
+    assert.ok(Object.keys(isolated).length === 0 ||
+      Object.keys(isolated).length === 1 && Object.keys(isolated)[0] === 'none' &&
+        isolated.none?.NetworkID === noneId);
     assert.equal(mounts.filter(value => value.Type === 'volume').length, 1);
     assert.equal(mounts.find(value => value.Target === '/run/create-boundary')?.VolumeOptions?.NoCopy, true);
     assert.equal(mounts.find(value => value.Target === '/run/create-boundary')?.ReadOnly, false);
@@ -331,6 +340,7 @@ const freshFactory = input => {
   const adapter = createIntentPrepareDockerAdapter(input, { command: (args, env, timeoutMs) =>
     command('docker', args, env, timeoutMs ?? 10_000) });
   return { ...adapter, runPhase: async phase => {
+    checkpoint = phase === 'transfer' ? 'intent-fresh-transfer' : 'intent-fresh-prepare';
     const output = await adapter.runPhase(phase);
     if (phase === 'prepare') {
       freshPrepareReached = true;
@@ -339,24 +349,31 @@ const freshFactory = input => {
     return output;
   } };
 };
+checkpoint = 'intent-fresh-owner';
 await assert.rejects(runCreateIntentPrepareOwner({ repository, uid, gid,
   adapterFactory: freshFactory, writePending: async () => {
     throw Error('fixture stops before a second pending write');
   } }), { message: 'Private create intent owner preparation failed.' });
+checkpoint = 'intent-fresh-captured';
 assert.equal(freshPrepareReached, true);
 assert.ok(freshProjection);
-await assertRetained(2, false);
+await assertRetained(2, false, true);
+checkpoint = 'intent-fresh-public';
 const freshHost = await captureCreateIntentPublic({ repository, uid, gid,
   files: freshProjection.publicFiles, scratchRoot: path.dirname(pending) });
+checkpoint = 'intent-fresh-seal';
 const recomputed = sealCreateIntent(freshProjection, freshHost.publicDigests,
   { project, systemIdentifier: retainedMetadata.systemIdentifier,
     dispatchId: proposal.dispatchId, ownerId: proposal.ownerId });
 assert.deepEqual(recomputed.intent, proposal);
 assert.equal(recomputed.sha256, approvedSha);
+checkpoint = 'intent-fresh-identity';
 assert.deepEqual([freshProjection.transitionToken, freshProjection.sourceUuid],
   await registryIdentity());
 await freshHost.recheck();
+checkpoint = 'intent-fresh-unchanged';
 await unchanged();
+checkpoint = 'intent-fresh-cleanup';
 await cleanFault();
 await unchanged();
 

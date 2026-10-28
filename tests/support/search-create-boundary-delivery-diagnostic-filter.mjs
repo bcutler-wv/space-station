@@ -11,6 +11,11 @@ const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-c
   'host-identity-rejection', 'source-loss', 'mapping-drift']);
 const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-identity',
   'intent-preexisting', 'intent-malformed-pending', 'intent-fresh-projection',
+  'intent-fresh-owner', 'intent-fresh-transfer', 'intent-fresh-prepare',
+  'intent-fresh-captured', 'intent-fresh-lock', 'intent-fresh-references',
+  'intent-fresh-transfer-policy', 'intent-fresh-prepare-policy',
+  'intent-fresh-public', 'intent-fresh-seal', 'intent-fresh-identity',
+  'intent-fresh-unchanged', 'intent-fresh-cleanup',
   'intent-lost-volume-response',
   'intent-lost-transfer-response', 'intent-lost-prepare-response', 'intent-cleanup-response',
   'intent-pending-record', 'intent-pending-partial', 'intent-pending-inode',
