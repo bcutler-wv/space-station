@@ -19,7 +19,9 @@ export function isSearchAdminJobLock(lock, root, uid) {
 /** One owner-local lock for both stopped inspectors and credential commands. */
 export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work) {
   if (fixtureFaultAt !== undefined && (process.env.STATION_JOB_LOCK_FIXTURE !== '1' ||
-      !['after-append', 'after-file-sync', 'before-release-rm'].includes(fixtureFaultAt))) fail('job lock configuration');
+      !['after-append', 'after-file-sync', 'before-release-rm',
+        'intent-pending-after-append', 'intent-pending-after-file-sync'].includes(fixtureFaultAt)))
+    fail('job lock configuration');
   if (path.resolve(root) !== root || !root.endsWith('/.cache/search-db') ||
       !Number.isSafeInteger(uid) || uid < 1 || uid !== process.getuid?.() ||
       await realpath(path.dirname(root)) !== path.dirname(root) ||
@@ -39,10 +41,14 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let attestorDurablePhase = null, attestorCleanup = false, attestorTerminalAttempted = false;
   let boundaryStage = 'preflight', boundaryAttempted = false, boundaryDurablePhase = null;
   let boundaryCleanup = false, boundaryTerminalAttempted = false, boundarySuccess = false;
+  let intentStage = 'preflight', intentAttempted = false, intentDurablePhase = null;
+  let intentCleanup = false, intentTerminalAttempted = false, intentSuccess = false;
+  let intentPendingDurable = false;
   const operationId = randomUUID();
   const releaseError = error => {
     if (mode === 'attestor') fail('attestor lock release');
     if (mode === 'create-boundary') fail('create boundary lock release');
+    if (mode === 'create-intent') fail('create intent lock release');
     throw error;
   };
   const assertOwned = async () => {
@@ -63,9 +69,13 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     await assertOwned();
     await handle.writeFile(`\n${JSON.stringify({ version: 1, operationId, pid: process.pid,
       role: 'attestor', ...record })}\n`);
-    if (fixtureFaultAt === 'after-append') fail('job record fault');
+    if (fixtureFaultAt === 'after-append' ||
+        fixtureFaultAt === 'intent-pending-after-append' &&
+          record.role === 'create-intent' && record.phase === 'pending') fail('job record fault');
     await handle.sync();
-    if (fixtureFaultAt === 'after-file-sync') fail('job record fault');
+    if (fixtureFaultAt === 'after-file-sync' ||
+        fixtureFaultAt === 'intent-pending-after-file-sync' &&
+          record.role === 'create-intent' && record.phase === 'pending') fail('job record fault');
     await syncDirectory(root);
     await assertOwned();
   };
@@ -138,6 +148,47 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       boundaryCleanup = true;
     },
   });
+  const intent = Object.freeze({
+    invocationId: operationId,
+    async markDispatched(phase) {
+      if (!active || mode !== 'create-intent' ||
+          phase !== 'transfer' && phase !== 'prepare' ||
+          intentStage !== (phase === 'transfer' ? 'preflight' : 'transfer-confirmed') ||
+          intentCleanup || intentTerminalAttempted) fail('create intent dispatch');
+      intentAttempted = true;
+      intentStage = `${phase}-dispatched`;
+      intentDurablePhase = null;
+      await appendRecord({ role: 'create-intent', phase, state: 'dispatched' });
+      intentDurablePhase = phase;
+    },
+    async confirmCompletion(phase) {
+      if (!active || mode !== 'create-intent' ||
+          phase !== 'transfer' && phase !== 'prepare' ||
+          intentStage !== `${phase}-dispatched` || intentDurablePhase !== phase ||
+          intentTerminalAttempted) fail('create intent completion');
+      intentTerminalAttempted = true;
+      await appendRecord({ role: 'create-intent', phase, state: 'confirmed' });
+      intentStage = `${phase}-confirmed`;
+      intentDurablePhase = null;
+      intentTerminalAttempted = false;
+    },
+    async markPendingAttempted() {
+      if (!active || mode !== 'create-intent' || intentStage !== 'prepare-confirmed' ||
+          intentCleanup || intentTerminalAttempted) fail('create intent pending');
+      intentAttempted = true;
+      intentStage = 'pending-attempted';
+      intentPendingDurable = false;
+      await appendRecord({ role: 'create-intent', phase: 'pending', state: 'attempted' });
+      intentPendingDurable = true;
+    },
+    async confirmOwnedCleanup() {
+      if (!active || mode !== 'create-intent' || intentStage !== 'pending-attempted' ||
+          !intentPendingDurable || intentCleanup || intentTerminalAttempted) fail('create intent cleanup');
+      intentTerminalAttempted = true;
+      await appendRecord({ role: 'create-intent', phase: 'pending', state: 'cleanup-complete' });
+      intentCleanup = true;
+    },
+  });
   const token = Object.freeze({
     root, uid,
     beginAttestor() {
@@ -149,6 +200,11 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       if (!active || mode !== 'unselected' || dispatched) fail('create boundary mode');
       mode = 'create-boundary';
       return boundary;
+    },
+    beginCreateIntentPrepare() {
+      if (!active || mode !== 'unselected' || dispatched) fail('create intent mode');
+      mode = 'create-intent';
+      return intent;
     },
     async markDispatched(role) {
       if (mode !== 'unselected' || dispatched || !['verifier', 'transition'].includes(role)) fail('job dispatch');
@@ -178,6 +234,10 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (mode === 'create-boundary' &&
         (boundaryStage !== 'inspect-confirmed' || !boundaryCleanup)) fail('create boundary incomplete');
     if (mode === 'create-boundary') boundarySuccess = true;
+    if (mode === 'create-intent' &&
+        (intentStage !== 'pending-attempted' || !intentPendingDurable || !intentCleanup))
+      fail('create intent incomplete');
+    if (mode === 'create-intent') intentSuccess = true;
     return result;
   } finally {
     active = false;
@@ -185,7 +245,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     const original = await handle.stat().catch(() => null);
     await handle.close().catch(() => {});
     const canRelease = mode === 'attestor' ? !attestorAttempted || attestorCleanup :
-      mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup : !dispatched || confirmed;
+      mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup :
+        mode === 'create-intent' ? !intentAttempted || intentCleanup : !dispatched || confirmed;
     let released = false;
     if (prepared && canRelease && original) {
       const currentRoot = await lstat(root).catch(() => null);
@@ -199,7 +260,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
             current.uid === uid && (current.mode & 0o777) === 0o600 &&
             current.dev === original.dev && current.ino === original.ino) {
           try {
-            if ((mode === 'attestor' || mode === 'create-boundary') && fixtureFaultAt === 'before-release-rm')
+            if ((mode === 'attestor' || mode === 'create-boundary' || mode === 'create-intent') &&
+                fixtureFaultAt === 'before-release-rm')
               fail('fixture release fault');
             await rm(lockPath);
             await syncDirectory(root);
@@ -212,5 +274,6 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     }
     if (attestorSuccess && !released) fail('attestor lock release');
     if (boundarySuccess && !released) fail('create boundary lock release');
+    if (intentSuccess && !released) fail('create intent lock release');
   }
 }

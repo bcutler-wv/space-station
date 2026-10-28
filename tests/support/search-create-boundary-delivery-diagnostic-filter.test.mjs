@@ -11,3 +11,12 @@ test('only fixed checkpoint and owner diagnostic reach public CI output', () => 
     'Create boundary delivery fixture failed at complete-cli.',
     'Private create boundary owner diagnostic stage=transfer-run reason=dispatch-stderr.']);
 });
+test('only fixed intent checkpoint is forwarded and fake secret suffix is discarded', () => {
+  const secret = 'fixture-private-secret-do-not-print';
+  const log = [secret,
+    'Create intent prepare fixture failed at intent-pending-inode.',
+    `Create intent prepare fixture failed at intent-cli.${secret}`,
+    `Create intent prepare fixture failed at intent-${secret}.`].join('\n');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
+    ['Create intent prepare fixture failed at intent-pending-inode.']);
+});

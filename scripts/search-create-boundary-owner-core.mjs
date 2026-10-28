@@ -41,7 +41,7 @@ async function file(name, uid, gid, bytes, original) {
     return stat;
   } finally { await handle.close(); }
 }
-async function makeInvocation(repository, uid, gid, marker, created) {
+export async function makeInvocation(repository, uid, gid, marker, created) {
   const cache = path.join(repository, '.cache');
   const cacheStat = await lstat(cache);
   if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink() || cacheStat.uid !== uid ||
@@ -65,7 +65,7 @@ async function makeInvocation(repository, uid, gid, marker, created) {
   const stat = await file(name, uid, gid, bytes);
   return { cache, cacheStat, parent, parentStat, root, rootStat, name, stat, bytes };
 }
-async function checkInvocation(local, uid, gid) {
+export async function checkInvocation(local, uid, gid) {
   const cache = await lstat(local.cache);
   if (!cache.isDirectory() || cache.isSymbolicLink() ||
       !sameDir(cache, local.cacheStat) || await realpath(local.cache) !== local.cache) fail();
@@ -74,7 +74,7 @@ async function checkInvocation(local, uid, gid) {
   if ((await readdir(local.root)).join('|') !== 'invocation') fail();
   await file(local.name, uid, gid, local.bytes, local.stat);
 }
-async function cleanupInvocation(local, uid, gid) {
+export async function cleanupInvocation(local, uid, gid) {
   await checkInvocation(local, uid, gid);
   await unlink(local.name); await syncDir(local.root);
   if ((await readdir(local.root)).length) fail();

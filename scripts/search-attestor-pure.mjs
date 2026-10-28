@@ -66,6 +66,9 @@ function canonical(value, cap = LIMIT) {
   if (bytes.length > cap) fail();
   return { value: result, bytes };
 }
+// Shared by the private create-intent projection; this does not classify a
+// partial registry as ready or expose raw snapshot bytes.
+export const canonicalAttestorValue = canonical;
 
 function timestamp(text, date) {
   if (typeof text !== 'string' || !MICRO.test(text) || !(date instanceof Date) ||
@@ -117,7 +120,7 @@ function validateSnapshot(snapshot, requireReady = true) {
   return classified;
 }
 
-function publicFiles(expected) {
+export function buildAttestorPublicFiles(expected) {
   const files = [
     { path: 'ca.pem', token: 'legacy-v1', role: 'ca', principal: 'station-search-ca', fingerprint: null },
     { path: 'v1/admin.pem', token: 'legacy-v1', role: 'admin', principal: 'station-search-admin', fingerprint: null },
@@ -169,7 +172,7 @@ function derive(snapshot, invocationId) {
   const expected = validateSnapshot(snapshot).expected;
   const raw = canonical({ version: 'station-attestor-raw-v1', invocationId, snapshot });
   const derived = canonical(expected);
-  const files = publicFiles(expected);
+  const files = buildAttestorPublicFiles(expected);
   const manifest = { version: 'station-attestor-manifest-v1', invocationId,
     rawDigest: createHash('sha256').update(raw.bytes).digest('hex'),
     identity: snapshot.identity, expected: derived.value, publicFiles: files };
@@ -204,7 +207,7 @@ export function validateOfflineAttestorManifest(invocationId, manifest) {
     validateIdentity(received.identity);
     validateExpected(received.expected);
     buildExpectedSecurityPolicy(received.expected);
-    const wanted = canonical(publicFiles(received.expected)).value;
+    const wanted = canonical(buildAttestorPublicFiles(received.expected)).value;
     if (JSON.stringify(received.publicFiles) !== JSON.stringify(wanted)) fail();
     return received;
   } catch { fail(); }
@@ -238,14 +241,15 @@ export function compareReadyAttestorObservation(expected, observed) {
 }
 
 /** Partial create evidence is deliberately disjoint from registry readiness. */
-export function assessCreateIndexEvidence(snapshot, observed, expectation) {
+function assessCreateEvidence(snapshot, observed, expectation, completion) {
   try {
     canonical(expectation);
     exact(expectation, ['phase', 'revision', 'stage', 'transitionToken', 'sourceToken',
       'sourceIndex', 'candidateToken', 'candidateIndex', 'dispatchId', 'ownerId', 'createdUuid']);
-    if (!['precreate', 'postcreate'].includes(expectation.phase) ||
+    if (!(completion ? ['confirmed', 'bound'] : ['precreate', 'postcreate']).includes(expectation.phase) ||
         !Number.isSafeInteger(expectation.revision) || expectation.revision < 1 ||
-        !['disabled_intent', 'create_requested'].includes(expectation.stage) ||
+        !(completion ? ['create_requested', 'uuid_bound'] : ['disabled_intent', 'create_requested']).includes(expectation.stage) ||
+        completion && (expectation.phase === 'confirmed') !== (expectation.stage === 'create_requested') ||
         !UUID.test(expectation.transitionToken) ||
         typeof expectation.sourceToken !== 'string' ||
         typeof expectation.sourceIndex !== 'string' ||
@@ -258,7 +262,8 @@ export function assessCreateIndexEvidence(snapshot, observed, expectation) {
           typeof expectation.createdUuid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(expectation.createdUuid))) fail();
     const classified = validateSnapshot(snapshot, false);
     if (classified.status !== 'incomplete' ||
-        !['transition_in_progress', 'armed', 'sent_unknown'].includes(classified.reason)) fail();
+        !(completion ? ['confirmed_awaiting_advance', 'transition_in_progress'] :
+          ['transition_in_progress', 'armed', 'sent_unknown']).includes(classified.reason)) fail();
     const { control, history, dispatch } = snapshot;
     if (control.revision !== expectation.revision || control.stage !== expectation.stage ||
         control.transitionToken !== expectation.transitionToken ||
@@ -270,10 +275,12 @@ export function assessCreateIndexEvidence(snapshot, observed, expectation) {
     if (!candidate || !source || source.physicalIndex !== expectation.sourceIndex ||
         candidate.physicalIndex !== expectation.candidateIndex ||
         source.lifecycle !== 'roles_attested' ||
-        candidate.lifecycle !== 'reserved' || candidate.indexUuid !== null ||
+        candidate.lifecycle !== (expectation.phase === 'bound' ? 'bound' : 'reserved') ||
+        candidate.indexUuid !== (expectation.phase === 'bound' ? expectation.createdUuid : null) ||
         candidate.writerCertFingerprint !== null || candidate.queryCertFingerprint !== null ||
         candidate.profileId !== 'station-mail-v2' || control.profileId !== 'station-mail-v2' ||
-        control.physicalIndex !== candidate.physicalIndex || control.indexUuid !== null ||
+        control.physicalIndex !== candidate.physicalIndex ||
+        control.indexUuid !== (expectation.phase === 'bound' ? expectation.createdUuid : null) ||
         history.some(row => row !== candidate && !['roles_attested', 'retired_retained', 'abandoned'].includes(row.lifecycle))) fail();
     const create = dispatch.filter(row => row.generationToken === candidate.generationToken);
     if (create.length > 1 || create.some(row => row.operation !== 'create_index')) fail();
@@ -282,7 +289,12 @@ export function assessCreateIndexEvidence(snapshot, observed, expectation) {
     } else if (control.stage === 'create_requested') {
       const item = create[0];
       if (!item || item.dispatchId !== expectation.dispatchId || item.ownerId !== expectation.ownerId ||
-          item.state !== (expectation.phase === 'precreate' ? 'armed' : 'sent_unknown')) fail();
+          item.state !== (expectation.phase === 'precreate' ? 'armed' :
+            expectation.phase === 'confirmed' ? 'response_confirmed' : 'sent_unknown')) fail();
+    } else if (control.stage === 'uuid_bound') {
+      const item = create[0];
+      if (expectation.phase !== 'bound' || !item || item.dispatchId !== expectation.dispatchId ||
+          item.ownerId !== expectation.ownerId || item.state !== 'response_confirmed') fail();
     } else fail();
     canonical(observed, 2 * 1024 * 1024);
     exact(observed, ['indexes', 'roles', 'mappings']);
@@ -294,7 +306,7 @@ export function assessCreateIndexEvidence(snapshot, observed, expectation) {
     const policy = buildExpectedSecurityPolicy(expected);
     if (compareObservedSecurityCollections(policy, observed.roles, observed.mappings) !== 'exact') fail();
     const names = prior.filter(row => row.presence !== 'absent').map(row => row.index);
-    if (expectation.phase === 'postcreate') names.push(candidate.physicalIndex);
+    if (['postcreate', 'confirmed', 'bound'].includes(expectation.phase)) names.push(candidate.physicalIndex);
     exact(observed.indexes, names);
     for (const row of prior.filter(row => row.presence !== 'absent')) {
       const body = { [row.index]: exact(observed.indexes[row.index], ['aliases', 'mappings', 'settings']) };
@@ -302,12 +314,23 @@ export function assessCreateIndexEvidence(snapshot, observed, expectation) {
         verifyV2IndexProfile(body, row.index, row.uuid);
       if (found !== row.uuid) fail();
     }
-    if (expectation.phase === 'postcreate' &&
+    if (['postcreate', 'confirmed', 'bound'].includes(expectation.phase) &&
         verifyV2IndexProfile({ [candidate.physicalIndex]:
           exact(observed.indexes[candidate.physicalIndex], ['aliases', 'mappings', 'settings']) },
         candidate.physicalIndex, expectation.createdUuid) !== expectation.createdUuid) fail();
-    return { status: 'create-evidence', phase: expectation.phase, ready: false };
-  } catch { return { status: 'create-evidence-rejected', ready: false }; }
+    return { status: completion ? 'create-completion-evidence' : 'create-evidence',
+      phase: expectation.phase, ready: false };
+  } catch { return { status: completion ? 'create-completion-evidence-rejected' :
+    'create-evidence-rejected', ready: false }; }
+}
+
+export function assessCreateIndexEvidence(snapshot, observed, expectation) {
+  return assessCreateEvidence(snapshot, observed, expectation, false);
+}
+
+/** The same exact evidence at closed create stages; never a send authorization. */
+export function assessCreateIndexCompletionEvidence(snapshot, observed, expectation) {
+  return assessCreateEvidence(snapshot, observed, expectation, true);
 }
 
 /** Existing owner metadata uses decimal OID text; never coerce its 64-bit system ID. */

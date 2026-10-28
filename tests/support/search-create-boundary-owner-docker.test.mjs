@@ -3,13 +3,16 @@ import { Buffer } from 'node:buffer';
 import path from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
-import { createBoundaryDockerAdapter } from '../../scripts/search-create-boundary-owner-docker.mjs';
+import { createBoundaryDockerAdapter,
+  createIntentPrepareDockerAdapter } from '../../scripts/search-create-boundary-owner-docker.mjs';
+import { canonicalAttestorValue } from '../../scripts/search-attestor-pure.mjs';
 
 const repository = path.resolve('.'), uid = process.getuid(), gid = process.getgid();
 const project = 'create_fixture', id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const invocationRoot = path.join(repository, '.cache/search-create-invocations', id);
 const volumeName = `${project}_search_create_${id.replaceAll('-', '')}`;
 const service = { transfer: 'search-create-transfer', inspect: 'search-create-boundary' };
+const intentService = { transfer: 'search-create-transfer', prepare: 'search-create-intent-prepare' };
 const containerIds = { transfer: 'a'.repeat(64), inspect: 'b'.repeat(64) };
 const imageIds = { transfer: `sha256:${'1'.repeat(64)}`, inspect: `sha256:${'2'.repeat(64)}` };
 const networkIds = { search_admin_db: '3'.repeat(64), search_internal: '4'.repeat(64),
@@ -26,7 +29,7 @@ const bind = (source, target) => ({ type: 'bind', source, target, read_only: tru
   bind: { create_host_path: false } });
 const mount = (source, target, readOnly = true) => ({ type: 'volume', source, target,
   ...(readOnly ? { read_only: true } : {}), volume: { nocopy: true } });
-function config() {
+function config(intent = false) {
   const common = (command, user, transfer) => ({
     profiles: ['search-create-boundary'], build: { context: repository, target: 'search-attestor' },
     command: ['node', `scripts/${command}.mjs`], user, read_only: true,
@@ -42,7 +45,8 @@ function config() {
         '/run/create-transfer-password/password'),
       bind(path.join(invocationRoot, 'invocation'), '/run/create-transfer-invocation/invocation'),
       mount('search_create_input', '/run/create-boundary', false)] },
-    'search-create-boundary': { ...common('search-create-boundary', '1000:1000', false),
+    [intent ? 'search-create-intent-prepare' : 'search-create-boundary']:
+      { ...common(intent ? 'search-create-intent-prepare' : 'search-create-boundary', '1000:1000', false),
       volumes: [mount('search_create_input', '/run/create-boundary'),
         mount('search_admin_certs', '/run/station-admin'),
         mount('search_security_state', '/run/station-state')] },
@@ -59,17 +63,19 @@ const volume = name => ({ Name: name, Driver: 'local', Scope: 'local',
     { 'station.create.project': project, 'station.create.invocation': id } :
     { 'com.docker.compose.project': project,
       'com.docker.compose.volume': name.replace(`${project}_`, '') } });
-function container(phase, mutation) {
-  const spec = config().services[service[phase]];
-  const c = config();
+function container(phase, mutation, intent = false) {
+  const services = intent ? intentService : service;
+  const spec = config(intent).services[services[phase]];
+  const c = config(intent);
   const networks = phase === 'transfer' ? { none: { NetworkID: networkIds.none } } :
     Object.fromEntries(['search_admin_db', 'search_internal'].map(name =>
       [name, { NetworkID: networkIds[name] }]));
-  const result = { Id: containerIds[phase], Image: imageIds[phase],
+  const result = { Id: phase === 'prepare' ? containerIds.inspect : containerIds[phase],
+    Image: phase === 'prepare' ? imageIds.inspect : imageIds[phase],
     Created: '2026-10-27T00:00:00Z', RestartCount: 0,
     Config: { User: phase === 'transfer' ? '0:0' : '1000:1000', Cmd: spec.command,
       Entrypoint: ['docker-entrypoint.sh'], Env: ['NODE_VERSION=22.23.2'],
-      Labels: { 'com.docker.compose.project': project, 'com.docker.compose.service': service[phase] } },
+      Labels: { 'com.docker.compose.project': project, 'com.docker.compose.service': services[phase] } },
     HostConfig: { Privileged: false, ReadonlyRootfs: true, CapDrop: ['ALL'],
       CapAdd: phase === 'transfer' ? ['CAP_CHOWN', 'CAP_DAC_OVERRIDE'] : [],
       PidsLimit: spec.pids_limit, Memory: Number(spec.mem_limit), NanoCpus: spec.cpus * 1e9,
@@ -99,7 +105,9 @@ function container(phase, mutation) {
     result.Mounts.push({ Type: 'bind', Destination: '/tmp', Source: '/tmp/other', RW: true });
   return result;
 }
-function fixture(fault) {
+function fixture(fault, intent = false) {
+  const services = intent ? intentService : service;
+  const ids = intent ? { transfer: containerIds.transfer, prepare: containerIds.inspect } : containerIds;
   const calls = [], scopes = [], seen = new Set();
   let created = false, removed = false, ownerCalls = 0, configCalls = 0, volumeInspects = 0;
   const reply = stdout => ({ code: 0, signal: null, stdout, stderr: '' });
@@ -113,7 +121,7 @@ function fixture(fault) {
     }
     if (line.includes(' config --format json ')) {
       configCalls++;
-      const value = config();
+      const value = config(intent);
       if (fault === 'config-drift' && configCalls > 1)
         value.services['search-create-boundary'].command.push('--unsafe');
       return reply(`${JSON.stringify(value)}\n`);
@@ -127,8 +135,8 @@ function fixture(fault) {
       return response;
     }
     if (args[0] === 'image' && args[1] === 'inspect') {
-      const phase = Object.keys(service).find(key => args[2] === `${project}-${service[key]}`);
-      return reply(`${JSON.stringify([{ Id: imageIds[phase], Config: {
+      const phase = Object.keys(services).find(key => args[2] === `${project}-${services[key]}`);
+      return reply(`${JSON.stringify([{ Id: phase === 'prepare' ? imageIds.inspect : imageIds[phase], Config: {
         Cmd: ['node', 'apps/server/dist/main.js'], Entrypoint: ['docker-entrypoint.sh'],
         Env: ['NODE_VERSION=22.23.2'] } }])}\n`);
     }
@@ -143,43 +151,45 @@ function fixture(fault) {
       return reply(created && !removed ? `${volumeName}\n` : '');
     if (args[0] === 'volume' && args[1] === 'create') { created = true; return reply(`${volumeName}\n`); }
     if (line.includes(' run --detach --no-deps --pull never ')) {
-      const phase = Object.keys(service).find(key => service[key] === args.at(-1));
+      const phase = Object.keys(services).find(key => services[key] === args.at(-1));
       seen.add(phase);
       if (fault === `lost-${phase}`) throw Error('secret injected output');
-      return reply(`${containerIds[phase]}\n`);
+      return reply(`${ids[phase]}\n`);
     }
     if (args[0] === 'container' && args[1] === 'inspect') {
-      const phase = Object.keys(containerIds).find(key => containerIds[key] === args[2]);
-      return reply(`${JSON.stringify([container(phase, fault)])}\n`);
+      const phase = Object.keys(ids).find(key => ids[key] === args[2]);
+      return reply(`${JSON.stringify([container(phase, fault, intent)])}\n`);
     }
     if (args[0] === 'container' && args[1] === 'wait') return reply('0\n');
     if (args[0] === 'container' && args[1] === 'logs') {
-      const phase = Object.keys(containerIds).find(key => containerIds[key] === args[2]);
+      const phase = Object.keys(ids).find(key => ids[key] === args[2]);
       return reply(phase === 'transfer' ? 'Private create boundary transfer completed.\n' :
-        'Private create boundary evidence completed.\n');
+        intent ? `${canonicalAttestorValue({ adminPublic: { caSha256: 'a'.repeat(64),
+          adminSha256: 'b'.repeat(64) }, projection: { version: 1 } }).bytes.toString('utf8')}\n` :
+          'Private create boundary evidence completed.\n');
     }
     if (args[0] === 'ps') {
       if (fault === 'cleanup-enumeration-stderr' && seen.size === 2)
         return { ...reply(''), stderr: 'secret injected output' };
       const filter = args.find(x => x.startsWith('label=com.docker.compose.service='));
       if (filter) {
-        const phase = Object.keys(service).find(key => filter.endsWith(service[key]));
+        const phase = Object.keys(services).find(key => filter.endsWith(services[key]));
         if (removed || !seen.has(phase)) return reply('');
-        return reply(fault === 'extra-stopped' && phase === 'inspect' ?
-          `${containerIds[phase]}\n${'c'.repeat(64)}\n` : `${containerIds[phase]}\n`);
+        return reply(fault === 'extra-stopped' && phase === (intent ? 'prepare' : 'inspect') ?
+          `${ids[phase]}\n${'c'.repeat(64)}\n` : `${ids[phase]}\n`);
       }
       return reply(fault === 'extra-reference' ?
-        `${containerIds.transfer}\n${containerIds.inspect}\n${'c'.repeat(64)}\n` :
-        removed ? '' : `${containerIds.transfer}\n${containerIds.inspect}\n`);
+        `${ids.transfer}\n${ids[intent ? 'prepare' : 'inspect']}\n${'c'.repeat(64)}\n` :
+        removed ? '' : `${ids.transfer}\n${ids[intent ? 'prepare' : 'inspect']}\n`);
     }
     if (args[0] === 'container' && args[1] === 'rm') {
-      if (args[2] === containerIds.transfer) removed = true;
+      if (args[2] === ids.transfer) removed = true;
       return reply(`${args[2]}\n`);
     }
     if (args[0] === 'volume' && args[1] === 'rm') { removed = true; return reply(`${volumeName}\n`); }
     throw Error('unexpected command');
   };
-  const adapter = createBoundaryDockerAdapter({ repository, uid, gid, jobLock: {},
+  const adapter = (intent ? createIntentPrepareDockerAdapter : createBoundaryDockerAdapter)({ repository, uid, gid, jobLock: {},
     invocationId: id, deadline: Number.MAX_SAFE_INTEGER, tick: () => {} }, {
     command, ownerFactory: async () => ({
       identity: async () => identity,
@@ -197,8 +207,8 @@ function fixture(fault) {
     const made = await adapter.createVolume(volumeName);
     await adapter.checkVolume(made);
     const transfer = await adapter.runPhase('transfer');
-    const inspect = await adapter.runPhase('inspect');
-    await adapter.cleanupRemote([transfer, inspect], made);
+    const second = await adapter.runPhase(intent ? 'prepare' : 'inspect');
+    await adapter.cleanupRemote([transfer, second], made);
   };
   return { run, calls, scopes };
 }
@@ -217,6 +227,16 @@ test('wrong resource, command or identity never passes', async () => {
     'lost-inspect', 'extra-reference', 'extra-stopped', 'network-stderr',
     'cleanup-enumeration-stderr'])
     await assert.rejects(fixture(fault).run(), { message: 'Private create boundary owner operation failed.' }, fault);
+});
+
+test('fixed intent adapter reuses exact two-phase policy and canonical public output only', async () => {
+  const item = fixture(undefined, true);
+  await item.run();
+  assert.equal(item.calls.filter(x => x.includes(' run --detach ')).length, 2);
+  assert.equal(item.calls.some(x => x.includes('search-create-intent-prepare')), true);
+  for (const fault of ['network-stderr', 'lost-prepare', 'cleanup-enumeration-stderr'])
+    await assert.rejects(fixture(fault, true).run(),
+      { message: 'Private create boundary owner operation failed.' }, fault);
 });
 
 test('ancillary stderr fails before send or cleanup instead of becoming success', async () => {

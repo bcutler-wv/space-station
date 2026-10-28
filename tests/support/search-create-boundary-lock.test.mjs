@@ -62,3 +62,49 @@ test('unknown transfer, failed durable record and incomplete final retain the lo
   }), /create boundary incomplete/);
   assert.equal(existsSync(file), true);
 }));
+
+test('intent prepare uses distinct finite lock mode and pending attempt retains uncertain file', async () => fixture(async (root, file) => {
+  await assert.rejects(withSearchAdminJobLock({ root, uid }, async lock => {
+    const prepare = lock.beginCreateIntentPrepare();
+    assert.match(prepare.invocationId, /^[0-9a-f-]{36}$/);
+    assert.throws(() => lock.beginCreateBoundary(), /create boundary mode/);
+    await assert.rejects(prepare.markPendingAttempted(), /create intent pending/);
+    await prepare.markDispatched('transfer');
+    await prepare.confirmCompletion('transfer');
+    await prepare.markDispatched('prepare');
+    await prepare.confirmCompletion('prepare');
+    await prepare.markPendingAttempted();
+    throw new Error('partial pending write');
+  }), /partial pending write/);
+  assert.equal(existsSync(file), true);
+  await rm(file);
+  await withSearchAdminJobLock({ root, uid }, async lock => {
+    const prepare = lock.beginCreateIntentPrepare();
+    await prepare.markDispatched('transfer');
+    await prepare.confirmCompletion('transfer');
+    await prepare.markDispatched('prepare');
+    await prepare.confirmCompletion('prepare');
+    await prepare.markPendingAttempted();
+    await prepare.confirmOwnedCleanup();
+  });
+  assert.equal(existsSync(file), false);
+}));
+
+test('caught pending append/fsync fault cannot confirm cleanup or release lock', async () => fixture(async (root, file) => {
+  for (const fault of ['intent-pending-after-append', 'intent-pending-after-file-sync']) {
+    process.env.STATION_JOB_LOCK_FIXTURE = '1';
+    try {
+      await assert.rejects(withSearchAdminJobLock({ root, uid, fixtureFaultAt: fault }, async lock => {
+        const prepare = lock.beginCreateIntentPrepare();
+        await prepare.markDispatched('transfer');
+        await prepare.confirmCompletion('transfer');
+        await prepare.markDispatched('prepare');
+        await prepare.confirmCompletion('prepare');
+        await assert.rejects(prepare.markPendingAttempted(), /job record fault/);
+        await assert.rejects(prepare.confirmOwnedCleanup(), /create intent cleanup/);
+      }), /create intent incomplete/);
+      assert.equal(existsSync(file), true);
+      await rm(file);
+    } finally { delete process.env.STATION_JOB_LOCK_FIXTURE; }
+  }
+}));

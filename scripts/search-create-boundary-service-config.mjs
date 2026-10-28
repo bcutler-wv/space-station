@@ -32,7 +32,7 @@ function service(value, repository, command, user, transfer) {
 }
 
 /** Exact normalized, two-service Compose configuration; no owner dispatch here. */
-export function verifyCreateBoundaryServiceConfig(config, expected) {
+function verifyFixedCreateServiceConfig(config, expected, combinedName, command) {
   try {
     const { project, repository, invocationId, invocationRoot, volumeName } = expected;
     if (!keys(expected, ['project', 'repository', 'invocationId', 'invocationRoot', 'volumeName']) ||
@@ -41,7 +41,7 @@ export function verifyCreateBoundaryServiceConfig(config, expected) {
         invocationRoot !== join(repository, '.cache/search-create-invocations', invocationId) ||
         volumeName !== `${project}_search_create_${invocationId.replaceAll('-', '')}` ||
         !keys(config, ['name', 'services', 'networks', 'volumes']) || config.name !== project ||
-        !keys(config.services, ['search-create-transfer', 'search-create-boundary']) ||
+        !keys(config.services, ['search-create-transfer', combinedName]) ||
         !keys(config.networks, ['search_admin_db', 'search_internal']) ||
         !keys(config.volumes, ['search_create_input', 'search_admin_certs', 'search_security_state'])) fail();
     for (const name of ['search_admin_db', 'search_internal']) {
@@ -75,8 +75,8 @@ export function verifyCreateBoundaryServiceConfig(config, expected) {
       join(invocationRoot, 'invocation'), '/run/create-transfer-invocation/invocation', true);
     volume(mounts.get('/run/create-boundary'), 'search_create_input', '/run/create-boundary', false, true);
 
-    const combined = config.services['search-create-boundary'];
-    service(combined, repository, 'search-create-boundary', '1000:1000', false);
+    const combined = config.services[combinedName];
+    service(combined, repository, command, '1000:1000', false);
     const combinedMounts = mountsByTarget(combined.volumes,
       ['/run/create-boundary', '/run/station-admin', '/run/station-state']);
     volume(combinedMounts.get('/run/create-boundary'), 'search_create_input',
@@ -87,4 +87,16 @@ export function verifyCreateBoundaryServiceConfig(config, expected) {
       '/run/station-state', true, true);
     return true;
   } catch { fail(); }
+}
+
+/** Existing fixed success-only boundary configuration. */
+export function verifyCreateBoundaryServiceConfig(config, expected) {
+  return verifyFixedCreateServiceConfig(config, expected,
+    'search-create-boundary', 'search-create-boundary');
+}
+
+/** Separate fixed read-only public projection service. */
+export function verifyCreateIntentPrepareServiceConfig(config, expected) {
+  return verifyFixedCreateServiceConfig(config, expected,
+    'search-create-intent-prepare', 'search-create-intent-prepare');
 }

@@ -62,6 +62,8 @@ jobs:
       - run: pnpm check
       - run: node --test tests/support/search-attestor-pure.test.mjs
       - run: node --test tests/support/search-create-evidence.test.mjs
+      - run: node --test tests/support/search-create-intent-pure.test.mjs
+      - run: node --test tests/support/search-create-intent-owner.test.mjs tests/support/search-create-intent-pending.test.mjs
       - run: node --test tests/support/search-create-boundary-lock.test.mjs
       - run: node --test tests/support/search-create-boundary-transfer.test.mjs
       - run: node --test tests/support/search-create-boundary-core.test.mjs

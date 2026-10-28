@@ -87,7 +87,7 @@ cleanup_pair() {
         teardown_failed=1
       fi
     done <<< "$listing"
-    for service in search-create-transfer search-create-boundary search-profile-drift; do
+    for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift; do
       if ! listing=$(docker ps -a --no-trunc --filter "label=com.docker.compose.project=$project_name" \
         --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>> "$private_log"); then
         teardown_failed=1; listing=''
@@ -216,7 +216,7 @@ for pair in default runner; do
     docker compose -f compose.yaml -f compose.search-create-boundary.yaml \
     --profile search --profile fixture --profile search-create-boundary build \
     migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
-    search-create-transfer search-create-boundary
+    search-create-transfer search-create-boundary search-create-intent-prepare
   run_step image-code-readability run_pair docker run --rm --pull never --network none \
     --read-only --user 1000:1000 --entrypoint node "${name}-search-create-boundary" \
     -e 'const fs=require("node:fs"); const c=fs.constants;
@@ -224,6 +224,8 @@ for pair in default runner; do
         fs.accessSync(p,c.R_OK|c.X_OK);
       for(const p of ["/app/scripts/search-create-boundary.mjs",
         "/app/scripts/search-create-boundary-core.mjs",
+        "/app/scripts/search-create-intent-prepare.mjs",
+        "/app/scripts/search-create-intent-prepare-core.mjs",
         "/app/packages/search/dist/opensearch-runtime.js"])
         fs.accessSync(p,c.R_OK);
       process.stdout.write("Fixed create-boundary code is UID1000-readable.\n");'
@@ -304,6 +306,7 @@ for pair in default runner; do
     -c "BEGIN; INSERT INTO search_generation_history (generation_token,physical_index,profile_id,index_uuid,lifecycle) VALUES ('legacy-v1','station-mail-v1','station-mail-v1','$index_uuid','roles_attested'); UPDATE search_generation_control SET source_generation_token='legacy-v1',revision=revision+1 WHERE singleton=1 AND stage='disabled' AND source_generation_token IS NULL; COMMIT;"
   run_step candidate-reservation run_pair docker compose --profile search run --rm -T --no-deps \
     migrate node tests/integration/search-create-boundary-reserve.mjs
+  run_step intent-prepare-delivery run_pair node tests/integration/search-create-intent-prepare-delivery.mjs
   run_step delivery run_pair node tests/integration/search-create-boundary-delivery.mjs
   run_step secret-scan sudo "$(command -v node)" tests/support/search-attestor-delivery-log-scan.mjs "$private_log"
   phase=teardown

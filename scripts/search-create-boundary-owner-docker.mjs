@@ -6,7 +6,9 @@ import process from 'node:process';
 import { createSearchAdminDockerAdapter } from './search-admin-credentials.mjs';
 import { runBoundedOwnerDockerCommand } from './search-owner-docker-command.mjs';
 import { operateSearchAdminCredentialsAlreadyJobLocked } from './search-admin-credential-core.mjs';
-import { verifyCreateBoundaryServiceConfig } from './search-create-boundary-service-config.mjs';
+import { verifyCreateBoundaryServiceConfig,
+  verifyCreateIntentPrepareServiceConfig } from './search-create-boundary-service-config.mjs';
+import { canonicalAttestorValue } from './search-attestor-pure.mjs';
 import { equal, keys, sameStat, sameVolume, verifyOwnerContainerPolicy } from './search-owner-docker-policy.mjs';
 import { CreateBoundaryOwnerDiagnosticError } from './search-create-boundary-owner-diagnostic.mjs';
 
@@ -16,11 +18,6 @@ const fail = (reason = 'invariant') => {
 const imageId = /^sha256:[0-9a-f]{64}$/;
 const fullId = /^[0-9a-f]{64}$/;
 const containerId = /^[0-9a-f]{12,64}$/;
-const names = { transfer: 'search-create-transfer', inspect: 'search-create-boundary' };
-const commands = { transfer: ['node', 'scripts/search-create-boundary-transfer.mjs'],
-  inspect: ['node', 'scripts/search-create-boundary.mjs'] };
-const outputs = { transfer: 'Private create boundary transfer completed.\n',
-  inspect: 'Private create boundary evidence completed.\n' };
 const one = output => {
   const value = JSON.parse(output);
   if (!Array.isArray(value) || value.length !== 1 || !value[0] ||
@@ -60,8 +57,16 @@ async function captureTransition(repository, uid, gid) {
 }
 
 /** Fixed two-service Docker adapter; options are a private scripted-test seam. */
-export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationId,
-  deadline, tick }, options = {}) {
+function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationId,
+  deadline, tick }, options = {}, intent = false) {
+  const names = { transfer: 'search-create-transfer',
+    [intent ? 'prepare' : 'inspect']: intent ? 'search-create-intent-prepare' : 'search-create-boundary' };
+  const phases = Object.keys(names);
+  const commands = { transfer: ['node', 'scripts/search-create-boundary-transfer.mjs'],
+    [intent ? 'prepare' : 'inspect']: ['node',
+      intent ? 'scripts/search-create-intent-prepare.mjs' : 'scripts/search-create-boundary.mjs'] };
+  const outputs = { transfer: 'Private create boundary transfer completed.\n',
+    inspect: 'Private create boundary evidence completed.\n' };
   if (Object.keys(process.env).some(key => key.startsWith('DOCKER_') ||
       key.startsWith('COMPOSE_') || key.startsWith('PG') ||
       key.startsWith('STATION_CREATE_'))) fail();
@@ -120,7 +125,7 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
     }
     for (const name of ['search_admin_certs', 'search_security_state'])
       if (!sameVolume(await inspectVolume(`${project}_${name}`), volumeIds[name])) fail();
-    for (const phase of ['transfer', 'inspect']) {
+    for (const phase of phases) {
       const item = one((await docker(['image', 'inspect', `${project}-${names[phase]}`])).stdout);
       if (item.Id !== images[phase] || !equal(item.Config?.Env, images.env[phase]) ||
           !equal(item.Config?.Entrypoint, images.entrypoint[phase])) fail();
@@ -193,7 +198,8 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
       const response = await compose(['config', '--format', 'json', ...Object.values(names)]);
       if (response.stderr !== '') fail();
       normalized = JSON.parse(response.stdout);
-      verifyCreateBoundaryServiceConfig(normalized, { project, repository, invocationId,
+      (intent ? verifyCreateIntentPrepareServiceConfig : verifyCreateBoundaryServiceConfig)(normalized,
+        { project, repository, invocationId,
         invocationRoot, volumeName });
       networkIds = {};
       for (const name of ['search_admin_db', 'search_internal']) {
@@ -216,7 +222,7 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
         volumeIds[name] = item;
       }
       images = { env: {}, entrypoint: {} };
-      for (const phase of ['transfer', 'inspect']) {
+      for (const phase of phases) {
         const item = one((await docker(['image', 'inspect', `${project}-${names[phase]}`])).stdout);
         if (!imageId.test(item.Id) ||
             !equal(item.Config?.Cmd, ['node', 'apps/server/dist/main.js']) ||
@@ -229,7 +235,7 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
     async volumeAbsent(name) {
       if (name !== volumeName || listed((await docker(['volume', 'ls', '--format', '{{.Name}}']))
         .stdout.trim(), /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/).includes(name)) fail();
-      for (const phase of ['transfer', 'inspect']) if ((await serviceReferences(phase)).length) fail();
+      for (const phase of phases) if ((await serviceReferences(phase)).length) fail();
     },
     async createVolume(name) {
       if (name !== volumeName) fail();
@@ -265,13 +271,21 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
       checkedContainer(finished, phase, id, true);
       const logs = await docker(['container', 'logs', id], 10_000, false, true);
       if (logs.stderr !== '') fail('logs-stderr');
-      if (logs.stdout !== outputs[phase]) fail('logs-stdout');
+      let projection;
+      if (phase === 'prepare') {
+        if (!logs.stdout.endsWith('\n') || Buffer.byteLength(logs.stdout) > 256 * 1024) fail('logs-stdout');
+        try {
+          projection = JSON.parse(logs.stdout.slice(0, -1));
+          if (`${canonicalAttestorValue(projection, 256 * 1024).bytes.toString('utf8')}\n` !== logs.stdout)
+            fail('logs-stdout');
+        } catch { fail('logs-stdout'); }
+      } else if (logs.stdout !== outputs[phase]) fail('logs-stdout');
       return { id, phase, image: finished.Image, created: finished.Created,
         labels: finished.Config.Labels, startedAt: finished.State.StartedAt,
-        finishedAt: finished.State.FinishedAt };
+        finishedAt: finished.State.FinishedAt, ...(phase === 'prepare' ? { projection } : {}) };
     },
     async cleanupRemote(containers, capturedVolume) {
-      if (!Array.isArray(containers) || !equal(containers.map(x => x.phase), ['transfer', 'inspect'])) fail();
+      if (!Array.isArray(containers) || !equal(containers.map(x => x.phase), phases)) fail();
       for (const item of containers) {
         const current = await inspect(item.id);
         checkedContainer(current, item.phase, item.id, true);
@@ -290,7 +304,7 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
       }
       if (listed((await docker(['ps', '-a', '--no-trunc', '--filter',
         `volume=${volumeName}`, '--format', '{{.ID}}'])).stdout.trim(), fullId).length) fail();
-      for (const phase of ['transfer', 'inspect']) if ((await serviceReferences(phase)).length) fail();
+      for (const phase of phases) if ((await serviceReferences(phase)).length) fail();
       await this.checkVolume(capturedVolume);
       const removed = await docker(['volume', 'rm', volumeName]);
       if (removed.stdout !== `${volumeName}\n` || removed.stderr !== '') fail();
@@ -298,4 +312,14 @@ export function createBoundaryDockerAdapter({ repository, uid, gid, jobLock, inv
         /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/).includes(volumeName)) fail();
     },
   });
+}
+
+/** Existing fixed success-only observation adapter. */
+export function createBoundaryDockerAdapter(input, options = {}) {
+  return fixedBoundaryDockerAdapter(input, options, false);
+}
+
+/** Fixed read-only projection adapter, never an SDK create caller. */
+export function createIntentPrepareDockerAdapter(input, options = {}) {
+  return fixedBoundaryDockerAdapter(input, options, true);
 }
