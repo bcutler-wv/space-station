@@ -17,6 +17,7 @@ import { canonicalAttestorValue } from '../../scripts/search-attestor-pure.mjs';
 import { validateCapturedAttestorPublicAtTime } from '../../scripts/search-attestor-command-core.mjs';
 import { sealCreateIntent } from '../../scripts/search-create-intent-pure.mjs';
 import { transferInvocationWritable } from '../support/search-create-intent-gate-mount-policy.mjs';
+import { sourceMutation } from '../support/search-create-intent-gate-source-mutation.mjs';
 
 // Disposable real Docker/PG16/OpenSearch TLS proof. Fault seams alter only
 // selected owner responses after their underlying Docker operation occurs.
@@ -573,18 +574,10 @@ await runFault('pending-same-size', { writePending: { fixture: false,
 const originalAdmin = await readFile(path.join(source, 'admin.pem'));
 const originalKey = await readFile(path.join(source, 'admin.key'));
 async function mutateSource(scenario, target, replacement, afterCapture = false) {
-  const name = path.join(source, target), moved = `${name}.intent-original`;
-  let changed = false;
-  const change = async () => {
-    await rename(name, moved);
-    if (replacement) await copyFile(path.join(source, replacement), name);
-    changed = true;
-  };
-  const restore = async () => {
-    if (!changed) return;
-    await rm(name, { force: true });
-    await rename(moved, name);
-  };
+  const name = path.join(source, target);
+  const originalStat = await lstat(name);
+  const originalBytes = await readFile(name);
+  const { change, restore } = sourceMutation(source, target, replacement);
   try {
     if (!afterCapture) await change();
     await runFault(scenario, { capturePublic: afterCapture ? async input => {
@@ -596,6 +589,10 @@ async function mutateSource(scenario, target, replacement, afterCapture = false)
       await restore();
     } });
   } finally { await restore(); }
+  const restored = await lstat(name);
+  assert.equal(restored.dev, originalStat.dev);
+  assert.equal(restored.ino, originalStat.ino);
+  assert.deepEqual(await readFile(name), originalBytes);
   assert.deepEqual(await readFile(path.join(source, 'admin.pem')), originalAdmin);
   assert.deepEqual(await readFile(path.join(source, 'admin.key')), originalKey);
 }
