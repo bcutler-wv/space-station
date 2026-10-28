@@ -15,6 +15,7 @@ import { captureCreateIntentPublic } from '../../scripts/search-create-intent-pu
 import { canonicalAttestorValue } from '../../scripts/search-attestor-pure.mjs';
 import { validateCapturedAttestorPublicAtTime } from '../../scripts/search-attestor-command-core.mjs';
 import { sealCreateIntent } from '../../scripts/search-create-intent-pure.mjs';
+import { transferInvocationWritable } from '../support/search-create-intent-gate-mount-policy.mjs';
 
 // Disposable real Docker/PG16/OpenSearch TLS proof. Fault seams alter only
 // selected owner responses after their underlying Docker operation occurs.
@@ -216,7 +217,12 @@ async function assertRetained(expectedPhases, expectedPending, fresh = false) {
   assert.equal((await volumes()).length, 1);
 }
 async function phaseEvidence(phase, containerId) {
+  const stage = name => {
+    if (checkpoint.startsWith('intent-fresh-')) checkpoint = `intent-fresh-${phase}-${name}`;
+  };
+  stage('inspect');
   const item = JSON.parse(await docker(['container', 'inspect', containerId]))[0];
+  stage('identity');
   assert.equal(item.Id, containerId);
   assert.equal(item.State.Status, 'exited');
   assert.equal(item.State.ExitCode, 0);
@@ -225,17 +231,20 @@ async function phaseEvidence(phase, containerId) {
   assert.deepEqual(item.Config.Cmd, ['node', phase === 'transfer' ?
     'scripts/search-create-boundary-transfer.mjs' : 'scripts/search-create-intent-prepare.mjs']);
   assert.deepEqual(item.HostConfig.CapDrop, ['ALL']);
+  stage('host-policy');
   assert.deepEqual((item.HostConfig.CapAdd ?? []).map(x => x.replace(/^CAP_/, '')).sort(),
     phase === 'transfer' ? ['CHOWN', 'DAC_OVERRIDE'] : []);
   assert.equal(Object.keys(item.HostConfig.PortBindings ?? {}).length, 0);
   assert.deepEqual(item.HostConfig.SecurityOpt, ['no-new-privileges:true']);
   assert.ok(item.Config.Env.every(value => !/^(?:POSTGRES_PASSWORD|STATION_MASTER_KEY|DB_HOST|GOCAMO_HMAC|PGPASSWORD|APP_ORIGIN)=/.test(value)));
   const mounts = item.HostConfig.Mounts;
+  stage('mount-targets');
   assert.deepEqual(mounts.map(value => value.Target).sort(), phase === 'transfer' ?
     ['/run/create-boundary', '/run/create-transfer-invocation/invocation',
       '/run/create-transfer-password/password'] :
     ['/run/create-boundary', '/run/station-admin', '/run/station-state']);
   if (phase === 'transfer') {
+    stage('network');
     assert.equal(item.HostConfig.NetworkMode, 'none');
     const isolated = item.NetworkSettings.Networks ?? {};
     const noneId = JSON.parse(await docker(['network', 'inspect', 'none']))[0].Id;
@@ -243,11 +252,21 @@ async function phaseEvidence(phase, containerId) {
     assert.ok(Object.keys(isolated).length === 0 ||
       Object.keys(isolated).length === 1 && Object.keys(isolated)[0] === 'none' &&
         isolated.none?.NetworkID === noneId);
+    stage('mount-options');
     assert.equal(mounts.filter(value => value.Type === 'volume').length, 1);
-    assert.equal(mounts.find(value => value.Target === '/run/create-boundary')?.VolumeOptions?.NoCopy, true);
-    assert.equal(mounts.find(value => value.Target === '/run/create-boundary')?.ReadOnly, false);
+    const hostVolume = mounts.find(value => value.Target === '/run/create-boundary');
+    const effectiveVolume = item.Mounts.find(value => value.Destination === '/run/create-boundary');
+    assert.equal(transferInvocationWritable(hostVolume, effectiveVolume,
+      (await volumes())[0]), true);
     assert.ok(mounts.filter(value => value.Type === 'bind').every(value => value.ReadOnly === true));
+    for (const bind of mounts.filter(value => value.Type === 'bind')) {
+      const effective = item.Mounts.find(value => value.Destination === bind.Target);
+      assert.equal(effective?.Type, 'bind');
+      assert.equal(effective?.Source, bind.Source);
+      assert.equal(effective?.RW, false);
+    }
   } else {
+    stage('network');
     assert.deepEqual(Object.keys(item.NetworkSettings.Networks).sort(),
       [`${project}_search_admin_db`, `${project}_search_internal`].sort());
     assert.ok(mounts.every(value => value.Type === 'volume' && value.ReadOnly === true &&
@@ -262,6 +281,7 @@ async function phaseEvidence(phase, containerId) {
     assert.equal(mounts.find(value => value.Target === '/run/station-state')?.Source,
       `${project}_search_security_state`);
   }
+  stage('effective-mounts');
   assert.match(mounts.find(value => value.Target === '/run/create-boundary')?.Source,
     new RegExp(`^${project}_search_create_[0-9a-f]{32}$`));
   assert.deepEqual(item.Mounts.map(value => value.Destination).sort(),
