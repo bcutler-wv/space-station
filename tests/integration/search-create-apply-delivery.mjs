@@ -13,6 +13,7 @@ import { runCreateApplyOwner } from '../../scripts/search-create-apply-owner-cor
 import { createApplyDockerAdapter } from '../../scripts/search-create-boundary-owner-docker.mjs';
 import { verifyV2IndexProfile } from '../../packages/search/dist/opensearch-v2-profile.js';
 import { swapCreateApplyGateFile } from '../support/search-create-apply-gate-file.mjs';
+import { createApplyPrepareDiagnostic } from '../support/search-create-boundary-delivery-diagnostic-filter.mjs';
 
 // Runs only in the disposable per-UID checkout created by the established gate.
 // Every mutation below is scoped to that checkout's project and is checked
@@ -241,21 +242,33 @@ async function fixtureImage(mode) {
   assert.equal(result.code, 0);
   assert.match(result.stdout.trim(), /^sha256:[0-9a-f]{64}$/);
 }
-async function prepare() {
-  checkpoint = 'prepare';
+async function prepare(scenario) {
+  const diagnostic = createApplyPrepareDiagnostic(scenario, value => { checkpoint = value; });
+  const step = diagnostic.step;
+  step('db-snapshot');
   const before = await registry();
+  step('db-shape');
   assert.equal(before.control.revision, 3);
   assert.equal(before.control.stage, 'disabled_intent');
   assert.equal(before.dispatch.length, 0);
+  step('engine-prior');
   checkPrior(await engine(), false);
+  step('sources');
   await unchangedSources();
+  step('owner-run');
   const result = await command('node', ['scripts/search-create-intent-owner.mjs'],
     process.env, 245_000);
-  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  step('owner-exit');
+  assert.equal(result.code, 0);
+  step('owner-stderr');
+  assert.equal(result.stderr, '');
+  step('owner-stdout');
   assert.match(result.stdout, /^Private create intent prepared sha256=[0-9a-f]{64}\.\n$/);
+  step('pending-read');
   const bytes = await readFile(pending);
   const intent = JSON.parse(bytes.toString('utf8'));
   const digest = result.stdout.match(/sha256=([0-9a-f]{64})/)[1];
+  step('sealed-fields');
   assert.equal(sha(bytes), digest);
   assert.equal(intent.revision, before.control.revision);
   assert.equal(intent.transitionToken, before.control.transition_token);
@@ -266,8 +279,11 @@ async function prepare() {
   assert.equal(intent.candidateIndex, candidate);
   const args = [digest, String(before.control.revision), before.control.transition_token,
     'legacy-v1', 'station-mail-v1', legacyUuid, token, candidate];
+  step('db-unchanged');
   assert.deepEqual(await registry(), before);
+  step('engine-unchanged');
   checkPrior(await engine(), false);
+  diagnostic.restore();
   return { bytes, intent, args };
 }
 function parseMarkers(raw) {
@@ -654,14 +670,15 @@ async function expectBeforeSend(approved, mutate, expectedTransfer) {
 }
 
 checkpoint = 'typed-approval-denials';
-let approved = await prepare();
+let approved = await prepare('typed-approval-denials');
 const beforeApproval = await registry();
-for (const args of [
-  ['0'.repeat(64), ...approved.args.slice(1)],
-  [approved.args[0], '4', ...approved.args.slice(2)],
-  [...approved.args.slice(0, 3), '22222222-2222-4222-8222-222222222222',
-    ...approved.args.slice(4)],
+for (const { name, args } of [
+  { name: 'digest', args: ['0'.repeat(64), ...approved.args.slice(1)] },
+  { name: 'revision', args: [approved.args[0], '4', ...approved.args.slice(2)] },
+  { name: 'source', args: [...approved.args.slice(0, 3),
+    '22222222-2222-4222-8222-222222222222', ...approved.args.slice(4)] },
 ]) {
+  checkpoint = `typed-approval-${name}`;
   const result = await command('node', ['scripts/search-create-apply-owner.mjs', ...args],
     process.env, 20_000);
   assert.equal(result.code, 1);
@@ -676,12 +693,12 @@ for (const args of [
   checkPrior(await engine(), false);
 }
 await rm(pending);
-await expectBeforeSend(await prepare(), 'pending-inode', 0);
-await expectBeforeSend(await prepare(), 'public-inode', 1);
-await expectBeforeSend(await prepare(), 'binding-inode', 0);
+await expectBeforeSend(await prepare('presend-pending-inode'), 'pending-inode', 0);
+await expectBeforeSend(await prepare('presend-public-inode'), 'public-inode', 1);
+await expectBeforeSend(await prepare('presend-binding-inode'), 'binding-inode', 0);
 
 checkpoint = 'source-certificate-drift';
-approved = await prepare();
+approved = await prepare('source-certificate-drift');
 const adminSource = path.join(sourceRoot, 'admin.pem');
 const originalAdminBytes = originalPublic.find(x => x.name === 'admin.pem').bytes;
 const querySource = originalPublic.find(x => x.name === 'query.pem').bytes;
@@ -709,7 +726,7 @@ await unchangedSources();
 await reset();
 
 checkpoint = 'wrong-transition-credential';
-approved = await prepare();
+approved = await prepare('wrong-transition-credential');
 const credentialName = path.join(repository,
   '.cache/search-db/initial-v1/transition.password');
 const credentialInode = (await lstat(credentialName)).ino;
@@ -751,7 +768,7 @@ async function volumeFile(volumeName, file, replacement = null) {
   return JSON.parse(result);
 }
 checkpoint = 'mounted-admin-drift';
-approved = await prepare();
+approved = await prepare('mounted-admin-drift');
 const adminVolume = await volumeFile('search_admin_certs', 'admin.pem');
 assert.deepEqual(Buffer.from(adminVolume.bytes, 'base64'),
   originalPublic.find(x => x.name === 'admin.pem').bytes);
@@ -772,7 +789,7 @@ await unchangedSources();
 await reset();
 
 checkpoint = 'e0b-drift';
-approved = await prepare();
+approved = await prepare('e0b-drift');
 const stateMarker = originalState.files['v1-profile-complete'];
 assert.ok(stateMarker?.[3] === true);
 const originalStateBytes = Buffer.from(stateMarker[4], 'base64');
@@ -795,7 +812,7 @@ assert.deepEqual(await state(), originalState);
 await reset();
 
 checkpoint = 'preexisting-candidate';
-approved = await prepare();
+approved = await prepare('preexisting-candidate');
 const createProbe = String.raw`import {openSearchAdminCreateClient} from '/app/packages/search/dist/opensearch-runtime.js';
   import {createLiteralV2IndexOnce} from '/app/packages/search/dist/opensearch-create-index.js';
   const c=await openSearchAdminCreateClient({endpoint:'https://opensearch:9200',identityDir:'/run/station-admin'});
@@ -836,7 +853,7 @@ for (const [change, restore] of [
   ['role', 'role-restore'],
 ]) {
   checkpoint = `apply-engine-${change}`;
-  const approved = await prepare();
+  const approved = await prepare(`apply-engine-${change}`);
   const beforeDb = await registry();
   const beforeRaw = await rawEngineDigest();
   await drift(change);
@@ -885,7 +902,7 @@ async function replaceInternalNetwork() {
 }
 for (const kind of ['postgres', 'network', 'apply-volume']) {
   checkpoint = `apply-host-${kind}`;
-  const approved = await prepare();
+  const approved = await prepare(`apply-host-${kind}`);
   const beforeDb = await registry();
   let reached = false, transferId, volumeName;
   const phaseAttempts = [];
@@ -943,7 +960,7 @@ for (const kind of ['postgres', 'network', 'apply-volume']) {
 }
 
 checkpoint = 'apply-stopped-reference';
-let stoppedApproval = await prepare();
+let stoppedApproval = await prepare('apply-stopped-reference');
 const stoppedBefore = await registry();
 const stoppedId = (await docker(['container', 'create', '--network', 'none',
   '--label', `station.create.gate=${project}`,
@@ -1035,7 +1052,7 @@ const traces = {
 };
 for (const item of cases) {
   checkpoint = `case-${item.name}`;
-  const approved = await prepare();
+  const approved = await prepare(`case-${item.name}`);
   let controller = null;
   if (item.name.startsWith('db-after-')) controller = async evidence => {
     assert.equal(await sql(`SELECT rolcanlogin FROM pg_roles WHERE rolname='station_search_transition'`), 't');
@@ -1107,7 +1124,7 @@ for (const fault of ['lost-transfer-command', 'lost-create-command',
   'cleanup-response']) {
   checkpoint = `host-${fault}`;
   await docker(['image', 'tag', baseTag, `${project}-search-create-index`]);
-  const approved = await prepare();
+  const approved = await prepare(`host-${fault}`);
   const ids = {}, calls = [];
   const adapterFactory = input => createApplyDockerAdapter(input, {
     command: async (argv, env, timeoutMs) => {
@@ -1169,7 +1186,7 @@ for (const fault of ['lost-transfer-command', 'lost-create-command',
 
 checkpoint = 'unmodified-cli';
 await docker(['image', 'tag', baseImage, `${project}-search-create-index`]);
-const happy = await prepare();
+const happy = await prepare('unmodified-cli');
 const run = await command('node', ['scripts/search-create-apply-owner.mjs', ...happy.args],
   process.env, 480_000);
 assert.equal(run.code, 0);
@@ -1198,7 +1215,7 @@ await reset();
 // Save one sealed proposal before the older matrix's terminal source deletion.
 // Its exact bytes are restored only by the terminal missing-O probe, which
 // never recreates the original physical index or its UUID.
-const terminalProposal = await prepare();
+const terminalProposal = await prepare('terminal-proposal');
 await writeFile(path.join(scratch, 'terminal-missing-o.json'), JSON.stringify({
   args: terminalProposal.args,
   pending: terminalProposal.bytes.toString('base64'),

@@ -62,3 +62,16 @@ Its terminal missing-source probe preserves the original sealed approval and
 never recreates the deleted source index. These are implemented test cases,
 not runtime results: the combined GitHub Actions run and independent runtime
 review remain required before accepting this slice. Search remains disabled.
+
+The first integrated 0.71.0 Ubuntu run `41740040945` failed in the default
+owner pair's new create-apply gate after the prior intent-prepare gate passed.
+The public filtered log exposed only `prepare` after about 160 seconds; the
+fixture reused that label for every scenario and for assertions after the
+prepare call, so the original cause cannot be established from the retained
+evidence. Version 0.71.1 adds an explicit finite scenario to every prepare
+invocation, redacted substeps around its DB/engine/source/owner/seal checks,
+and distinct typed-approval negative labels. The filter accepts only these
+fixed names and never forwards dynamic details or private command output.
+No product path or acceptance assertion changes. A fresh complete Ubuntu run
+and independent runtime review remain required; 0.71.0 did not pass its
+actual create gate.

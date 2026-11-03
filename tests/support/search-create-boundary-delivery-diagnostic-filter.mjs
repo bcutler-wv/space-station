@@ -41,13 +41,41 @@ const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-
   'intent-expired-admin-restoration', 'intent-expired-admin-public-unchanged',
   'intent-expired-admin-public-cleanup',
   'intent-fingerprint', 'intent-final']);
-const applyNames = ['passthrough', 'concurrent-hold', 'transport-held', 'false-ack',
+const applyNames = ['passthrough', 'concurrent-hold', 'transport-held', 'transport-timeout', 'false-ack',
   'partial-ack', 'lost-response', 'crash-before-sent', 'crash-after-sent',
   'crash-after-readback', 'db-after-engine', 'db-after-confirm'];
-const applyCheckpoints = new Set(['setup', 'prepare', 'fixture-reset',
-  'typed-approval-denials', 'preexisting-candidate', 'unmodified-cli',
-  'presend-pending-inode', 'presend-public-inode',
-  ...applyNames.flatMap(name => [`case-${name}`, `image-${name}`, `evidence-${name}`])]);
+const applyScenarios = ['typed-approval-denials', 'typed-approval-digest',
+  'typed-approval-revision', 'typed-approval-source',
+  'presend-pending-inode', 'presend-public-inode', 'presend-binding-inode',
+  'source-certificate-drift', 'wrong-transition-credential',
+  'mounted-admin-drift', 'e0b-drift', 'preexisting-candidate',
+  'apply-engine-hidden-index', 'apply-engine-alias', 'apply-engine-role',
+  'apply-host-postgres', 'apply-host-network', 'apply-host-apply-volume',
+  'apply-stopped-reference', 'host-lost-transfer-command',
+  'host-lost-create-command', 'host-cleanup-response', 'unmodified-cli',
+  'terminal-proposal', ...applyNames.map(name => `case-${name}`)];
+const prepareSteps = ['db-snapshot', 'db-shape', 'engine-prior', 'sources',
+  'owner-run', 'owner-exit', 'owner-stderr', 'owner-stdout', 'pending-read',
+  'sealed-fields', 'db-unchanged', 'engine-unchanged'];
+const applyScenarioSet = new Set(applyScenarios);
+const prepareStepSet = new Set(prepareSteps);
+export function createApplyPrepareDiagnostic(scenario, setCheckpoint) {
+  if (!applyScenarioSet.has(scenario) || typeof setCheckpoint !== 'function')
+    throw Error('Unknown create apply scenario');
+  setCheckpoint(scenario);
+  return {
+    step(name) {
+      if (!prepareStepSet.has(name)) throw Error('Unknown create apply prepare step');
+      setCheckpoint(`${scenario}-prepare-${name}`);
+    },
+    restore() { setCheckpoint(scenario); },
+  };
+}
+const applyCheckpoints = new Set(['setup', 'fixture-reset',
+  ...applyScenarios,
+  ...applyScenarios.flatMap(scenario =>
+    prepareSteps.map(step => `${scenario}-prepare-${step}`)),
+  ...applyNames.flatMap(name => [`image-${name}`, `evidence-${name}`])]);
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
@@ -56,7 +84,7 @@ export function filteredCreateBoundaryDiagnostics(log) {
     if (line.length > 160) continue;
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
     const intent = /^Create intent prepare fixture failed at ([a-z-]+)\.$/.exec(line);
-    const apply = /^Create apply runtime fixture failed at ([a-z-]+)\.$/.exec(line);
+    const apply = /^Create apply runtime fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {

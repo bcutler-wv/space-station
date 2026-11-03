@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { filteredCreateBoundaryDiagnostics } from './search-create-boundary-delivery-diagnostic-filter.mjs';
+import { createApplyPrepareDiagnostic,
+  filteredCreateBoundaryDiagnostics } from './search-create-boundary-delivery-diagnostic-filter.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
   const log = ['private-secret-do-not-print',
     'Create boundary delivery fixture failed at complete-cli.',
@@ -38,4 +39,35 @@ test('expired certificate setup and owner stages remain finite and redacted', ()
       'Create intent prepare fixture failed at intent-expired-admin-private-secret.'].join('\n')),
     [line]);
   }
+});
+test('apply prepare keeps its explicit parent and precise failing step until success', () => {
+  let checkpoint = 'unrelated';
+  const trace = [];
+  const diagnostic = createApplyPrepareDiagnostic('presend-public-inode', value => {
+    checkpoint = value; trace.push(value);
+  });
+  diagnostic.step('db-snapshot');
+  diagnostic.step('owner-run');
+  diagnostic.step('owner-exit');
+  assert.equal(checkpoint, 'presend-public-inode-prepare-owner-exit');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(
+    `Create apply runtime fixture failed at ${checkpoint}.`),
+  [`Create apply runtime fixture failed at ${checkpoint}.`]);
+  diagnostic.restore();
+  assert.equal(checkpoint, 'presend-public-inode');
+  assert.deepEqual(trace, ['presend-public-inode',
+    'presend-public-inode-prepare-db-snapshot',
+    'presend-public-inode-prepare-owner-run',
+    'presend-public-inode-prepare-owner-exit', 'presend-public-inode']);
+});
+test('apply diagnostics reject dynamic case, step and hostile suffix', () => {
+  assert.throws(() => createApplyPrepareDiagnostic('case-secret', () => {}));
+  const diagnostic = createApplyPrepareDiagnostic('e0b-drift', () => {});
+  assert.throws(() => diagnostic.step('private-secret'));
+  const log = ['Create apply runtime fixture failed at e0b-drift-prepare-owner-run.',
+    'Create apply runtime fixture failed at e0b-drift-prepare-owner-run.private-secret',
+    'Create apply runtime fixture failed at case-secret-prepare-owner-run.',
+    'Create apply runtime fixture failed at e0b-drift-prepare-private-secret.'].join('\n');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
+    ['Create apply runtime fixture failed at e0b-drift-prepare-owner-run.']);
 });
