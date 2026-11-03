@@ -87,7 +87,8 @@ cleanup_pair() {
         teardown_failed=1
       fi
     done <<< "$listing"
-    for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift; do
+    for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift \
+      search-create-apply-transfer search-create-index; do
       if ! listing=$(docker ps -a --no-trunc --filter "label=com.docker.compose.project=$project_name" \
         --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>> "$private_log"); then
         teardown_failed=1; listing=''
@@ -108,7 +109,7 @@ cleanup_pair() {
     [[ ${#listing} -le 8192 ]] || teardown_failed=1
     while IFS= read -r volume; do
       [[ -n $volume ]] || continue
-      if [[ $volume =~ ^${project_name}_search_create_[0-9a-f]{32}$ ]]; then
+    if [[ $volume =~ ^${project_name}_search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})$ ]]; then
         docker volume rm "$volume" >> "$private_log" 2>&1 || teardown_failed=1
       else
         teardown_failed=1
@@ -213,10 +214,13 @@ for pair in default runner; do
   run_step init-search-security run_pair node scripts/init-search-security.mjs
   run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
     STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
-    docker compose -f compose.yaml -f compose.search-create-boundary.yaml \
-    --profile search --profile fixture --profile search-create-boundary build \
+    STATION_CREATE_APPLY_PUBLIC_ROOT="$checkout/.cache" \
+    STATION_CREATE_APPLY_VOLUME_NAME="${name}_search_create_apply_buildplaceholder" \
+    docker compose -f compose.yaml -f compose.search-create-boundary.yaml -f compose.search-create-apply.yaml \
+    --profile search --profile fixture --profile search-create-boundary --profile search-create-apply build \
     migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
-    search-create-transfer search-create-boundary search-create-intent-prepare
+    search-create-transfer search-create-boundary search-create-intent-prepare \
+    search-create-apply-transfer search-create-index
   run_step image-code-readability run_pair docker run --rm --pull never --network none \
     --read-only --user 1000:1000 --entrypoint node "${name}-search-create-boundary" \
     -e 'const fs=require("node:fs"); const c=fs.constants;
@@ -307,7 +311,9 @@ for pair in default runner; do
   run_step candidate-reservation run_pair docker compose --profile search run --rm -T --no-deps \
     migrate node tests/integration/search-create-boundary-reserve.mjs
   run_step intent-prepare-delivery run_pair node tests/integration/search-create-intent-prepare-delivery.mjs
+  run_step create-apply-runtime run_pair node tests/integration/search-create-apply-delivery.mjs
   run_step delivery run_pair node tests/integration/search-create-boundary-delivery.mjs
+  run_step create-apply-terminal-missing-o run_pair node tests/integration/search-create-apply-terminal-missing-o.mjs
   run_step secret-scan sudo "$(command -v node)" tests/support/search-attestor-delivery-log-scan.mjs "$private_log"
   phase=teardown
   cleanup_pair

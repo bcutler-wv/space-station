@@ -81,6 +81,24 @@ const expected = (stage, phase) => ({ phase, revision: stage === 'disabled_inten
   ownerId: stage === 'disabled_intent' ? null : ownerId,
   createdUuid: phase === 'precreate' ? null : 'created_uuid' });
 
+test('presend evidence requires original sent_unknown owner and absent candidate', () => {
+  const baseline = fixture('sent_unknown');
+  const presend = { ...expected('sent_unknown', 'precreate'), phase: 'presend' };
+  assert.deepEqual(assessCreateIndexEvidence(baseline, observed(false), presend),
+    { status: 'create-evidence', phase: 'presend', ready: false });
+  for (const [snapshot, view, expectation] of [
+    [baseline, observed(true), presend],
+    [{ ...baseline, dispatch: [{ ...baseline.dispatch[0], ownerId }] }, observed(false),
+      { ...presend, ownerId: '55555555-5555-4555-8555-555555555555' }],
+    [{ ...baseline, control: { ...baseline.control, servingReady: true } }, observed(false), presend],
+    [baseline, observed(false), { ...presend, createdUuid: 'created_uuid' }],
+  ]) {
+    const result = assessCreateIndexEvidence(snapshot, view, expectation);
+    assert.equal(result.ready, false);
+    assert.equal(result.status, 'create-evidence-rejected');
+  }
+});
+
 test('projection seals complete prior evidence and frozen body, excluding mutable N/dispatch fields', () => {
   const s = fixture(), o = observed(), files = createPriorPublicFiles(s, token);
   const publicDigests = files.map(row => ({ path: row.path, sha256: 'a'.repeat(64) }));

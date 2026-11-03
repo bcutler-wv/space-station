@@ -10,6 +10,7 @@ const phase = process.env.SEARCH_DRIFT_PHASE;
 assert.equal(endpoint, 'https://opensearch:9200');
 assert.ok(['profile', 'restore', 'role', 'role-restore', 'shadow', 'shadow-restore',
   'delete-v1', 'assert-missing', 'extra-index', 'extra-index-restore',
+  'hidden-index', 'hidden-index-restore',
   'candidate-index', 'candidate-index-restore',
   'alias', 'alias-restore', 'mapping-extra'].includes(phase));
 const root = '/run/station-admin';
@@ -89,6 +90,20 @@ try {
     assert.equal(result.body?.acknowledged, true);
     await adminAccess.verifySecurity();
     console.info('Disposable extra index removed after denial.');
+  } else if (phase === 'hidden-index') {
+    await adminAccess.verifySecurity();
+    const result = await admin.indices.create({ index: 'station-mail-fixture-hidden',
+      body: { settings: { index: { hidden: true, number_of_shards: 1,
+        number_of_replicas: 0 } } } });
+    assert.equal(result.body?.acknowledged, true);
+    assert.ok((await admin.indices.get({ index: 'station-mail-fixture-hidden' })).body
+      ?.['station-mail-fixture-hidden']);
+    console.info('Disposable hidden index created for exact-inventory denial.');
+  } else if (phase === 'hidden-index-restore') {
+    const result = await admin.indices.delete({ index: 'station-mail-fixture-hidden' });
+    assert.equal(result.body?.acknowledged, true);
+    await adminAccess.verifySecurity();
+    console.info('Disposable hidden index removed after denial.');
   } else if (phase === 'candidate-index') {
     await adminAccess.verifySecurity();
     const result = await admin.indices.create({

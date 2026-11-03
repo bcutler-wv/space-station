@@ -246,7 +246,7 @@ function assessCreateEvidence(snapshot, observed, expectation, completion) {
     canonical(expectation);
     exact(expectation, ['phase', 'revision', 'stage', 'transitionToken', 'sourceToken',
       'sourceIndex', 'candidateToken', 'candidateIndex', 'dispatchId', 'ownerId', 'createdUuid']);
-    if (!(completion ? ['confirmed', 'bound'] : ['precreate', 'postcreate']).includes(expectation.phase) ||
+    if (!(completion ? ['confirmed', 'bound'] : ['precreate', 'presend', 'postcreate']).includes(expectation.phase) ||
         !Number.isSafeInteger(expectation.revision) || expectation.revision < 1 ||
         !(completion ? ['create_requested', 'uuid_bound'] : ['disabled_intent', 'create_requested']).includes(expectation.stage) ||
         completion && (expectation.phase === 'confirmed') !== (expectation.stage === 'create_requested') ||
@@ -258,7 +258,7 @@ function assessCreateEvidence(snapshot, observed, expectation, completion) {
         (expectation.dispatchId !== null && !UUID.test(expectation.dispatchId)) ||
         (expectation.ownerId !== null && !UUID.test(expectation.ownerId)) ||
         (expectation.dispatchId === null) !== (expectation.ownerId === null) ||
-        (expectation.phase === 'precreate' ? expectation.createdUuid !== null :
+        (['precreate', 'presend'].includes(expectation.phase) ? expectation.createdUuid !== null :
           typeof expectation.createdUuid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(expectation.createdUuid))) fail();
     const classified = validateSnapshot(snapshot, false);
     if (classified.status !== 'incomplete' ||

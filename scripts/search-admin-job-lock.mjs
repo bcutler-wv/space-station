@@ -4,8 +4,27 @@ import { lstat, open, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 const held = new WeakSet();
+const applyOperations = new WeakMap();
 const fail = kind => { throw new Error(`Search admin ${kind}.`); };
 const filename = '.job-operation.lock';
+const applyUuid = value => typeof value === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+function readApplyKnown(input) {
+  try {
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.getPrototypeOf(input) !== Object.prototype) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    if (Reflect.ownKeys(descriptors).sort().join('|') !== 'approvedSha256|dispatchId|ownerId' ||
+        Object.values(descriptors).some(row => !Object.hasOwn(row, 'value') ||
+          !row.enumerable || !row.configurable || !row.writable)) return null;
+    const known = Object.fromEntries(Object.entries(descriptors).map(([key, row]) => [key, row.value]));
+    if (typeof known.approvedSha256 !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(known.approvedSha256) ||
+        !applyUuid(known.dispatchId) || !applyUuid(known.ownerId) ||
+        known.dispatchId === known.ownerId) return null;
+    return known;
+  } catch { return null; }
+}
 
 async function syncDirectory(directory) {
   const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -15,12 +34,17 @@ async function syncDirectory(directory) {
 export function isSearchAdminJobLock(lock, root, uid) {
   return held.has(lock) && lock.root === root && lock.uid === uid;
 }
+export function isCreateApplyBindingOperation(operation, root, uid) {
+  const owned = applyOperations.get(operation);
+  return owned?.root === root && owned.uid === uid;
+}
 
 /** One owner-local lock for both stopped inspectors and credential commands. */
 export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work) {
   if (fixtureFaultAt !== undefined && (process.env.STATION_JOB_LOCK_FIXTURE !== '1' ||
       !['after-append', 'after-file-sync', 'before-release-rm',
-        'intent-pending-after-append', 'intent-pending-after-file-sync'].includes(fixtureFaultAt)))
+        'intent-pending-after-append', 'intent-pending-after-file-sync',
+        'apply-binding-after-append', 'apply-binding-after-file-sync'].includes(fixtureFaultAt)))
     fail('job lock configuration');
   if (path.resolve(root) !== root || !root.endsWith('/.cache/search-db') ||
       !Number.isSafeInteger(uid) || uid < 1 || uid !== process.getuid?.() ||
@@ -44,11 +68,16 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let intentStage = 'preflight', intentAttempted = false, intentDurablePhase = null;
   let intentCleanup = false, intentTerminalAttempted = false, intentSuccess = false;
   let intentPendingDurable = false;
+  let applyAttempted = false, applyBindingDurable = false;
+  let applyStage = 'preflight', applyDurablePhase = null;
+  let applyTerminalAttempted = false, applyCleanup = false, applySuccess = false;
+  let applyKnown;
   const operationId = randomUUID();
   const releaseError = error => {
     if (mode === 'attestor') fail('attestor lock release');
     if (mode === 'create-boundary') fail('create boundary lock release');
     if (mode === 'create-intent') fail('create intent lock release');
+    if (mode === 'create-apply') fail('create apply lock release');
     throw error;
   };
   const assertOwned = async () => {
@@ -71,11 +100,15 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       role: 'attestor', ...record })}\n`);
     if (fixtureFaultAt === 'after-append' ||
         fixtureFaultAt === 'intent-pending-after-append' &&
-          record.role === 'create-intent' && record.phase === 'pending') fail('job record fault');
+          record.role === 'create-intent' && record.phase === 'pending' ||
+        fixtureFaultAt === 'apply-binding-after-append' &&
+          record.role === 'create-apply' && record.phase === 'binding') fail('job record fault');
     await handle.sync();
     if (fixtureFaultAt === 'after-file-sync' ||
         fixtureFaultAt === 'intent-pending-after-file-sync' &&
-          record.role === 'create-intent' && record.phase === 'pending') fail('job record fault');
+          record.role === 'create-intent' && record.phase === 'pending' ||
+        fixtureFaultAt === 'apply-binding-after-file-sync' &&
+          record.role === 'create-apply' && record.phase === 'binding') fail('job record fault');
     await syncDirectory(root);
     await assertOwned();
   };
@@ -189,6 +222,60 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       intentCleanup = true;
     },
   });
+  const apply = Object.freeze({
+    invocationId: operationId,
+    async assertOwned() {
+      if (!active || mode !== 'create-apply' || !applyBindingDurable)
+        fail('create apply binding');
+      await assertOwned();
+    },
+    async markBindingAttempted() {
+      if (!active || mode !== 'create-apply' || applyAttempted || applyBindingDurable)
+        fail('create apply binding');
+      applyAttempted = true;
+      await appendRecord({ role: 'create-apply', phase: 'binding', state: 'attempted',
+        ...applyKnown });
+      applyBindingDurable = true;
+      applyStage = 'binding-confirmed';
+    },
+    assertBindingAttempted(input) {
+      if (!active || mode !== 'create-apply' || !applyAttempted || !applyBindingDurable)
+        fail('create apply binding');
+      const known = readApplyKnown(input);
+      if (!known || known.approvedSha256 !== applyKnown.approvedSha256 ||
+          known.dispatchId !== applyKnown.dispatchId || known.ownerId !== applyKnown.ownerId)
+        fail('create apply binding');
+      return true;
+    },
+    async markDispatched(phase) {
+      if (!active || mode !== 'create-apply' || !applyBindingDurable ||
+          !['transfer', 'create'].includes(phase) ||
+          applyStage !== (phase === 'transfer' ? 'binding-confirmed' : 'transfer-confirmed') ||
+          applyCleanup || applyTerminalAttempted) fail('create apply dispatch');
+      applyStage = `${phase}-dispatched`;
+      applyDurablePhase = null;
+      await appendRecord({ role: 'create-apply', phase, state: 'dispatched', ...applyKnown });
+      applyDurablePhase = phase;
+    },
+    async confirmCompletion(phase) {
+      if (!active || mode !== 'create-apply' || !['transfer', 'create'].includes(phase) ||
+          applyStage !== `${phase}-dispatched` || applyDurablePhase !== phase ||
+          applyTerminalAttempted) fail('create apply completion');
+      applyTerminalAttempted = true;
+      await appendRecord({ role: 'create-apply', phase, state: 'confirmed', ...applyKnown });
+      applyStage = `${phase}-confirmed`;
+      applyDurablePhase = null;
+      applyTerminalAttempted = false;
+    },
+    async confirmOwnedCleanup() {
+      if (!active || mode !== 'create-apply' || applyStage !== 'create-confirmed' ||
+          applyCleanup || applyTerminalAttempted) fail('create apply cleanup');
+      applyTerminalAttempted = true;
+      await appendRecord({ role: 'create-apply', phase: 'create', state: 'cleanup-complete',
+        ...applyKnown });
+      applyCleanup = true;
+    },
+  });
   const token = Object.freeze({
     root, uid,
     beginAttestor() {
@@ -205,6 +292,16 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       if (!active || mode !== 'unselected' || dispatched) fail('create intent mode');
       mode = 'create-intent';
       return intent;
+    },
+    beginCreateApply(input) {
+      if (!active || mode !== 'unselected' || dispatched) fail('create apply mode');
+      const known = readApplyKnown(input);
+      if (!known || operationId === known.dispatchId ||
+          operationId === known.ownerId) fail('create apply mode');
+      applyKnown = known;
+      mode = 'create-apply';
+      applyOperations.set(apply, { root, uid });
+      return apply;
     },
     async markDispatched(role) {
       if (mode !== 'unselected' || dispatched || !['verifier', 'transition'].includes(role)) fail('job dispatch');
@@ -238,15 +335,22 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         (intentStage !== 'pending-attempted' || !intentPendingDurable || !intentCleanup))
       fail('create intent incomplete');
     if (mode === 'create-intent') intentSuccess = true;
+    if (mode === 'create-apply') {
+      if (!applyBindingDurable) fail('create apply incomplete');
+      await assertOwned();
+      if (applyCleanup) applySuccess = true;
+    }
     return result;
   } finally {
     active = false;
     held.delete(token);
+    applyOperations.delete(apply);
     const original = await handle.stat().catch(() => null);
     await handle.close().catch(() => {});
-    const canRelease = mode === 'attestor' ? !attestorAttempted || attestorCleanup :
+    let canRelease = mode === 'attestor' ? !attestorAttempted || attestorCleanup :
       mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup :
         mode === 'create-intent' ? !intentAttempted || intentCleanup : !dispatched || confirmed;
+    if (mode === 'create-apply') canRelease = !applyAttempted || applyCleanup;
     let released = false;
     if (prepared && canRelease && original) {
       const currentRoot = await lstat(root).catch(() => null);
@@ -260,7 +364,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
             current.uid === uid && (current.mode & 0o777) === 0o600 &&
             current.dev === original.dev && current.ino === original.ino) {
           try {
-            if ((mode === 'attestor' || mode === 'create-boundary' || mode === 'create-intent') &&
+            if ((mode === 'attestor' || mode === 'create-boundary' ||
+                mode === 'create-intent' || mode === 'create-apply') &&
                 fixtureFaultAt === 'before-release-rm')
               fail('fixture release fault');
             await rm(lockPath);
@@ -275,5 +380,6 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (attestorSuccess && !released) fail('attestor lock release');
     if (boundarySuccess && !released) fail('create boundary lock release');
     if (intentSuccess && !released) fail('create intent lock release');
+    if (applySuccess && !released) fail('create apply lock release');
   }
 }

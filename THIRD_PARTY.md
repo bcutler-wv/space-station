@@ -53,8 +53,12 @@ On 2026-10-21, verified the official Community release v1.55.0, its tagged MIT l
 
 The official `@opensearch-project/opensearch` 3.9.0 client is pinned both as a
 `@station/search` runtime dependency and as a root dev dependency for the
-independent manual fake-data proof. The private mTLS runtime is pending Ubuntu
-acceptance; no live consumer uses it. Its published Apache-2.0
+independent manual fake-data proof. The fixed create consumer uses only the
+official client's `indices.create` and `indices.get` methods through the
+already pinned one-shot adapter. The consumer has no owner dispatch in the
+current source slice. The [official JavaScript client guide](https://docs.opensearch.org/latest/clients/javascript/index/)
+documents index creation; the tagged upstream release and license below bind
+the installed API and provenance. Its published Apache-2.0
 `LICENSE.txt` SHA-256 is
 `43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1`;
 the committed pnpm lock pins npm integrity

@@ -300,6 +300,16 @@ async function searchClient(input: { endpoint: string; identityDir: string; role
     sniffInterval: false });
 }
 
+/** Fixed admin-TLS client for the one-shot, literal create adapter. */
+export async function openSearchAdminCreateClient(input: { endpoint: string; identityDir: string }) {
+  const client = await searchClient({ ...input, role: 'admin' });
+  // Expose only the two calls consumed by the fixed one-shot adapter.
+  return { indices: {
+    create: client.indices.create.bind(client.indices),
+    get: client.indices.get.bind(client.indices),
+  }, close: () => client.close() };
+}
+
 export async function openSearchAccess(input: { endpoint: string; identityDir: string; role: Role }) {
   const client = await searchClient(input);
   const json = <T>(invoke: (options: SDKOptions) => Abortable, cap?: number) => boundedRequest<T>(invoke, cap);

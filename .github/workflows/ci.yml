@@ -66,6 +66,12 @@ jobs:
       - run: node --test tests/support/search-create-intent-owner.test.mjs tests/support/search-create-intent-pending.test.mjs
       - run: node --test tests/support/search-create-intent-gate-source-mutation.test.mjs
       - run: node --test tests/support/search-create-intent-gate-expired-admin.test.mjs
+      - run: node --test tests/support/search-create-apply-binding.test.mjs
+      - run: node --test tests/support/search-create-apply-consumer.test.mjs tests/support/search-create-apply-transfer.test.mjs
+      - run: node --test tests/support/search-create-apply-public-stage.test.mjs tests/support/search-create-apply-owner-docker.test.mjs
+      - run: node --test tests/support/search-create-apply-gate-file.test.mjs
+      - run: node --test tests/support/search-create-apply-gate-transport.test.mjs
+      - run: bash tests/support/search-create-apply-render-proof.sh
       - run: node --test tests/support/search-create-boundary-lock.test.mjs
       - run: node --test tests/support/search-create-boundary-transfer.test.mjs
       - run: node --test tests/support/search-create-boundary-core.test.mjs

@@ -94,6 +94,8 @@ export async function captureCreateIntentPublic({ repository, uid, gid, files, s
       } catch { fail(); }
     };
     await recheck();
-    return Object.freeze({ publicDigests: digests, recheck });
+    return Object.freeze({ publicDigests: digests,
+      publicBytes: () => new Map([...bytes].map(([name, value]) => [name, Buffer.from(value)])),
+      recheck });
   } catch { fail(); }
 }

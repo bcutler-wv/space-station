@@ -41,6 +41,13 @@ const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-
   'intent-expired-admin-restoration', 'intent-expired-admin-public-unchanged',
   'intent-expired-admin-public-cleanup',
   'intent-fingerprint', 'intent-final']);
+const applyNames = ['passthrough', 'concurrent-hold', 'transport-held', 'false-ack',
+  'partial-ack', 'lost-response', 'crash-before-sent', 'crash-after-sent',
+  'crash-after-readback', 'db-after-engine', 'db-after-confirm'];
+const applyCheckpoints = new Set(['setup', 'prepare', 'fixture-reset',
+  'typed-approval-denials', 'preexisting-candidate', 'unmodified-cli',
+  'presend-pending-inode', 'presend-public-inode',
+  ...applyNames.flatMap(name => [`case-${name}`, `image-${name}`, `evidence-${name}`])]);
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
@@ -49,9 +56,12 @@ export function filteredCreateBoundaryDiagnostics(log) {
     if (line.length > 160) continue;
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
     const intent = /^Create intent prepare fixture failed at ([a-z-]+)\.$/.exec(line);
+    const apply = /^Create apply runtime fixture failed at ([a-z-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {
+      found.push(line); checkpoint = true;
+    } else if (!checkpoint && apply && applyCheckpoints.has(apply[1])) {
       found.push(line); checkpoint = true;
     } else if (!diagnostic && isCreateBoundaryDiagnosticLine(line)) {
       found.push(line); diagnostic = true;

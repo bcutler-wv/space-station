@@ -6,7 +6,7 @@ type Options = NonNullable<Parameters<Client['info']>[1]>;
 type Abortable = Promise<unknown> & { abort(): void };
 type IndexSdk = Pick<Client['indices'], 'create' | 'get'>;
 
-/** Fixed SDK adapter, with no production caller or credential acquisition. */
+/** Fixed one-shot SDK adapter; its caller owns the private credential boundary. */
 export async function createLiteralV2IndexOnce(indices: IndexSdk, index: string): Promise<{ uuid: string }> {
   const body = createV2IndexBody(index);
   const response = await boundedSearchSdkRequest<unknown>(options =>

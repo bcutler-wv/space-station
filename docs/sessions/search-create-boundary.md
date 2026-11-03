@@ -25,3 +25,40 @@ The 0.70.2 Ubuntu run `40617181162` passed the fresh projection and transfer pol
 The 0.70.3 Ubuntu run `40618540595` passed the inode and same-size fault cases, then stopped at `intent-missing-admin-public`. The source-mutation fixture restored the admin certificate in its fault callback and again in `finally`; its state flag stayed true after the first successful restore, so the second pass removed the original and failed. Version 0.70.4 clears that flag only after successful restoration and sets it immediately after renaming the original, so a failed replacement copy is still restored. Real filesystem tests cover missing and swapped public files, double restoration, and partial copy failure with original inode and bytes preserved. No production behavior changes; actual Ubuntu acceptance remains pending.
 
 The 0.70.4 Ubuntu run `40619902442` passed the preceding certificate fault cases, then stopped at the expired-admin-public fixture. Local reproduction showed OpenSSL rejected the fixture's attempt to CA-sign an already CA-signed certificate as input. Version 0.70.5 generates a certificate request from the original admin key and signs it with the existing fixture CA for zero days, with the exact admin subject and client extensions. The gate checks CA signature, admin key match, certificate profile and actual expiry before injection; a local real-certificate test proves the valid baseline captures and the expired replacement is rejected. Finite redacted setup, fault and restoration checkpoints retain the privacy boundary. This is gate-only; actual Ubuntu acceptance remains pending.
+
+Full Ubuntu run `40621241977` passed all ten jobs at `00f14f33b4e7f2e8ea78732a3191f7520777f50b`; Astra accepted the actual 3a prepare/certificate runtime review. Version 0.71.0 begins only the first 3b source slice: a fixed positional owner approval parser, exact nofollow/canonical pending reader, fresh apply-lock B and an exclusive private binding file. Binding attempt is latched before its lock record and file I/O, and a bound or uncertain lock cannot be released by this source stage. The binding file and pending proposal stay consumed after an offline proof; no live apply CLI, Docker dispatch, DB CAS, SDK create, publication or serving is connected. Source review and later actual create-send gates remain pending.
+# Fixed create apply source slice
+
+The one-shot create consumer uses a finite `presend` evidence phase after its
+original dispatch changes from `armed` to `sent_unknown` and before the SDK
+call. This phase requires the candidate index to remain absent, the same
+dispatch owner and target, exact prior history and security evidence, and both
+SQL gates false. It cannot certify a response, UUID binding, or readiness.
+The consumer checks the sealed original source UUID and retains the original
+mounted admin certificate/key inode identity across observer and SDK awaits.
+The consumer only returns `uuid_bound` after the same invocation's definitive
+create response and exact readback UUID. A failed or lost response remains
+`sent_unknown`; no recovery is licensed by this source slice.
+
+The following 0.71.0 owner source slice adds a fixed positional CLI that binds
+the sealed approval to a fresh apply lock B, stages exactly the original prior
+public PEM files, and runs one network-free transfer followed by one UID 1000
+create consumer. It rechecks the original pending file, binding, public files,
+host PostgreSQL owner and Docker infrastructure around each dispatch. Only the
+original consumer's definitive `uuid_bound` result and exact cleanup of its
+containers, volume and staged public files release B. Uncertain dispatch,
+response, identity or cleanup retains B and the consumed binding; neither
+external lock loss nor a new owner permits replay. Both SQL search gates remain
+false. This source has daemon-free render and scripted fault checks only; the
+two-UID PostgreSQL 16/OpenSearch runtime send gate and milestone acceptance
+remain pending.
+
+The complete 0.71.0 binding, consumer, owner and runtime-gate source has passed
+Astra review. Full local checks and the real-filesystem and mutual-TLS fixture
+tests pass. The disposable Ubuntu gate now exercises actual SDK response loss,
+partial acknowledgements, process termination, timeout, database failure,
+concurrency, approval replay and host/security drift for both owner UID pairs.
+Its terminal missing-source probe preserves the original sealed approval and
+never recreates the deleted source index. These are implemented test cases,
+not runtime results: the combined GitHub Actions run and independent runtime
+review remain required before accepting this slice. Search remains disabled.
