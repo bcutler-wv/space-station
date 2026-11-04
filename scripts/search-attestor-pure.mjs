@@ -120,6 +120,11 @@ function validateSnapshot(snapshot, requireReady = true) {
   return classified;
 }
 
+/** Strict raw transition snapshot, including timestamp sidecars and DB identity. */
+export function validatePartialTransitionSnapshot(snapshot) {
+  try { return validateSnapshot(snapshot, false); } catch { fail(); }
+}
+
 export function buildAttestorPublicFiles(expected) {
   const files = [
     { path: 'ca.pem', token: 'legacy-v1', role: 'ca', principal: 'station-search-ca', fingerprint: null },

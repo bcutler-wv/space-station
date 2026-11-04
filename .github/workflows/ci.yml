@@ -72,6 +72,7 @@ jobs:
       - run: node --test tests/support/search-create-apply-gate-file.test.mjs
       - run: node --test tests/support/search-create-apply-gate-transport.test.mjs
       - run: node --test tests/support/opensearch-writer-role-api-shape.test.mjs tests/support/opensearch-writer-role-api-transport.test.mjs
+      - run: node --test tests/support/search-writer-role-intent-pure.test.mjs
       - run: bash tests/support/search-create-apply-render-proof.sh
       - run: node --test tests/support/search-create-boundary-lock.test.mjs
       - run: node --test tests/support/search-create-boundary-transfer.test.mjs
