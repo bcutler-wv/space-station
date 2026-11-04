@@ -91,6 +91,7 @@ jobs:
       - run: node --test tests/support/search-create-boundary-owner.test.mjs
       - run: node --test tests/support/search-create-boundary-owner-docker.test.mjs
       - run: node --test tests/support/search-create-boundary-delivery-diagnostic-filter.test.mjs tests/support/search-writer-role-create-output-diagnostic.test.mjs
+      - run: node --test tests/support/search-create-ordinary-pairs.test.mjs
       - run: node --test tests/support/search-create-private-log-scan.test.mjs
       - run: node --test tests/support/search-writer-role-prepare-fixture-probe.test.mjs
       - run: node --test tests/support/search-writer-role-registry-fixture.test.mjs
@@ -153,6 +154,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: scaffold
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: [default, runner]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -166,6 +171,8 @@ jobs:
       - run: pnpm build
       - run: sudo sysctl -w vm.max_map_count=262144
       - run: timeout --signal=TERM --kill-after=20s 3300s bash scripts/search-create-boundary-delivery-gate.sh
+        env:
+          STATION_CREATE_GATE_PAIR: ${{ matrix.pair }}
 
   search-writer-role-prepare-delivery:
     runs-on: ubuntu-latest

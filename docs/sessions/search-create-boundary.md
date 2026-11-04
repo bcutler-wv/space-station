@@ -227,3 +227,13 @@ log when that fixture fails. The older 0.85.0 admin-DB failure in run
 `41787266265` has no identified cause; 0.87.0 run `41791235160` passed its
 admin-DB and scaffold jobs while the overall workflow remained in progress.
 This diagnostic slice changes no product path or runtime acceptance status.
+
+Version 0.90.2 schedules the existing ordinary create-boundary `default` and
+`runner` pairs as separate GitHub matrix jobs. The fixed early selector permits
+only one of those values, refuses any mixed writer-mode selector before Docker
+or fixture creation, and preserves the original two-pair loop when unset.
+Per-pair fixture creation, intent/create/boundary/terminal checks, private scan,
+checked teardown and time limits are unchanged. Accepted run `41806679165`
+measured about 20m40s then 19m for the sequential pairs; any parallel speedup
+requires a new full exact-commit Ubuntu result with both matrix jobs green.
+The 0.90.1 mapping API repair remains pending its separate runtime audit.

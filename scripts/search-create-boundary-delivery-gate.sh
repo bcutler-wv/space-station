@@ -10,6 +10,12 @@ fi
 writer_variant=${STATION_WRITER_PREPARE_GATE_VARIANT:-}
 delivery_case=${STATION_WRITER_DELIVERY_GATE_CASE:-}
 delivery_pair=${STATION_WRITER_DELIVERY_GATE_PAIR:-}
+source "$PWD/tests/support/search-create-ordinary-pairs.sh"
+if ! select_create_ordinary_pairs "${STATION_CREATE_GATE_PAIR:-}" \
+    "$writer_variant" "$delivery_case" "$delivery_pair"; then
+  echo 'Create boundary delivery gate has an invalid ordinary pair selection.' >&2
+  exit 1
+fi
 if [[ -n $delivery_case ]]; then
   if [[ -n $writer_variant || ! $delivery_case =~ ^(positive|prestart|lost-return|false-ack|held-timeout)$ ||
         ! $delivery_pair =~ ^(default|runner)$ ]]; then
@@ -208,7 +214,7 @@ buildx_plugin=$(realpath -e -- "$(plugin_path buildx)")
 test -f "$compose_plugin" && test -x "$compose_plugin"
 test -f "$buildx_plugin" && test -x "$buildx_plugin"
 
-for pair in default runner; do
+for pair in "${ordinary_pairs[@]}"; do
   if [[ -n $writer_variant ]]; then
     case "$writer_variant:$pair" in
       default:default|runner:runner|runner-volume:runner|runner-missing-o:runner) ;;
