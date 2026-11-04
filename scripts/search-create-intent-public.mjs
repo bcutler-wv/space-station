@@ -37,6 +37,8 @@ async function file(name, uid, gid, prior, max = 16_384) {
     return { name, stat, bytes };
   } finally { await handle.close(); }
 }
+// Shared bounded public-file capture only; the existing full prior reader is unchanged.
+export { directory as capturePublicDirectory, file as capturePublicFile };
 function source(row, repository) {
   if (row.token === 'legacy-v1') {
     const names = { 'ca.pem': 'ca.pem', 'v1/admin.pem': 'admin.pem',
