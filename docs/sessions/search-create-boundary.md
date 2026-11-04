@@ -234,6 +234,9 @@ only one of those values, refuses any mixed writer-mode selector before Docker
 or fixture creation, and preserves the original two-pair loop when unset.
 Per-pair fixture creation, intent/create/boundary/terminal checks, private scan,
 checked teardown and time limits are unchanged. Accepted run `41806679165`
-measured about 20m40s then 19m for the sequential pairs; any parallel speedup
-requires a new full exact-commit Ubuntu result with both matrix jobs green.
-The 0.90.1 mapping API repair remains pending its separate runtime audit.
+measured about 20m40s then 19m for the sequential pairs. Both new matrix
+jobs and the full 25-job workflow passed at exact `cbba3ee8d399fc42a6eff46ac36dde815a8fc946`
+in run `41815934594`, and Astra accepted their scans and checked teardown.
+The measured first-start-to-last-end span was 24m25s versus the prior 39m41s
+sequential span, a 15m16s gain for this run. The separate mapping API proof
+was also accepted in that full workflow; no mapping delivery or readiness follows.

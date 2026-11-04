@@ -5,7 +5,8 @@ import { Client } from '@opensearch-project/opensearch';
 import { OPENSEARCH_MAPPING, OPENSEARCH_PROFILE, type SearchCompileResult } from './opensearch-compiler.js';
 import { observerBudget } from './opensearch-observer-budget.js';
 import { PINNED_STATIC_ACTION_GROUPS } from './opensearch-static-action-groups.js';
-import { issuedWriterRoleRequest, type WriterRoleContract } from './opensearch-writer-role-contract.js';
+import { issuedWriterMappingRequest, issuedWriterRoleRequest,
+  type WriterMappingContract, type WriterRoleContract } from './opensearch-writer-role-contract.js';
 
 export const SEARCH_INDEX = OPENSEARCH_PROFILE;
 export const SEARCH_ENGINE_VERSION = '3.9.0';
@@ -344,6 +345,51 @@ export async function openSearchAdminWriterRoleSender(
       return Object.freeze({ created: true });
     },
     async close(): Promise<void> {
+      closed = true;
+      await client.close();
+    },
+  };
+}
+
+/** Pure, exact first-create response check; it cannot authorize a request or readback. */
+export function verifyWriterMappingFirstResponse(statusCode: unknown, body: unknown,
+  target: string): Readonly<{ created: true }> {
+  if (statusCode !== 201 || !body || typeof body !== 'object' ||
+      Array.isArray(body) || Object.getPrototypeOf(body) !== Object.prototype)
+    throw new SearchEngineError('partial');
+  const keys = Reflect.ownKeys(body);
+  if (keys.length !== 2 || keys.some(key => typeof key !== 'string') ||
+      keys.sort().join('|') !== 'message|status') throw new SearchEngineError('partial');
+  const descriptors = Object.getOwnPropertyDescriptors(body);
+  if (!descriptors.status?.enumerable || !('value' in descriptors.status) ||
+      !descriptors.message?.enumerable || !('value' in descriptors.message) ||
+      descriptors.status.value !== 'CREATED' ||
+      descriptors.message.value !== `'${target}' created.`)
+    throw new SearchEngineError('partial');
+  return Object.freeze({ created: true });
+}
+
+/** One constructor-issued mapping, one original SDK PUT result, no readback or retry. */
+export async function openSearchAdminWriterMappingSender(
+  input: { endpoint: string; identityDir: string }, contract: WriterMappingContract) {
+  // Reject unissued contracts before touching input or admin credentials.
+  const request = issuedWriterMappingRequest(contract);
+  const body = { users: [...request.body.users], backend_roles: [] as string[],
+    hosts: [] as string[] };
+  const client = await searchClient({ ...input, role: 'admin' });
+  let attempted = false;
+  let closed = false;
+  return {
+    async sendOnce(): Promise<Readonly<{ created: true }>> {
+      if (arguments.length !== 0 || attempted || closed) throw new SearchEngineError('configuration');
+      attempted = true;
+      const result = await boundedEnvelope<unknown>(options =>
+        client.security.createRoleMapping({ role: request.target, body },
+          options) as Abortable, 32_768, REQUEST_MS);
+      return verifyWriterMappingFirstResponse(result.statusCode, result.body, request.target);
+    },
+    async close(): Promise<void> {
+      if (arguments.length !== 0) throw new SearchEngineError('configuration');
       closed = true;
       await client.close();
     },
