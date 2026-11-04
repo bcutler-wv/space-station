@@ -178,6 +178,7 @@ test('changed original create and original public/source baselines cannot be res
   for (const change of [
     e => { e.binding.invocationId = roleDispatchId; },
     e => { e.binding.approvedSha256 = '0'.repeat(64); },
+    e => { e.binding.invocationId = '88888888-8888-4888-8888-888888888888'; },
     e => { e.intent.sourceUuid = 'wrong'; },
   ]) { const e = structuredClone(f.createEvidence); change(e);
     assert.deepEqual(assessWith(f, f.bound, f.pre, 'bound', null,
@@ -210,6 +211,7 @@ test('changed original create and original public/source baselines cannot be res
     p => { p.target = 'station_indexer_other'; },
     p => { p.bodyIdentity = '0'.repeat(64); },
     p => { p.bodySha256 = '0'.repeat(64); },
+    p => { p.originalCreateBindingSha256 = '0'.repeat(64); },
     p => { p.baselineDigest = '0'.repeat(64); },
     p => { p.revision++; },
     p => { p.state.indexUuid = 'wrong'; },

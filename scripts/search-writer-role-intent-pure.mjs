@@ -133,6 +133,7 @@ function roleEvidence(snapshot, observed, state, createEvidence, publicDigests, 
       old.priorEvidenceDigest !== intent.priorEvidenceDigest ||
       !same(old.publicFiles, intent.publicFiles) ||
       !same(old.publicDigests, intent.publicDigests) ||
+      hash(createEvidence.binding) !== intent.originalCreateBindingSha256 ||
       !same(publicDigests, intent.publicDigests) || !same(state, intent.state)) fail();
   const source = snapshot.history.find(row => row.generationToken === intent.sourceToken);
   if (!source || source.physicalIndex !== intent.sourceIndex ||
@@ -206,6 +207,7 @@ export function makeWriterRoleIntentProjection(snapshot, observed, state,
       priorEvidenceDigest: old.priorEvidenceDigest,
       publicFiles: old.publicFiles, publicDigests,
       state, createApprovedSha256: createEvidence.approvedSha256,
+      originalCreateBindingSha256: hash(createEvidence.binding),
       boundControlUpdatedAt: snapshot.exactTimestamps.control.updatedAt,
       baselineDigest: baseline(snapshot, observed, state, publicDigests,
         createEvidence, old.candidateToken) };
@@ -229,7 +231,8 @@ export function sealWriterRoleIntent(projection, planned, createEvidence) {
           'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex',
           'candidateUuid', 'target', 'bodyIdentity', 'bodySha256', 'databaseOid',
           'project', 'systemIdentifier', 'priorEvidenceDigest', 'publicFiles',
-          'publicDigests', 'state', 'createApprovedSha256', 'boundControlUpdatedAt',
+          'publicDigests', 'state', 'createApprovedSha256',
+          'originalCreateBindingSha256', 'boundControlUpdatedAt',
           'baselineDigest']) ||
         input.version !== 1 || !Number.isSafeInteger(input.revision) ||
         !uuid.test(input.transitionToken) || !uuid.test(input.candidateToken) ||
@@ -237,10 +240,12 @@ export function sealWriterRoleIntent(projection, planned, createEvidence) {
         !/^[0-9a-f]{64}$/.test(input.bodyIdentity) ||
         !/^[0-9a-f]{64}$/.test(input.bodySha256) ||
         !/^[0-9a-f]{64}$/.test(input.baselineDigest) ||
-        !/^[0-9a-f]{64}$/.test(input.createApprovedSha256)) fail();
+        !/^[0-9a-f]{64}$/.test(input.createApprovedSha256) ||
+        !/^[0-9a-f]{64}$/.test(input.originalCreateBindingSha256)) fail();
     if (!microtime(input.boundControlUpdatedAt)) fail();
     const old = originalCreate(createEvidence);
     if (createEvidence.approvedSha256 !== input.createApprovedSha256 ||
+        hash(createEvidence.binding) !== input.originalCreateBindingSha256 ||
         ids.dispatchId === old.dispatchId || ids.dispatchId === old.ownerId ||
         ids.ownerId === old.dispatchId || ids.ownerId === old.ownerId ||
         ids.dispatchId === createEvidence.binding.invocationId ||
@@ -269,7 +274,8 @@ export function assessWriterRoleEvidence(snapshot, observed, state, createEviden
           'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex', 'candidateUuid',
           'target', 'bodyIdentity', 'bodySha256', 'databaseOid', 'project',
           'systemIdentifier', 'priorEvidenceDigest', 'publicFiles', 'publicDigests',
-          'state', 'createApprovedSha256', 'boundControlUpdatedAt', 'baselineDigest',
+          'state', 'createApprovedSha256', 'originalCreateBindingSha256',
+          'boundControlUpdatedAt', 'baselineDigest',
           'dispatchId', 'ownerId'])) fail();
     return roleEvidence(snapshot, observed, state, createEvidence, publicDigests,
       sealed.intent, phase, expectedTimestamps);

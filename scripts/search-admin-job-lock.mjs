@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 const held = new WeakSet();
 const applyOperations = new WeakMap();
+const writerRoleOperations = new WeakMap();
 const fail = kind => { throw new Error(`Search admin ${kind}.`); };
 const filename = '.job-operation.lock';
 const applyUuid = value => typeof value === 'string' &&
@@ -38,13 +39,18 @@ export function isCreateApplyBindingOperation(operation, root, uid) {
   const owned = applyOperations.get(operation);
   return owned?.root === root && owned.uid === uid;
 }
+export function isWriterRoleBindingOperation(operation, root, uid) {
+  const owned = writerRoleOperations.get(operation);
+  return owned?.root === root && owned.uid === uid;
+}
 
 /** One owner-local lock for both stopped inspectors and credential commands. */
 export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work) {
   if (fixtureFaultAt !== undefined && (process.env.STATION_JOB_LOCK_FIXTURE !== '1' ||
       !['after-append', 'after-file-sync', 'before-release-rm',
         'intent-pending-after-append', 'intent-pending-after-file-sync',
-        'apply-binding-after-append', 'apply-binding-after-file-sync'].includes(fixtureFaultAt)))
+        'apply-binding-after-append', 'apply-binding-after-file-sync',
+        'writer-binding-after-append', 'writer-binding-after-file-sync'].includes(fixtureFaultAt)))
     fail('job lock configuration');
   if (path.resolve(root) !== root || !root.endsWith('/.cache/search-db') ||
       !Number.isSafeInteger(uid) || uid < 1 || uid !== process.getuid?.() ||
@@ -72,12 +78,14 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let applyStage = 'preflight', applyDurablePhase = null;
   let applyTerminalAttempted = false, applyCleanup = false, applySuccess = false;
   let applyKnown;
+  let writerAttempted = false, writerBindingDurable = false, writerKnown;
   const operationId = randomUUID();
   const releaseError = error => {
     if (mode === 'attestor') fail('attestor lock release');
     if (mode === 'create-boundary') fail('create boundary lock release');
     if (mode === 'create-intent') fail('create intent lock release');
     if (mode === 'create-apply') fail('create apply lock release');
+    if (mode === 'writer-role-apply') fail('writer role lock release');
     throw error;
   };
   const assertOwned = async () => {
@@ -102,13 +110,17 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         fixtureFaultAt === 'intent-pending-after-append' &&
           record.role === 'create-intent' && record.phase === 'pending' ||
         fixtureFaultAt === 'apply-binding-after-append' &&
-          record.role === 'create-apply' && record.phase === 'binding') fail('job record fault');
+          record.role === 'create-apply' && record.phase === 'binding' ||
+        fixtureFaultAt === 'writer-binding-after-append' &&
+          record.role === 'writer-role-apply' && record.phase === 'binding') fail('job record fault');
     await handle.sync();
     if (fixtureFaultAt === 'after-file-sync' ||
         fixtureFaultAt === 'intent-pending-after-file-sync' &&
           record.role === 'create-intent' && record.phase === 'pending' ||
         fixtureFaultAt === 'apply-binding-after-file-sync' &&
-          record.role === 'create-apply' && record.phase === 'binding') fail('job record fault');
+          record.role === 'create-apply' && record.phase === 'binding' ||
+        fixtureFaultAt === 'writer-binding-after-file-sync' &&
+          record.role === 'writer-role-apply' && record.phase === 'binding') fail('job record fault');
     await syncDirectory(root);
     await assertOwned();
   };
@@ -276,6 +288,31 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       applyCleanup = true;
     },
   });
+  const writerRole = Object.freeze({
+    invocationId: operationId,
+    async assertOwned() {
+      if (!active || mode !== 'writer-role-apply' || !writerBindingDurable)
+        fail('writer role binding');
+      await assertOwned();
+    },
+    async markBindingAttempted() {
+      if (!active || mode !== 'writer-role-apply' || writerAttempted || writerBindingDurable)
+        fail('writer role binding');
+      writerAttempted = true;
+      await appendRecord({ role: 'writer-role-apply', phase: 'binding', state: 'attempted',
+        ...writerKnown });
+      writerBindingDurable = true;
+    },
+    assertBindingAttempted(input) {
+      if (!active || mode !== 'writer-role-apply' || !writerAttempted ||
+          !writerBindingDurable) fail('writer role binding');
+      const known = readApplyKnown(input);
+      if (!known || known.approvedSha256 !== writerKnown.approvedSha256 ||
+          known.dispatchId !== writerKnown.dispatchId ||
+          known.ownerId !== writerKnown.ownerId) fail('writer role binding');
+      return true;
+    },
+  });
   const token = Object.freeze({
     root, uid,
     beginAttestor() {
@@ -302,6 +339,16 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       mode = 'create-apply';
       applyOperations.set(apply, { root, uid });
       return apply;
+    },
+    beginWriterRoleApply(input) {
+      if (!active || mode !== 'unselected' || dispatched) fail('writer role mode');
+      const known = readApplyKnown(input);
+      if (!known || operationId === known.dispatchId ||
+          operationId === known.ownerId) fail('writer role mode');
+      writerKnown = known;
+      mode = 'writer-role-apply';
+      writerRoleOperations.set(writerRole, { root, uid });
+      return writerRole;
     },
     async markDispatched(role) {
       if (mode !== 'unselected' || dispatched || !['verifier', 'transition'].includes(role)) fail('job dispatch');
@@ -340,17 +387,23 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       await assertOwned();
       if (applyCleanup) applySuccess = true;
     }
+    if (mode === 'writer-role-apply') {
+      if (!writerBindingDurable) fail('writer role incomplete');
+      await assertOwned();
+    }
     return result;
   } finally {
     active = false;
     held.delete(token);
     applyOperations.delete(apply);
+    writerRoleOperations.delete(writerRole);
     const original = await handle.stat().catch(() => null);
     await handle.close().catch(() => {});
     let canRelease = mode === 'attestor' ? !attestorAttempted || attestorCleanup :
       mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup :
         mode === 'create-intent' ? !intentAttempted || intentCleanup : !dispatched || confirmed;
     if (mode === 'create-apply') canRelease = !applyAttempted || applyCleanup;
+    if (mode === 'writer-role-apply') canRelease = !writerAttempted;
     let released = false;
     if (prepared && canRelease && original) {
       const currentRoot = await lstat(root).catch(() => null);

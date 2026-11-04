@@ -63,20 +63,18 @@ const freeze = <T>(value: T): T => {
 };
 
 /** Pure, fixed writer role body. Metadata identity and complete body digest are separate. */
-export function buildWriterRoleContract(prior: RegistryExpectedInput,
-  proposed: Candidate, stored: Dispatch): WriterRoleContract {
-  safeJson(proposed); safeJson(stored);
+export function deriveWriterRoleRequest(proposed: Candidate): Readonly<{
+  target: string; body: RoleBody; bodySha256: string; dispatchBodyIdentity: string }> {
+  safeJson(proposed);
   const c = exact(proposed, ['token', 'index', 'profile', 'uuid', 'writerRole']);
-  const d = exact(stored, ['target', 'bodyIdentity']);
   if (typeof c.token !== 'string' || !token.test(c.token) ||
       typeof c.uuid !== 'string' || !engineUuid.test(c.uuid) ||
       c.profile !== 'station-mail-v2' || typeof c.index !== 'string' ||
-      typeof c.writerRole !== 'string' || typeof d.bodyIdentity !== 'string' ||
-      !digest.test(d.bodyIdentity)) invalid();
+      typeof c.writerRole !== 'string') invalid();
   const candidate = c as unknown as Candidate;
   const suffix = candidate.token.replaceAll('-', '').toLowerCase();
   if (c.index !== `station-mail-v2-g${suffix}` ||
-      c.writerRole !== `station_indexer_${suffix}` || d.target !== c.writerRole) invalid();
+      c.writerRole !== `station_indexer_${suffix}`) invalid();
   const indexActions = ['indices:data/write/index', 'indices:data/read/get',
     'indices:data/write/bulk[s]'];
   const clusterActions = ['indices:data/write/bulk'];
@@ -84,20 +82,33 @@ export function buildWriterRoleContract(prior: RegistryExpectedInput,
     profile: c.profile, principal: null, actions: null,
     clusterActions, indexActions };
   const dispatchBodyIdentity = hash(metadata);
-  if (d.bodyIdentity !== dispatchBodyIdentity) invalid();
-  const prePolicy = buildExpectedSecurityPolicy(prior);
-  if (prior.generations.some(row => row.token === c.token || row.index === c.index ||
-      row.writerRole === c.writerRole || row.queryRole === `station_query_${suffix}`)) invalid();
   const body = { cluster_permissions: clusterActions,
     index_permissions: [{ index_patterns: [c.index], allowed_actions: indexActions }],
     tenant_permissions: [] } as RoleBody;
-  const roles = { ...prePolicy.roles, [candidate.writerRole]: body };
+  return freeze({ target: candidate.writerRole, body,
+    bodySha256: hash(body), dispatchBodyIdentity });
+}
+
+export function buildWriterRoleContract(prior: RegistryExpectedInput,
+  proposed: Candidate, stored: Dispatch): WriterRoleContract {
+  safeJson(stored);
+  const d = exact(stored, ['target', 'bodyIdentity']);
+  if (typeof d.bodyIdentity !== 'string' || !digest.test(d.bodyIdentity)) invalid();
+  const candidate = exact(proposed, ['token', 'index', 'profile', 'uuid', 'writerRole']) as unknown as Candidate;
+  const request = deriveWriterRoleRequest(candidate);
+  if (d.target !== request.target || d.bodyIdentity !== request.dispatchBodyIdentity) invalid();
+  const prePolicy = buildExpectedSecurityPolicy(prior);
+  const suffix = candidate.token.replaceAll('-', '').toLowerCase();
+  if (prior.generations.some(row => row.token === candidate.token || row.index === candidate.index ||
+      row.writerRole === candidate.writerRole || row.queryRole === `station_query_${suffix}`)) invalid();
+  const roles = { ...prePolicy.roles, [candidate.writerRole]: request.body };
   const postPolicy = { version: prePolicy.version, roles,
     mappings: { ...prePolicy.mappings } } as SecurityPolicy;
   // Reuse the comparator's strict JSON and size limits for the staged policy.
   if (compareObservedSecurityCollections(postPolicy, roles, postPolicy.mappings) !== 'exact') invalid();
-  const result = freeze({ target: candidate.writerRole, index: candidate.index, uuid: candidate.uuid, body,
-    bodySha256: hash(body), dispatchBodyIdentity, prior: structuredClone(prior),
+  const result = freeze({ target: candidate.writerRole, index: candidate.index, uuid: candidate.uuid,
+    body: request.body, bodySha256: request.bodySha256,
+    dispatchBodyIdentity: request.dispatchBodyIdentity, prior: structuredClone(prior),
     prePolicy, postPolicy });
   issued.add(result);
   return result;
