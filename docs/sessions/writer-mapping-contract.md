@@ -1,0 +1,5 @@
+# Pure writer-mapping proposal
+
+Version 0.89.0 proposes one literal role mapping after the candidate writer role is attested. The constructor checks the reserved generation name, bound index UUID, writer role and writer principal; it checks the existing dispatch metadata identity separately from a SHA-256 of the complete frozen body. The body contains one `users` principal and empty backend-role and host lists. A private WeakSet makes same-process constructor output a prerequisite to using the request; serialized or forged objects must be reconstructed and checked through a later approved boundary.
+
+The staged comparison reuses the prior writer-role contract's exact O/N/retained index and role checks, then compares complete visible Security collections before and after exactly one candidate mapping. It keeps abandoned generations absent and does not use the full-ready policy builder with fabricated candidate certificate fingerprints. A visible collection alone cannot prove hidden-resource absence. No certificate, SDK request, CAS, host owner, approval or readiness gate is added. The 0.88 actual role-delivery gate is still pending runtime acceptance.

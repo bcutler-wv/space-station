@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { searchGenerationDispatchSpec } from '../../db/dist/search-generation-manifest.js';
 import { OPENSEARCH_MAPPING, OPENSEARCH_MAPPING_V2 } from './opensearch-compiler.js';
-import { buildWriterRoleContract, compareWriterRoleStage } from './opensearch-writer-role-contract.js';
+import { buildWriterRoleContract, compareWriterRoleStage,
+  buildWriterMappingContract, compareWriterMappingStage,
+  issuedWriterMappingRequest } from './opensearch-writer-role-contract.js';
 
 const token = '11111111-1111-4111-8111-111111111111';
 const suffix = token.replaceAll('-', '');
@@ -25,6 +27,16 @@ const dispatch = () => searchGenerationDispatchSpec({
   writerCertFingerprint: null, queryCertFingerprint: null,
   createdAt: new Date('2026-10-22T00:00:00Z'),
 }, 'writer_role');
+const mappingCandidate = () => ({ ...candidate(), writerPrincipal: `station-search-indexer-${suffix}` });
+const mappingDispatch = () => searchGenerationDispatchSpec({
+  generationToken: token, physicalIndex: index, profileId: 'station-mail-v2',
+  indexUuid: 'candidate_uuid', lifecycle: 'bound', writerRole: role,
+  queryRole: `station_query_${suffix}`,
+  writerPrincipal: `station-search-indexer-${suffix}`,
+  queryPrincipal: `station-search-query-${suffix}`,
+  writerCertFingerprint: null, queryCertFingerprint: null,
+  createdAt: new Date('2026-10-22T00:00:00Z'),
+}, 'writer_mapping');
 const clone = <T>(value: T): T => structuredClone(value);
 const settings = (name: string, uuid: string) => ({ index: {
   number_of_shards: '1', number_of_replicas: '0', max_result_window: '200',
@@ -208,6 +220,157 @@ describe('pure staged writer role contract', () => {
       (withMapping.mappings as Record<string, unknown>)[`station_indexer_${oldSuffix}`] =
         { users: [`station-search-indexer-${oldSuffix}`], backend_roles: [], hosts: [] };
       expect(compareWriterRoleStage(contract, withMapping, stage)).toBe('mismatch');
+    }
+  });
+});
+
+describe('pure staged writer mapping contract', () => {
+  const contract = () => buildWriterMappingContract(prior(), mappingCandidate(),
+    dispatch(), mappingDispatch());
+  const evidence = (post: boolean) => {
+    const value = contract();
+    const result = observed(true);
+    result.roles = clone(value.postPolicy.roles);
+    result.mappings = clone(post ? value.postPolicy.mappings : value.prePolicy.mappings);
+    return result;
+  };
+  it('binds one literal principal and separates full body digest from dispatch metadata', () => {
+    const value = contract();
+    expect(value.target).toBe(role);
+    expect(value.principal).toBe(`station-search-indexer-${suffix}`);
+    expect(value.body).toEqual({ users: [value.principal], backend_roles: [], hosts: [] });
+    expect(value.dispatchBodyIdentity).toBe(mappingDispatch().bodyIdentity);
+    expect(value.bodySha256).toBe(createHash('sha256').update(JSON.stringify(value.body)).digest('hex'));
+    expect(value.bodySha256).not.toBe(value.dispatchBodyIdentity);
+    expect(Object.isFrozen(value.body.users)).toBe(true);
+    expect(Object.isFrozen(value.prePolicy.mappings)).toBe(true);
+    expect(compareWriterMappingStage(value, evidence(false), 'pre')).toBe('exact');
+    expect(compareWriterMappingStage(value, evidence(true), 'post')).toBe('exact');
+    expect(compareWriterMappingStage(value, evidence(true), 'pre')).toBe('mismatch');
+    expect(compareWriterMappingStage(value, evidence(false), 'post')).toBe('mismatch');
+    expect(issuedWriterMappingRequest(value).body).toBe(value.body);
+  });
+  it('rejects changed candidate, principal, role metadata and mapping metadata', () => {
+    for (const changed of [
+      { ...mappingCandidate(), uuid: 'wrong/uuid' },
+      { ...mappingCandidate(), index: 'station-mail-v2-gwrong' },
+      { ...mappingCandidate(), writerRole: 'station_indexer_wrong' },
+      { ...mappingCandidate(), writerPrincipal: 'station-search-indexer-wrong' },
+    ]) expect(() => buildWriterMappingContract(prior(), changed, dispatch(),
+      mappingDispatch())).toThrow();
+    expect(() => buildWriterMappingContract(prior(), mappingCandidate(),
+      { ...dispatch(), bodyIdentity: '0'.repeat(64) }, mappingDispatch())).toThrow();
+    expect(() => buildWriterMappingContract(prior(), mappingCandidate(), dispatch(),
+      { ...mappingDispatch(), bodyIdentity: 'f'.repeat(64) })).toThrow();
+    expect(() => buildWriterMappingContract(prior(), mappingCandidate(), dispatch(),
+      { ...mappingDispatch(), target: 'station_indexer_wrong' })).toThrow();
+  });
+  it('rejects cloned, forged and accessor contracts before using any property', () => {
+    const genuine = contract();
+    const copied = clone(genuine);
+    expect(compareWriterMappingStage(copied, evidence(true), 'post')).toBe('mismatch');
+    expect(() => issuedWriterMappingRequest(copied)).toThrow();
+    let called = 0;
+    const accessor = Object.create(null) as typeof genuine;
+    Object.defineProperty(accessor, 'body', { get: () => { called++; return genuine.body; } });
+    expect(compareWriterMappingStage(accessor, evidence(true), 'post')).toBe('mismatch');
+    expect(() => issuedWriterMappingRequest(accessor)).toThrow();
+    expect(called).toBe(0);
+    const input = mappingCandidate();
+    Object.defineProperty(input, 'writerPrincipal', { get: () => { called++; return 'bad'; } });
+    expect(() => buildWriterMappingContract(prior(), input, dispatch(),
+      mappingDispatch())).toThrow();
+    expect(called).toBe(0);
+  });
+  it('denies preexisting mapping, extra grants, query mapping and changed prior policy', () => {
+    const value = contract();
+    const pre = evidence(false);
+    (pre.mappings as Record<string, unknown>)[role] = clone(value.body);
+    expect(compareWriterMappingStage(value, pre, 'pre')).toBe('mismatch');
+    const mutations = [
+      (x: ReturnType<typeof evidence>) => { (x.mappings as Record<string, unknown>)[role] =
+        { users: [value.principal, 'other'], backend_roles: [], hosts: [] }; },
+      (x: ReturnType<typeof evidence>) => { (x.mappings as Record<string, unknown>)[role] =
+        { users: [value.principal], backend_roles: ['*'], hosts: [] }; },
+      (x: ReturnType<typeof evidence>) => { (x.mappings as Record<string, unknown>)[role] =
+        { users: [value.principal], backend_roles: [], hosts: ['*'] }; },
+      (x: ReturnType<typeof evidence>) => { (x.mappings as Record<string, unknown>)[`station_query_${suffix}`] =
+        { users: ['other'], backend_roles: [], hosts: [] }; },
+      (x: ReturnType<typeof evidence>) => { (x.roles as Record<string, unknown>)[role] =
+        { cluster_permissions: ['*'] }; },
+      (x: ReturnType<typeof evidence>) => { (x.mappings as Record<string, unknown>).station_query =
+        { users: ['other'], backend_roles: [], hosts: [] }; },
+    ];
+    for (const mutation of mutations) {
+      const x = evidence(true); mutation(x);
+      expect(compareWriterMappingStage(value, x, 'post')).toBe('mismatch');
+    }
+  });
+  it('checks original and candidate UUID/profile, aliases, extra index and accessor evidence', () => {
+    const value = contract();
+    const mutations = [
+      (x: ReturnType<typeof evidence>) => { x.indexes['station-mail-v1'].settings.index.uuid = 'changed'; },
+      (x: ReturnType<typeof evidence>) => { x.indexes[index]!.settings.index.uuid = 'changed'; },
+      (x: ReturnType<typeof evidence>) => { x.indexes[index]!.settings.index.number_of_shards = '2'; },
+      (x: ReturnType<typeof evidence>) => { (x.indexes[index]!.aliases as Record<string, unknown>).bad = {}; },
+      (x: ReturnType<typeof evidence>) => { (x.indexes as Record<string, unknown>)['.hidden'] = {}; },
+    ];
+    for (const mutation of mutations) {
+      const x = evidence(true); mutation(x);
+      expect(compareWriterMappingStage(value, x, 'post')).toBe('mismatch');
+    }
+    let called = 0;
+    const x = evidence(true);
+    Object.defineProperty(x, 'mappings', { enumerable: true,
+      get: () => { called++; return {}; } });
+    expect(compareWriterMappingStage(value, x, 'post')).toBe('mismatch');
+    expect(called).toBe(0);
+  });
+  it('preserves retained v2 and rejects absent historical index, role and mapping', () => {
+    const retained = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const absent = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const retainedSuffix = retained.replaceAll('-', '');
+    const absentSuffix = absent.replaceAll('-', '');
+    const retainedIndex = `station-mail-v2-g${retainedSuffix}`;
+    const absentIndex = `station-mail-v2-g${absentSuffix}`;
+    const history = { ...prior(), generations: [...prior().generations, {
+      token: retained, index: retainedIndex, profile: 'station-mail-v2' as const,
+      presence: 'exact' as const, uuid: 'retained_uuid',
+      writerRole: `station_indexer_${retainedSuffix}`,
+      queryRole: `station_query_${retainedSuffix}`,
+      writerPrincipal: `station-search-indexer-${retainedSuffix}`,
+      queryPrincipal: `station-search-query-${retainedSuffix}`,
+      writerCertFingerprint: 'a'.repeat(64), queryCertFingerprint: 'b'.repeat(64),
+    }, {
+      token: absent, index: absentIndex, profile: 'station-mail-v2' as const,
+      presence: 'absent' as const, uuid: null,
+      writerRole: `station_indexer_${absentSuffix}`,
+      queryRole: `station_query_${absentSuffix}`,
+      writerPrincipal: `station-search-indexer-${absentSuffix}`,
+      queryPrincipal: `station-search-query-${absentSuffix}`,
+      writerCertFingerprint: null, queryCertFingerprint: null,
+    }] };
+    const value = buildWriterMappingContract(history, mappingCandidate(),
+      dispatch(), mappingDispatch());
+    for (const stage of ['pre', 'post'] as const) {
+      const x = evidence(stage === 'post');
+      x.roles = clone(value.postPolicy.roles);
+      x.mappings = clone(stage === 'pre' ? value.prePolicy.mappings : value.postPolicy.mappings);
+      (x.indexes as Record<string, unknown>)[retainedIndex] = { aliases: {},
+        mappings: clone(OPENSEARCH_MAPPING_V2), settings: settings(retainedIndex, 'retained_uuid') };
+      expect(compareWriterMappingStage(value, x, stage)).toBe('exact');
+      const indexDrift = clone(x);
+      (indexDrift.indexes as Record<string, unknown>)[absentIndex] = { aliases: {},
+        mappings: clone(OPENSEARCH_MAPPING_V2), settings: settings(absentIndex, 'absent_uuid') };
+      expect(compareWriterMappingStage(value, indexDrift, stage)).toBe('mismatch');
+      const roleDrift = clone(x);
+      (roleDrift.roles as Record<string, unknown>)[`station_indexer_${absentSuffix}`] =
+        clone(value.roleContract.body);
+      expect(compareWriterMappingStage(value, roleDrift, stage)).toBe('mismatch');
+      const mappingDrift = clone(x);
+      (mappingDrift.mappings as Record<string, unknown>)[`station_indexer_${absentSuffix}`] =
+        { users: [`station-search-indexer-${absentSuffix}`], backend_roles: [], hosts: [] };
+      expect(compareWriterMappingStage(value, mappingDrift, stage)).toBe('mismatch');
     }
   });
 });

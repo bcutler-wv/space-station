@@ -4,7 +4,8 @@ export { compileSearchQuery, OPENSEARCH_PROFILE, OPENSEARCH_MAPPING, OPENSEARCH_
 export { compileSearchQueryV2, OPENSEARCH_PROFILE_V2, OPENSEARCH_MAPPING_V2 } from './opensearch-compiler.js';
 export { createV2IndexBody, verifyV2IndexProfile, V2_INDEX_PROFILE_ID } from './opensearch-v2-profile.js';
 export { buildWriterRoleContract, compareWriterRoleStage } from './opensearch-writer-role-contract.js';
-export type { WriterRoleContract } from './opensearch-writer-role-contract.js';
+export { buildWriterMappingContract, compareWriterMappingStage } from './opensearch-writer-role-contract.js';
+export type { WriterRoleContract, WriterMappingContract } from './opensearch-writer-role-contract.js';
 export type { AuthorizedSearchContext, OpenSearchDsl, SearchCompileResult, V2SearchCompileResult } from './opensearch-compiler.js';
 export { makeV2Fence, makeV2Eligible, V2_DOCUMENT_BYTES_MAX } from './opensearch-v2-envelope.js';
 export type { V2DocumentIdentity, V2MailFields, V2FenceDocument, V2EligibleDocument,

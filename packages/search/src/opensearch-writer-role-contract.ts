@@ -13,11 +13,18 @@ type RoleBody = Readonly<{ cluster_permissions: readonly string[];
 export type WriterRoleContract = Readonly<{ target: string; index: string; uuid: string;
   body: RoleBody; bodySha256: string; dispatchBodyIdentity: string;
   prior: RegistryExpectedInput; prePolicy: SecurityPolicy; postPolicy: SecurityPolicy }>;
+type MappingCandidate = Candidate & Readonly<{ writerPrincipal: string }>;
+type MappingBody = Readonly<{ users: readonly string[]; backend_roles: readonly never[];
+  hosts: readonly never[] }>;
+export type WriterMappingContract = Readonly<{ target: string; principal: string;
+  body: MappingBody; bodySha256: string; dispatchBodyIdentity: string;
+  roleContract: WriterRoleContract; prePolicy: SecurityPolicy; postPolicy: SecurityPolicy }>;
 
 const token = /^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/;
 const engineUuid = /^[A-Za-z0-9_-]{1,128}$/;
 const digest = /^[0-9a-f]{64}$/;
 const issued = new WeakSet<object>();
+const issuedMappings = new WeakSet<object>();
 const invalid = (): never => { throw new Error('Invalid private writer role contract'); };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const exact = (value: unknown, keys: readonly string[]): Record<string, unknown> => {
@@ -152,6 +159,66 @@ export function compareWriterRoleStage(contract: WriterRoleContract, observed: u
     if (Object.keys(exact(entry.aliases, [])).length !== 0) invalid();
     if (verifyV2IndexProfile({ [contract.index]: entry }, contract.index,
     contract.uuid) !== contract.uuid) invalid();
+    return compareObservedSecurityCollections(stage === 'pre' ? contract.prePolicy :
+      contract.postPolicy, root.roles, root.mappings);
+  } catch { return 'mismatch'; }
+}
+
+/** Pure mapping proposal after the exact writer role. It grants one reserved principal only. */
+export function buildWriterMappingContract(prior: RegistryExpectedInput,
+  proposed: MappingCandidate, storedRole: Dispatch, storedMapping: Dispatch): WriterMappingContract {
+  safeJson(proposed); safeJson(storedMapping);
+  const candidate = exact(proposed, ['token', 'index', 'profile', 'uuid',
+    'writerRole', 'writerPrincipal']);
+  const mapping = exact(storedMapping, ['target', 'bodyIdentity']);
+  const suffix = typeof candidate.token === 'string' && token.test(candidate.token) ?
+    candidate.token.replaceAll('-', '').toLowerCase() : invalid();
+  if (typeof candidate.writerPrincipal !== 'string' ||
+      candidate.writerPrincipal !== `station-search-indexer-${suffix}` ||
+      typeof mapping.bodyIdentity !== 'string' || !digest.test(mapping.bodyIdentity)) invalid();
+  const principal = candidate.writerPrincipal as string;
+  const roleCandidate = { token: candidate.token, index: candidate.index,
+    profile: candidate.profile, uuid: candidate.uuid, writerRole: candidate.writerRole } as Candidate;
+  const roleContract = buildWriterRoleContract(prior, roleCandidate, storedRole);
+  const metadata = { operation: 'writer_mapping', target: roleContract.target,
+    index: roleContract.index, profile: 'station-mail-v2',
+    principal, actions: null };
+  const dispatchBodyIdentity = hash(metadata);
+  if (mapping.target !== roleContract.target || mapping.bodyIdentity !== dispatchBodyIdentity) invalid();
+  const body = { users: [principal], backend_roles: [], hosts: [] } as MappingBody;
+  const prePolicy = roleContract.postPolicy;
+  const postPolicy = { version: prePolicy.version, roles: { ...prePolicy.roles },
+    mappings: { ...prePolicy.mappings, [roleContract.target]: body } } as SecurityPolicy;
+  if (compareObservedSecurityCollections(postPolicy, postPolicy.roles,
+    postPolicy.mappings) !== 'exact') invalid();
+  const result = freeze({ target: roleContract.target, principal,
+    body, bodySha256: hash(body), dispatchBodyIdentity, roleContract,
+    prePolicy, postPolicy });
+  issuedMappings.add(result);
+  return result;
+}
+
+/** Same-process constructor provenance; serialization cannot become send authority. */
+export function issuedWriterMappingRequest(contract: WriterMappingContract): Readonly<{
+  target: string; body: MappingBody; bodySha256: string; dispatchBodyIdentity: string }> {
+  if (!contract || typeof contract !== 'object' || !issuedMappings.has(contract)) invalid();
+  return Object.freeze({ target: contract.target, body: contract.body,
+    bodySha256: contract.bodySha256, dispatchBodyIdentity: contract.dispatchBodyIdentity });
+}
+
+/** Full original index/role check plus exact pre/post mapping collection. */
+export function compareWriterMappingStage(contract: WriterMappingContract, observed: unknown,
+  stage: 'pre' | 'post'): SecurityComparison {
+  try {
+    if (!contract || typeof contract !== 'object' || !issuedMappings.has(contract) ||
+        (stage !== 'pre' && stage !== 'post')) invalid();
+    safeJson(observed);
+    const root = exact(observed, ['indexes', 'roles', 'mappings']);
+    // The role comparator checks every physical index, UUID, profile, alias and role.
+    // The complete mapping comparison below checks the actual unmodified collection.
+    if (compareWriterRoleStage(contract.roleContract, { indexes: root.indexes,
+      roles: root.roles, mappings: contract.roleContract.postPolicy.mappings }, 'post') !== 'exact')
+      invalid();
     return compareObservedSecurityCollections(stage === 'pre' ? contract.prePolicy :
       contract.postPolicy, root.roles, root.mappings);
   } catch { return 'mismatch'; }
