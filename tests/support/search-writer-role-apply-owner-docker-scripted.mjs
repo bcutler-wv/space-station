@@ -159,13 +159,20 @@ async function scenario(fault = '') {
       if (fault === 'lost-create') throw Error('lost original create result');
       if (fault === 'unknown-create-stderr')
         return reply('', `unexpected warning\n Container ${names[phase]} Created\n`);
+      const progress = fault === 'create-three-spaces' ? '   ' :
+        fault === 'create-one-space' ? ' ' : '  ';
+      const suffix = fault === 'create-tail-space' ? ' ' : '';
+      const ending = fault === 'create-crlf' ? '\r\n' : '\n';
+      const prefix = fault === 'create-ansi' ? '\u001b[31m' : '';
+      const named = fault === 'create-wrong-name' ? 'other-container' : names[phase];
       const effectiveEnv = { ...env };
       if (fault === 'orphan-warning-unsuppressed')
         delete effectiveEnv.COMPOSE_IGNORE_ORPHANS;
       const warning = effectiveEnv.COMPOSE_IGNORE_ORPHANS === 'true' ? '' :
         'WARN[0000] Found orphan containers ([fixed-prior]) for this project.\n';
       return reply('', warning +
-        ` Container ${names[phase]} Creating\n Container ${names[phase]} Created\n`);
+        `${prefix} Container ${named}${progress}Creating${suffix}${ending}` +
+        ` Container ${named}${progress}Created${suffix}${ending}`);
     }
     if (args[0] === 'ps') {
       const nameFilter = args.find(x => x.startsWith('name=^/'));
@@ -260,7 +267,7 @@ async function scenario(fault = '') {
     assert.equal(calls.filter(x => x.startsWith('container start ')).length, 2);
     completed = true;
   } catch (error) {
-    if (!fault || fault === 'fast-exited') throw error;
+    if (!fault || fault === 'fast-exited' || fault === 'create-one-space') throw error;
     if (fault === 'preexisting-name') {
       assert.ok(calls.some(x => x.includes(`name=^/${names.transfer}$`)));
       assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 0);
@@ -273,7 +280,9 @@ async function scenario(fault = '') {
     }
     if (fault === 'lost-create')
       assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 1);
-    if (fault === 'orphan-warning-unsuppressed' || fault === 'unknown-create-stderr') {
+    if (['orphan-warning-unsuppressed', 'unknown-create-stderr',
+      'create-three-spaces', 'create-tail-space', 'create-crlf',
+      'create-ansi', 'create-wrong-name'].includes(fault)) {
       assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 1);
       assert.deepEqual(composeCreateFlags, ['true']);
       assert.equal(calls.filter(x => x.startsWith('container inspect ')).length, 0);
@@ -295,8 +304,10 @@ async function scenario(fault = '') {
     }
   } finally { await rm(repository, { recursive: true, force: true }); }
   assert.equal(composeCreateFlags.every(flag => flag === 'true'), true);
-  if (fault && fault !== 'fast-exited' && completed) throw Error('fault was not rejected');
-  if ((!fault || fault === 'fast-exited') && !completed) throw Error('positive did not complete');
+  if (fault && !['fast-exited', 'create-one-space'].includes(fault) && completed)
+    throw Error('fault was not rejected');
+  if ((!fault || ['fast-exited', 'create-one-space'].includes(fault)) && !completed)
+    throw Error('positive did not complete');
 }
 
 try {
@@ -310,9 +321,12 @@ try {
     if (ambient === undefined) delete process.env.COMPOSE_IGNORE_ORPHANS;
     else process.env.COMPOSE_IGNORE_ORPHANS = ambient;
   }
-  for (const fault of ['', 'fast-exited', 'created-command', 'created-network', 'created-image',
+  for (const fault of ['', 'fast-exited', 'create-one-space', 'created-command',
+    'created-network', 'created-image',
     'post-start-identity', 'zero-finished-at', 'lost-create', 'lost-start', 'preexisting-name',
-    'extra-stopped', 'orphan-warning-unsuppressed', 'unknown-create-stderr'])
+    'extra-stopped', 'orphan-warning-unsuppressed', 'unknown-create-stderr',
+    'create-three-spaces', 'create-tail-space', 'create-crlf',
+    'create-ansi', 'create-wrong-name'])
     await scenario(fault);
   process.stdout.write('Fixed writer role apply Docker command-order fixture passed.\n');
 } catch {

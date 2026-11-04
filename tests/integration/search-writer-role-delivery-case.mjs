@@ -12,6 +12,8 @@ import { writeWriterRoleBinding } from '../../scripts/search-writer-role-binding
 import { stageCreateApplyPublic } from '../../scripts/search-create-apply-public-stage.mjs';
 import { writerDeliveryTrace, writerDeliveryShape, writerDeliveryMethodTracker } from
   '../support/search-writer-role-delivery-diagnostic.mjs';
+import { writerDeliveryCreateOutput } from
+  '../support/search-writer-role-create-output-diagnostic.mjs';
 
 const micro = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/;
 const modes = ['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout'];
@@ -99,6 +101,8 @@ export async function runWriterRoleDeliveryCase(ctx) {
     const trackMethod = writerDeliveryMethodTracker(diagnostic);
     const increment = value => value === 'many' || value === 2 ? 'many' : value + 1;
     const shapes = [];
+    const createOutputs = [], renderedNames = new Map();
+    let createCaptureError = false;
     const category = args => {
       if (args[0] === 'compose') {
         if (args.includes('create') && args.includes('--no-recreate')) return 'compose-create';
@@ -142,6 +146,25 @@ export async function runWriterRoleDeliveryCase(ctx) {
       catch (error) { diagnostic.outcome = 'threw'; throw error; }
       diagnostic.outcome = result.signal ? 'signaled' :
         result.code === 0 ? 'returned-zero' : 'returned-nonzero';
+      if (diagnostic.command === 'compose-config' && result.code === 0) {
+        try {
+          const services = JSON.parse(result.stdout).services;
+          for (const service of ['search-writer-role-apply-transfer',
+            'search-writer-role-apply']) {
+            const name = services?.[service]?.container_name;
+            if (typeof name === 'string') renderedNames.set(service, name);
+          }
+        } catch { createCaptureError = true; }
+      }
+      if (diagnostic.command === 'compose-create') {
+        const service = args.at(-1);
+        try {
+          createOutputs.push(writerDeliveryCreateOutput({ caseName: mode,
+            phase: service === 'search-writer-role-apply-transfer' ? 'transfer' : 'apply',
+            response: result, expectedName: renderedNames.get(service) ?? null }));
+          if (!renderedNames.has(service)) createCaptureError = true;
+        } catch { createCaptureError = true; }
+      }
       if (args[0] === 'compose' && args.includes('create') && args.includes('--no-recreate'))
         { created.push(args.at(-1)); order.push(`create:${args.at(-1)}`); }
       if (args[0] === 'container' && args[1] === 'start') {
@@ -292,6 +315,9 @@ export async function runWriterRoleDeliveryCase(ctx) {
       } catch { outcome = { status: 'rejected' }; }
       process.stderr.write(`${writerDeliveryTrace({ caseName: mode, ...diagnostic })}\n`);
       for (const shape of shapes) process.stderr.write(`${writerDeliveryShape(shape)}\n`);
+      if (outcome.status === 'rejected')
+        for (const line of createOutputs) process.stderr.write(`${line}\n`);
+      assert.equal(createCaptureError, false);
       assert.equal(outcome.status, 'rejected');
     }
     step = 'phase-counts';

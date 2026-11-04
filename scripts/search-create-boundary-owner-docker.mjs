@@ -352,7 +352,7 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
         const create = await compose(['create', '--no-build', '--pull', 'never',
           '--no-recreate', names[phase]], 20_000);
         if (create.stdout !== '' || !create.stderr.split('\n').filter(Boolean).every(line =>
-          new RegExp(`^ ?Container ${containerNames[phase]} (Creating|Created)$`).test(line)))
+          new RegExp(`^ ?Container ${containerNames[phase]} {1,2}(Creating|Created)$`).test(line)))
           fail('dispatch-stderr');
         const references = await serviceReferences(phase);
         if (references.length !== 1) fail();

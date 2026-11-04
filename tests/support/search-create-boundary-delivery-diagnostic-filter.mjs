@@ -4,6 +4,8 @@ import process from 'node:process';
 import { isCreateBoundaryDiagnosticLine } from '../../scripts/search-create-boundary-owner-diagnostic.mjs';
 import { isWriterDeliveryTraceLine, isWriterDeliveryShapeLine } from
   './search-writer-role-delivery-diagnostic.mjs';
+import { isWriterDeliveryCreateOutputLine } from
+  './search-writer-role-create-output-diagnostic.mjs';
 
 const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-cli',
   'record-io-fault', 'lost-volume-create-response', 'lost-transfer-response', 'lost-inspect-response',
@@ -163,7 +165,7 @@ export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
   let checkpoint = false, diagnostic = false, deliveryTrace = false;
-  const deliveryShapes = new Set();
+  const deliveryShapes = new Set(), deliveryCreateOutputs = new Set();
   for (const line of log.split('\n')) {
     if (line.length > 240) continue;
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
@@ -187,6 +189,11 @@ export function filteredCreateBoundaryDiagnostics(log) {
     } else if (isWriterDeliveryShapeLine(line)) {
       const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
       if (!deliveryShapes.has(phase)) { found.push(line); deliveryShapes.add(phase); }
+    } else if (isWriterDeliveryCreateOutputLine(line)) {
+      const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
+      if (!deliveryCreateOutputs.has(phase)) {
+        found.push(line); deliveryCreateOutputs.add(phase);
+      }
     } else if (!diagnostic && isCreateBoundaryDiagnosticLine(line)) {
       found.push(line); diagnostic = true;
     }
