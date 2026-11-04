@@ -134,3 +134,13 @@ canonical bytes, distinct IDs, fixed file identity and real certificate
 digests. The copied reader retains original inodes for later rechecks; it
 does not establish a current approved caller, live U or send authority.
 The 0.79.2 preparation runtime gate remains a separate pending acceptance.
+
+The next actual preparation run passed both isolated terminal variants but
+failed on the first registry-drift restoration in the default and runner
+variants. The migration 0018 immutable guard rejects the fixture's reverse
+revision update. Version 0.80.1 uses three fixed, transaction-local test-only
+trigger suspensions for the revision, candidate UUID and original create
+dispatch-owner drift pairs. Exact full registry rows, six-digit timestamps and
+all named guard states are checked before and after each transaction; rollback
+faults are tested against a local disposable PostgreSQL server. This does not
+modify the production guard or establish Ubuntu runtime acceptance.

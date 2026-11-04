@@ -88,6 +88,7 @@ jobs:
       - run: node --test tests/support/search-create-boundary-delivery-diagnostic-filter.test.mjs
       - run: node --test tests/support/search-create-private-log-scan.test.mjs
       - run: node --test tests/support/search-writer-role-prepare-fixture-probe.test.mjs
+      - run: node --test tests/support/search-writer-role-registry-fixture.test.mjs
       - run: node --test tests/support/search-writer-role-postgres-probe.test.mjs
       - run: node --test tests/support/search-create-intent-gate-mount-policy.test.mjs
       - run: node --test tests/support/search-create-boundary-app-worker-config.test.mjs

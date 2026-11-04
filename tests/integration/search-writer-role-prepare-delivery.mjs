@@ -20,6 +20,7 @@ import { buildExpectedSecurityPolicy, compareObservedSecurityCollections } from
 import { writerPrecreateDiagnostic } from
   '../support/search-create-boundary-delivery-diagnostic-filter.mjs';
 import { inspectWriterRolePostgres } from '../support/search-writer-role-postgres-probe.mjs';
+import { changeWriterPrepareRegistryFixture } from '../support/search-writer-role-registry-fixture.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const project = path.basename(repository);
@@ -755,51 +756,20 @@ await denied('public-pem-bytes', async () => {
   observe: async () => assert.equal(await exists(publicBytesHeld), true),
   restore: async () => { await rm(publicName); await rename(publicBytesHeld, publicName); } });
 
-const originalRevision = baseline.registry.control.revision;
-await denied('registry-revision', async () => {
-  await sql(`UPDATE search_generation_control SET revision=${originalRevision + 1}
-    WHERE singleton=1 AND revision=${originalRevision}`);
-  assert.equal((await registry()).control.revision, originalRevision + 1);
-}, { afterPhase: 'transfer', phases: ['transfer', 'prepare'],
-  lockPhase: 'prepare', lockState: 'dispatched',
-  observe: async () => assert.equal((await registry()).control.revision, originalRevision + 1),
-  restore: async () => {
-    await sql(`UPDATE search_generation_control SET revision=${originalRevision}
-      WHERE singleton=1 AND revision=${originalRevision + 1}`);
-  } });
-
-const originalCandidateUuid = baseline.registry.control.index_uuid;
-const changedCandidateUuid = 'fixture-changed-candidate-uuid';
-assert.notEqual(changedCandidateUuid, originalCandidateUuid);
-await denied('registry-candidate-uuid', async () => {
-  await sql(`UPDATE search_generation_control SET index_uuid='${changedCandidateUuid}'
-    WHERE singleton=1 AND index_uuid='${originalCandidateUuid}'`);
-  assert.equal((await registry()).control.index_uuid, changedCandidateUuid);
-}, { afterPhase: 'transfer', phases: ['transfer', 'prepare'],
-  lockPhase: 'prepare', lockState: 'dispatched',
-  observe: async () => assert.equal((await registry()).control.index_uuid,
-    changedCandidateUuid),
-  restore: async () => {
-    assert.match(originalCandidateUuid, roleUuid);
-    await sql(`UPDATE search_generation_control SET index_uuid='${originalCandidateUuid}'
-      WHERE singleton=1 AND index_uuid='${changedCandidateUuid}'`);
-  } });
-
-const originalOwner = baseline.registry.dispatch[0].owner_id;
-const changedOwner = '22222222-2222-4222-8222-222222222222';
-assert.notEqual(changedOwner, originalOwner);
-await denied('create-dispatch-owner', async () => {
-  await sql(`UPDATE search_generation_dispatch SET owner_id='${changedOwner}'
-    WHERE generation_token='${token}' AND operation='create_index'`);
-  assert.equal((await registry()).dispatch[0].owner_id, changedOwner);
-}, { afterPhase: 'transfer', phases: ['transfer', 'prepare'],
-  lockPhase: 'prepare', lockState: 'dispatched',
-  observe: async () => assert.equal((await registry()).dispatch[0].owner_id, changedOwner),
-  restore: async () => {
-    assert.match(originalOwner, /^[0-9a-f-]{36}$/);
-    await sql(`UPDATE search_generation_dispatch SET owner_id='${originalOwner}'
-      WHERE generation_token='${token}' AND operation='create_index'`);
-  } });
+for (const name of ['registry-revision', 'registry-candidate-uuid', 'create-dispatch-owner']) {
+  let changed;
+  await denied(name, async () => {
+    changed = await changeWriterPrepareRegistryFixture(name, 'mutate', baseline.registry,
+      { runSql: sql, readRegistry: registry });
+    assert.deepEqual(await registry(), changed);
+  }, { afterPhase: 'transfer', phases: ['transfer', 'prepare'],
+    lockPhase: 'prepare', lockState: 'dispatched',
+    observe: async () => assert.deepEqual(await registry(), changed),
+    restore: async () => {
+      await changeWriterPrepareRegistryFixture(name, 'restore', baseline.registry,
+        { runSql: sql, readRegistry: registry });
+    } });
+}
 
 async function volumeFile(volumeName, file, replacement = null) {
   const script = String.raw`const fs=require('node:fs');const name='/probe/'+process.argv[1];
