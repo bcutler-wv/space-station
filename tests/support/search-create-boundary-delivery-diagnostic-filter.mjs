@@ -100,6 +100,10 @@ for (const name of [...writerCheckpoints].filter(value => value.startsWith('term
   for (const stage of ['owner', 'logs', 'evidence'])
     writerCheckpoints.add(`${name}-${stage}`);
 const writerVariants = new Set(['default', 'runner', 'runner-volume', 'runner-missing-o']);
+const deliveryCases = new Set(['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout']);
+const deliverySteps = new Set(['approval', 'derived-image', 'owner', 'phase-evidence',
+  'consumer-markers', 'replay']);
+for (const value of deliveryCases) writerCheckpoints.add(`writer-delivery-${value}`);
 const writerPrecreateSteps = new Set(['registry-rows-command', 'registry-rows-parse',
   'registry-micro-command', 'registry-micro-parse', 'registry-micro-shape',
   'engine-open', 'engine-observe', 'engine-parse', 'e0b-command', 'e0b-parse',
@@ -162,6 +166,7 @@ export function filteredCreateBoundaryDiagnostics(log) {
     const intent = /^Create intent prepare fixture failed at ([a-z-]+)\.$/.exec(line);
     const apply = /^Create apply runtime fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     const writer = /^Writer role preparation fixture failed at ([a-z0-9-]+)\.$/.exec(line);
+    const delivery = /^Writer role delivery fixture case=([a-z-]+) step=([a-z-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {
@@ -169,6 +174,9 @@ export function filteredCreateBoundaryDiagnostics(log) {
     } else if (!checkpoint && apply && applyCheckpoints.has(apply[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && writer && writerCheckpoints.has(writer[1])) {
+      found.push(line); checkpoint = true;
+    } else if (!checkpoint && delivery && deliveryCases.has(delivery[1]) &&
+        deliverySteps.has(delivery[2])) {
       found.push(line); checkpoint = true;
     } else if (!diagnostic && isCreateBoundaryDiagnosticLine(line)) {
       found.push(line); diagnostic = true;

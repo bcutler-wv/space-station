@@ -94,6 +94,7 @@ jobs:
       - run: node --test tests/support/search-writer-role-registry-fixture.test.mjs
       - run: node --test tests/support/search-writer-role-cas.test.mjs
       - run: node --test tests/support/search-writer-role-postgres-probe.test.mjs
+      - run: node --test tests/support/search-writer-role-delivery-summary.test.mjs tests/support/search-writer-role-delivery-transport.test.mjs
       - run: node --test tests/support/search-create-intent-gate-mount-policy.test.mjs
       - run: node --test tests/support/search-create-boundary-app-worker-config.test.mjs
       - run: node --test tests/support/search-attestor-command.test.mjs
@@ -187,6 +188,32 @@ jobs:
       - run: timeout --signal=TERM --kill-after=20s 3300s bash scripts/search-create-boundary-delivery-gate.sh
         env:
           STATION_WRITER_PREPARE_GATE_VARIANT: ${{ matrix.fixture }}
+
+  search-writer-role-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: scaffold
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: [default, runner]
+        case: [positive, prestart, lost-return, false-ack, held-timeout]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: sudo sysctl -w vm.max_map_count=262144
+      - run: timeout --signal=TERM --kill-after=20s 3300s bash scripts/search-create-boundary-delivery-gate.sh
+        env:
+          STATION_WRITER_DELIVERY_GATE_PAIR: ${{ matrix.pair }}
+          STATION_WRITER_DELIVERY_GATE_CASE: ${{ matrix.case }}
 
   process-recovery:
     runs-on: ubuntu-latest

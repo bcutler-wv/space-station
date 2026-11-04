@@ -8,6 +8,19 @@ if [[ ! -d .git || -e .env || -e .cache/search-db || -e .cache/search-security ]
   exit 1
 fi
 writer_variant=${STATION_WRITER_PREPARE_GATE_VARIANT:-}
+delivery_case=${STATION_WRITER_DELIVERY_GATE_CASE:-}
+delivery_pair=${STATION_WRITER_DELIVERY_GATE_PAIR:-}
+if [[ -n $delivery_case ]]; then
+  if [[ -n $writer_variant || ! $delivery_case =~ ^(positive|prestart|lost-return|false-ack|held-timeout)$ ||
+        ! $delivery_pair =~ ^(default|runner)$ ]]; then
+    echo 'Create boundary delivery gate has an invalid writer-delivery case.' >&2
+    exit 1
+  fi
+  writer_variant=$delivery_pair
+elif [[ -n $delivery_pair ]]; then
+  echo 'Create boundary delivery gate has an invalid writer-delivery pair.' >&2
+  exit 1
+fi
 if [[ -n $writer_variant && ! $writer_variant =~ ^(default|runner|runner-volume|runner-missing-o)$ ]]; then
   echo 'Create boundary delivery gate has an invalid disposable variant.' >&2
   exit 1
@@ -96,7 +109,7 @@ cleanup_pair() {
     done <<< "$listing"
     for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift \
       search-create-apply-transfer search-create-index search-writer-role-prepare-transfer \
-      search-writer-role-prepare; do
+      search-writer-role-prepare search-writer-role-apply-transfer search-writer-role-apply; do
       if ! listing=$(docker ps -a --no-trunc --filter "label=com.docker.compose.project=$project_name" \
         --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>> "$private_log"); then
         teardown_failed=1; listing=''
@@ -117,7 +130,7 @@ cleanup_pair() {
     [[ ${#listing} -le 8192 ]] || teardown_failed=1
     while IFS= read -r volume; do
       [[ -n $volume ]] || continue
-    if [[ $volume =~ ^${project_name}_(search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})|search_writer_prepare_[0-9a-f]{32})$ ]]; then
+    if [[ $volume =~ ^${project_name}_(search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})|search_writer_prepare_[0-9a-f]{32}|search_writer_apply_[0-9a-f]{32})$ ]]; then
         docker volume rm "$volume" >> "$private_log" 2>&1 || teardown_failed=1
       else
         teardown_failed=1
@@ -136,7 +149,7 @@ cleanup_pair() {
   fi
   if [[ -n $checkout ]]; then sudo rm -rf -- "$checkout" >> "$private_log" 2>&1 || teardown_failed=1; fi
   if [[ -n $pair_home ]]; then sudo rm -rf -- "$pair_home" >> "$private_log" 2>&1 || teardown_failed=1; fi
-  if [[ -n $writer_variant && -n $checkout ]]; then
+  if [[ -n $writer_variant && -z $delivery_case && -n $checkout ]]; then
     "$(command -v node)" \
       "$runner_root/tests/support/search-create-boundary-delivery-diagnostic-filter.mjs" \
       --writer-summary "$private_log" \
@@ -266,14 +279,19 @@ for pair in default runner; do
       STATION_WRITER_PREPARE_PUBLIC_ROOT="$checkout/.cache" \
       STATION_WRITER_PREPARE_INVOCATION_ROOT="$checkout/.cache" \
       STATION_WRITER_PREPARE_VOLUME_NAME="${name}_search_writer_prepare_buildplaceholder" \
+      STATION_WRITER_APPLY_PUBLIC_ROOT="$checkout/.cache" \
+      STATION_WRITER_APPLY_VOLUME_NAME="${name}_search_writer_apply_buildplaceholder" \
       docker compose -f compose.yaml -f compose.search-create-boundary.yaml \
       -f compose.search-create-apply.yaml -f compose.search-writer-role-prepare.yaml \
+      ${delivery_case:+-f compose.search-writer-role-apply.yaml} \
       --profile search --profile fixture --profile search-create-boundary \
-      --profile search-create-apply --profile search-writer-role-prepare build \
+      --profile search-create-apply --profile search-writer-role-prepare \
+      ${delivery_case:+--profile search-writer-role-apply} build \
       migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
       search-create-transfer search-create-boundary search-create-intent-prepare \
       search-create-apply-transfer search-create-index \
-      search-writer-role-prepare-transfer search-writer-role-prepare
+      search-writer-role-prepare-transfer search-writer-role-prepare \
+      ${delivery_case:+search-writer-role-apply-transfer search-writer-role-apply}
   else
     run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
       STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
@@ -375,9 +393,15 @@ for pair in default runner; do
   run_step candidate-reservation run_pair docker compose --profile search run --rm -T --no-deps \
     migrate node tests/integration/search-create-boundary-reserve.mjs
   if [[ -n $writer_variant ]]; then
-    run_step writer-role-prepare-runtime run_pair env \
-      STATION_WPREP_GATE_CASE="$writer_variant" \
-      node tests/integration/search-writer-role-prepare-delivery.mjs
+    if [[ -n $delivery_case ]]; then
+      run_step writer-role-delivery-runtime run_pair env \
+        STATION_WPREP_GATE_CASE="$writer_variant" STATION_WRITER_DELIVERY_CASE="$delivery_case" \
+        node tests/integration/search-writer-role-prepare-delivery.mjs
+    else
+      run_step writer-role-prepare-runtime run_pair env \
+        STATION_WPREP_GATE_CASE="$writer_variant" \
+        node tests/integration/search-writer-role-prepare-delivery.mjs
+    fi
   else
     run_step intent-prepare-delivery run_pair node tests/integration/search-create-intent-prepare-delivery.mjs
     run_step create-apply-runtime run_pair node tests/integration/search-create-apply-delivery.mjs
@@ -388,7 +412,7 @@ for pair in default runner; do
   phase=teardown
   cleanup_pair
   [[ $teardown_failed == 0 ]]
-  if [[ -n $writer_variant ]]; then
+  if [[ -n $writer_variant && -z $delivery_case ]]; then
     "$(command -v node)" \
       "$runner_root/tests/support/search-create-boundary-delivery-diagnostic-filter.mjs" \
       --writer-emit "$runner_root/.cache/results/writer-role-prepare-${writer_variant}.txt" \
@@ -396,6 +420,17 @@ for pair in default runner; do
         echo 'Writer role preparation sanitized summary unavailable.' >&2
         exit 1
       }
+  fi
+  if [[ -n $delivery_case ]]; then
+    phase=writer-delivery-summary
+    if delivery_summary=$("$(command -v node)" \
+      "$runner_root/tests/support/search-writer-role-delivery-summary.mjs" \
+      "$private_log" "$delivery_case" "$delivery_pair" 2>> "$private_log"); then
+      printf '%s\n' "$delivery_summary"
+    else
+      echo 'Writer role delivery sanitized summary unavailable.' >&2
+      exit 1
+    fi
   fi
   echo "PASS: disposable PG16/OpenSearch TLS create boundary delivery for $pair owner pair."
   cd "$runner_root"

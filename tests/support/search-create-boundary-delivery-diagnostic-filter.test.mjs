@@ -97,6 +97,22 @@ test('writer preparation diagnostics and retained summary are finite', () => {
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
     ['Writer role preparation fixture failed at fault-mounted-e0b.']);
 });
+test('writer delivery failure forwards one finite case and step without hostile details', () => {
+  const safe = 'Writer role delivery fixture case=held-timeout step=consumer-markers.';
+  const hostile = 'private-secret-do-not-print';
+  assert.deepEqual(filteredCreateBoundaryDiagnostics([
+    hostile, safe, safe,
+    `Writer role delivery fixture case=held-timeout step=${hostile}.`,
+    `Writer role delivery fixture case=${hostile} step=owner.`,
+    `Writer role delivery fixture case=held-timeout step=owner.${hostile}`,
+  ].join('\n')), [safe]);
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(
+    'Writer role delivery fixture case=positive step=owner.'),
+  ['Writer role delivery fixture case=positive step=owner.']);
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(
+    'Writer role preparation fixture failed at writer-delivery-prestart.'),
+  ['Writer role preparation fixture failed at writer-delivery-prestart.']);
+});
 test('precreate diagnostic preserves the failing finite substep until successful restore', () => {
   let checkpoint = 'setup';
   const trace = [];
