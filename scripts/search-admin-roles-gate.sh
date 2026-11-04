@@ -21,11 +21,8 @@ container_id=$(docker run --rm -d --name "$container" \
   -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   pgvector/pgvector:0.8.7-pg16-bookworm)
 
-for attempt in {1..30}; do
-  if docker exec "$container" pg_isready -U station -d station >/dev/null 2>&1; then break; fi
-  if [[ "$attempt" == 30 ]]; then echo 'Disposable PG16 did not become ready.' >&2; exit 1; fi
-  sleep 1
-done
+source tests/support/search-admin-roles-readiness.sh
+search_admin_roles_wait_ready "$container"
 for migration in packages/db/drizzle/[0-9]*.sql; do
   docker exec -i "$container" psql -X -U station -d station -v ON_ERROR_STOP=1 \
     < "$migration" >/dev/null

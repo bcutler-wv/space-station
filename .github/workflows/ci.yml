@@ -61,6 +61,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
       - run: pnpm check
+      - run: node --test tests/support/search-admin-roles-readiness.test.mjs
       - run: node --test tests/support/search-attestor-pure.test.mjs
       - run: node --test tests/support/search-create-evidence.test.mjs
       - run: node --test tests/support/search-create-intent-pure.test.mjs
