@@ -1,3 +1,4 @@
+/* global structuredClone */
 import path from 'node:path';
 import { keys, mountsByTarget, bind, volume } from './search-attestor-service-config.mjs';
 import { verifyFixedApplyServiceShape } from './search-create-apply-service-config.mjs';
@@ -92,6 +93,77 @@ export function fixedWriterRoleApplyCommand(fields) {
       a.sourceIndex, a.sourceUuid, a.candidateToken, a.candidateIndex, a.candidateUuid,
       context.invocationId, context.project, String(context.databaseOid),
       context.systemIdentifier]);
+  } catch { fail(); }
+}
+
+/** The private override may change only two commands and container names. */
+export function verifyWriterRoleApplyMergedConfig(config, expected) {
+  try {
+    checked({ repository: expected.repository, project: expected.project,
+      invocationId: expected.invocationId, publicRoot: expected.publicRoot,
+      volumeName: expected.volumeName });
+    const transfer = config.services?.[transferName], apply = config.services?.[consumerName];
+    if (transfer?.container_name !== expected.transferName ||
+        apply?.container_name !== expected.applyName ||
+        JSON.stringify(transfer.command) !== JSON.stringify(['node',
+          'scripts/search-writer-role-apply-transfer.mjs']) ||
+        JSON.stringify(apply.command) !== JSON.stringify(fixedWriterRoleApplyCommand(expected.approvedFields))) fail();
+    const base = structuredClone(config);
+    delete base.services[transferName].container_name;
+    delete base.services[consumerName].container_name;
+    base.services[consumerName].command = ['node', 'scripts/search-writer-role-consumer.mjs'];
+    return verifyWriterRoleApplyServiceConfig(base, { repository: expected.repository,
+      project: expected.project, invocationId: expected.invocationId,
+      publicRoot: expected.publicRoot, volumeName: expected.volumeName });
+  } catch { fail(); }
+}
+
+/** Created-state check: requested names are evidence, not attached network IDs. */
+export function verifyWriterRoleApplyCreatedContainer(item, expected) {
+  try {
+    if (item.State?.Status !== 'created' || item.State?.Running !== false ||
+        item.State?.Restarting === true || item.RestartCount !== 0 ||
+        item.State?.Paused !== false || item.State?.OOMKilled !== false ||
+        item.State?.Dead !== false || item.State?.Error !== '' ||
+        item.State?.ExitCode !== 0 ||
+        item.State?.StartedAt !== '0001-01-01T00:00:00Z' ||
+        item.State?.FinishedAt !== '0001-01-01T00:00:00Z' ||
+        item.Name !== `/${expected.containerName}`) fail();
+    const transfer = expected.service === transferName;
+    const map = item.NetworkSettings?.Networks;
+    const wanted = transfer ? Object.keys(map).length === 0 ? [] : ['none'] : [`${expected.project}_search_admin_db`,
+      `${expected.project}_search_internal`];
+    if (!map || JSON.stringify(Object.keys(map).sort()) !== JSON.stringify(wanted.sort()) ||
+        item.HostConfig?.NetworkMode !== (transfer ? 'none' :
+          `${expected.project}_search_admin_db`)) fail();
+    for (const [name, endpoint] of Object.entries(map)) {
+      if (!endpoint || typeof endpoint !== 'object' ||
+          Object.keys(endpoint).some(key => !['Aliases', 'NetworkID', 'EndpointID',
+            'Gateway', 'IPAddress', 'IPPrefixLen', 'IPv6Gateway', 'GlobalIPv6Address',
+            'GlobalIPv6PrefixLen', 'MacAddress', 'Links', 'IPAMConfig', 'DriverOpts',
+            'GwPriority', 'DNSNames'].includes(key)) ||
+          endpoint.NetworkID && endpoint.NetworkID !== expected.networkByName[name] ||
+          endpoint.EndpointID || endpoint.Gateway || endpoint.IPAddress ||
+          endpoint.IPPrefixLen || endpoint.IPv6Gateway || endpoint.GlobalIPv6Address ||
+          endpoint.GlobalIPv6PrefixLen || endpoint.MacAddress || endpoint.Links?.length ||
+          endpoint.IPAMConfig && !keys(endpoint.IPAMConfig, []) ||
+          endpoint.DriverOpts || endpoint.GwPriority ||
+          endpoint.DNSNames?.length ||
+          endpoint.Aliases && (!Array.isArray(endpoint.Aliases) ||
+            endpoint.Aliases.some(alias => ![expected.containerName, expected.service].includes(alias)))) fail();
+    }
+    // Reuse the complete non-network policy only after checking the created map above.
+    const projected = { ...item, NetworkSettings: { ...item.NetworkSettings,
+      Networks: transfer ? {} : Object.fromEntries(wanted.map((name, index) =>
+        [name, { NetworkID: expected.networkIds[index] }])) } };
+    const runningExpected = { service: expected.service, id: expected.id,
+      image: expected.image, env: expected.env, entrypoint: expected.entrypoint,
+      repository: expected.repository, project: expected.project,
+      invocationId: expected.invocationId, publicRoot: expected.publicRoot,
+      volumeName: expected.volumeName, networkIds: expected.networkIds,
+      noneNetworkId: expected.noneNetworkId, approvedFields: expected.approvedFields };
+    verifyWriterRoleApplyEffectiveContainer(projected, runningExpected);
+    return true;
   } catch { fail(); }
 }
 

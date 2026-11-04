@@ -268,6 +268,7 @@ function ownerAdapter(f, events, fault = {}) {
       assert.deepEqual(items.map(item => item.phase), ['transfer', 'apply']);
       assert.deepEqual(value, volume); effect('cleanup-remote');
     },
+    async cleanupPrivate() { effect('cleanup-private'); },
   });
 }
 

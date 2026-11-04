@@ -199,3 +199,16 @@ immediately before each eventual container start. Exact phase results and
 owned cleanup precede normal lock release. Local real-file legacy/v2 and
 fault fixtures pass; production Docker execution, CLI and Ubuntu delivery
 review remain separate.
+
+The read-only writer-role preparation gate passed full run `41783923770` at
+`430437302e3f6c0fe0e65d3ddee4ffb4e902c760` with fourteen successful jobs;
+Astra accepted its bounded both-UID runtime evidence and checked teardown.
+This does not accept role delivery.
+
+Version 0.87.0 adds the fixed owner CLI and Docker adapter. A private
+command-only Compose override is verified by original inode and bytes. The
+adapter creates each stopped container, inspects its effective policy,
+calls the owner's pre-start fence, then starts only the captured full ID.
+Scripted and both-UID daemon-free merged-render checks pass. Actual
+created-state fields and writer-role delivery await the Ubuntu runtime gate;
+both search readiness gates remain false.

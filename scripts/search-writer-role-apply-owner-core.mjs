@@ -121,6 +121,10 @@ export async function runWriterRoleApplyOwner(input) {
       await operation.assertOwned(); await pending.recheck(); await binding.recheck();
       await stage.recheckSource();
       await adapter.recheckOwner(pin(owner)); await adapter.recheckInfrastructure(); tick();
+      await adapter.cleanupPrivate(); tick();
+      await operation.assertOwned(); await pending.recheck(); await binding.recheck();
+      await stage.recheckSource();
+      await adapter.recheckOwner(pin(owner)); await adapter.recheckInfrastructure(); tick();
       await operation.confirmOwnedCleanup();
       return Object.freeze({ state: 'writer_role_attested', ready: false });
     });

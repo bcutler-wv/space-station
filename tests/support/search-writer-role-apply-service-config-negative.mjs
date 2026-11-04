@@ -4,7 +4,8 @@ import { Buffer } from 'node:buffer';
 import path from 'node:path';
 import process from 'node:process';
 import { verifyWriterRoleApplyServiceConfig, fixedWriterRoleApplyCommand,
-  verifyWriterRoleApplyEffectiveContainer } from
+  verifyWriterRoleApplyEffectiveContainer, verifyWriterRoleApplyMergedConfig,
+  verifyWriterRoleApplyCreatedContainer } from
   '../../scripts/search-writer-role-apply-service-config.mjs';
 
 try {
@@ -56,6 +57,21 @@ try {
     'station-mail-v2-g11111111111141118111111111111111', 'created_uuid',
     invocationId, project, '16384', '123'];
   const command = fixedWriterRoleApplyCommand(approvedFields);
+  const names = { transfer: `station_writer_transfer_${invocationId.replaceAll('-', '')}`,
+    apply: `station_writer_apply_${invocationId.replaceAll('-', '')}` };
+  const merged = structuredClone(config);
+  merged.services[transfer].container_name = names.transfer;
+  merged.services[consumer].container_name = names.apply;
+  merged.services[consumer].command = command;
+  assert.equal(verifyWriterRoleApplyMergedConfig(merged, { ...expected,
+    transferName: names.transfer, applyName: names.apply, approvedFields }), true);
+  for (const mutate of [value => { value.services[consumer].command[2] = 'b'.repeat(64); },
+    value => { value.services[consumer].container_name = 'foreign'; },
+    value => { value.services[transfer].volumes[0].source = '/tmp/foreign'; }]) {
+    const changed = structuredClone(merged); mutate(changed);
+    assert.throws(() => verifyWriterRoleApplyMergedConfig(changed, { ...expected,
+      transferName: names.transfer, applyName: names.apply, approvedFields }));
+  }
   assert.equal(command.length, 15);
   assert.deepEqual(config.services[consumer].command,
     ['node', 'scripts/search-writer-role-consumer.mjs']);
@@ -100,6 +116,27 @@ try {
   }
   const first = effective(transfer);
   const second = effective(consumer);
+  for (const [item, authority, name] of [[first.item, first.authority, names.transfer],
+    [second.item, second.authority, names.apply]]) {
+    const created = structuredClone(item);
+    created.Name = `/${name}`;
+    created.State = { Status: 'created', Running: false, Paused: false,
+      OOMKilled: false, Dead: false, Error: '', ExitCode: 0,
+      StartedAt: '0001-01-01T00:00:00Z', FinishedAt: '0001-01-01T00:00:00Z' };
+    created.RestartCount = 0;
+    created.NetworkSettings.Networks = name === names.transfer ? {} :
+      { [`${project}_search_admin_db`]: {}, [`${project}_search_internal`]: {} };
+    const expectedCreated = { ...authority, containerName: name,
+      networkByName: { [`${project}_search_admin_db`]: networkIds[0],
+        [`${project}_search_internal`]: networkIds[1], none: '5'.repeat(64) } };
+    assert.equal(verifyWriterRoleApplyCreatedContainer(created, expectedCreated), true);
+    if (name === names.transfer) {
+      created.NetworkSettings.Networks = { none: {} };
+      assert.equal(verifyWriterRoleApplyCreatedContainer(created, expectedCreated), true);
+      created.NetworkSettings.Networks = { bridge: {} };
+    } else created.NetworkSettings.Networks.default = {};
+    assert.throws(() => verifyWriterRoleApplyCreatedContainer(created, expectedCreated));
+  }
   for (const mutate of [
     item => { item.Config.Cmd = ['node', 'scripts/search-writer-role-consumer.mjs']; },
     item => { item.Config.Cmd[2] = 'b'.repeat(64); },
