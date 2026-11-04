@@ -24,13 +24,13 @@ async function directory(name, uid, gid, mode, prior) {
 }
 
 /** Establish the only fixed proposal path and refuse any existing proposal before dispatch. */
-export async function prepareCreateIntentPending(repository, uid, gid) {
+async function prepareFixedPending(repository, uid, gid, dirname) {
   try {
     if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
         gid !== process.getgid?.()) fail();
     const cache = path.join(repository, '.cache');
     const cacheStat = await directory(cache, uid, gid, null);
-    const root = path.join(cache, 'search-create-intent');
+    const root = path.join(cache, dirname);
     try { await mkdir(root, { mode: 0o700 }); await syncDir(cache); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
     const rootStat = await directory(root, uid, gid, 0o700);
@@ -44,6 +44,15 @@ export async function prepareCreateIntentPending(repository, uid, gid) {
     };
     return Object.freeze({ root, name, check });
   } catch { fail(); }
+}
+
+export function prepareCreateIntentPending(repository, uid, gid) {
+  return prepareFixedPending(repository, uid, gid, 'search-create-intent');
+}
+
+/** Separate fixed proposal path; no caller-selected dirname. */
+export function prepareWriterRolePending(repository, uid, gid) {
+  return prepareFixedPending(repository, uid, gid, 'search-writer-role-intent');
 }
 
 /** Call only after the lock marks pending attempted before exclusive file I/O. */
@@ -96,4 +105,9 @@ export async function writeCreateIntentPending(prepared, intent, expectedSha, ui
     await recheck();
     return { sha256: expectedSha, bytes: bytes.length, recheck };
   } catch { fail(); }
+}
+
+/** Writer proposal uses the same exclusive canonical 0400 writer without fixture hooks. */
+export function writeWriterRolePending(prepared, intent, expectedSha, uid, gid) {
+  return writeCreateIntentPending(prepared, intent, expectedSha, uid, gid);
 }

@@ -122,6 +122,49 @@ async function capture(name, root, uid, gid, max) {
   return { bytes: original.bytes, recheck: () => read(original) };
 }
 
+/** Capture original approved create files before any writer proposal exists. */
+export async function readOriginalCreateFiles(repository, uid, gid) {
+  try {
+    if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
+        gid !== process.getgid?.()) fail();
+    const cache = path.join(repository, '.cache');
+    const cacheStat = await directory(cache, uid, gid, null);
+    const create = await capture(path.join(cache, 'search-create-intent/pending.json'),
+      path.join(cache, 'search-create-intent'), uid, gid, 256 * 1024);
+    const bound = await capture(path.join(cache, 'search-create-apply/binding.json'),
+      path.join(cache, 'search-create-apply'), uid, gid, 1024);
+    const intent = JSON.parse(create.bytes.toString('utf8'));
+    const binding = JSON.parse(bound.bytes.toString('utf8'));
+    if (!canonicalAttestorValue(intent, 256 * 1024).bytes.equals(create.bytes) ||
+        !canonicalAttestorValue(binding).bytes.equals(bound.bytes)) fail();
+    const projection = Object.fromEntries(createProjectionKeys.map(key => [key, intent[key]]));
+    const old = sealCreateIntent(projection, intent.publicDigests,
+      { project: intent.project, systemIdentifier: intent.systemIdentifier,
+        dispatchId: intent.dispatchId, ownerId: intent.ownerId });
+    if (!canonicalAttestorValue(old.intent, 256 * 1024).bytes.equals(create.bytes) ||
+        old.sha256 !== digest(create.bytes) ||
+        Object.keys(binding).sort().join('|') !==
+          'approvedSha256|dispatchId|invocationId|ownerId|version' ||
+        binding.version !== 1 || !uuid(binding.invocationId) ||
+        binding.invocationId === intent.dispatchId ||
+        binding.invocationId === intent.ownerId ||
+        binding.approvedSha256 !== old.sha256 || binding.dispatchId !== intent.dispatchId ||
+        binding.ownerId !== intent.ownerId || intent.project !== path.basename(repository)) fail();
+    const recheck = async () => {
+      await directory(cache, uid, gid, null, cacheStat);
+      await create.recheck(); await bound.recheck();
+      return true;
+    };
+    await recheck();
+    return Object.freeze({ approvedSha256: old.sha256,
+      originalCreateBindingSha256: digest(bound.bytes),
+      createBytes: () => Buffer.from(create.bytes),
+      bindingBytes: () => Buffer.from(bound.bytes),
+      intent: () => JSON.parse(create.bytes.toString('utf8')),
+      binding: () => JSON.parse(bound.bytes.toString('utf8')), recheck });
+  } catch { fail(); }
+}
+
 /** Capture all three original files once; every later check compares their inodes and bytes. */
 export async function readWriterRolePending(repository, uid, gid, approved) {
   try {

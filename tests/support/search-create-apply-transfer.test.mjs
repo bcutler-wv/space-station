@@ -10,8 +10,10 @@ import { searchGenerationDispatchSpec } from '../../packages/db/dist/search-gene
 import { buildAttestorPublicFiles, canonicalAttestorValue } from
   '../../scripts/search-attestor-pure.mjs';
 import { sealCreateIntent } from '../../scripts/search-create-intent-pure.mjs';
-import { transferCreateApplyInputs } from '../../scripts/search-create-apply-transfer-core.mjs';
+import { transferCreateApplyInputs, transferWriterRolePrepareInputs } from
+  '../../scripts/search-create-apply-transfer-core.mjs';
 import { openCreateApplyInput } from '../../scripts/search-create-apply-input.mjs';
+import { openWriterRolePrepareInput } from '../../scripts/search-writer-role-prepare-input.mjs';
 import { captureCreateIntentAdminVolume } from '../../scripts/search-create-intent-admin-volume.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -164,4 +166,81 @@ test('extra source file, replaced PEM inode, and wrong binding fail closed', asy
     } }));
   assert.ok((await readdir(partial.paths.volumeRoot)).length > 0);
   await assert.rejects(transferCreateApplyInputs(partial.paths, opts));
+});
+
+async function roleFixture(t, realCert = false) {
+  const item = await fixture(t, realCert);
+  const parent = path.join(item.root, 'invocationFile');
+  await mkdir(parent, { mode: 0o755 });
+  item.paths.invocationFile = path.join(parent, 'invocation.json');
+  const binding = await readFile(item.paths.bindingFile);
+  const marker = { version: 1, invocationId: '66666666-6666-4666-8666-666666666666',
+    project: 'fixture', databaseOid: 16384, systemIdentifier: '123',
+    createApprovedSha256: item.sealed.sha256,
+    originalCreateBindingSha256: hash(binding),
+    dispatchId: '77777777-7777-4777-8777-777777777777',
+    ownerId: '88888888-8888-4888-8888-888888888888' };
+  await writeFile(item.paths.invocationFile, canonicalAttestorValue(marker).bytes,
+    { mode: 0o400 });
+  return { ...item, marker };
+}
+
+test('fixed writer preparation transfer carries only original create evidence, invocation and real PEMs', async t => {
+  const item = await roleFixture(t, true);
+  assert.deepEqual(await transferWriterRolePrepareInputs(item.paths, opts),
+    { approvedSha256: item.sealed.sha256, invocationId });
+  assert.deepEqual((await readdir(item.paths.volumeRoot)).sort(),
+    ['create-binding.json', 'create-intent.json', 'invocation.json', 'public',
+      'transition.password']);
+  for (const name of ['create-intent.json', 'create-binding.json', 'invocation.json',
+    'transition.password', ...item.publicFiles.map(row => `public/${row.path}`)]) {
+    assert.equal((await lstat(path.join(item.paths.volumeRoot, name))).mode & 0o777, 0o400);
+    assert.deepEqual(await readFile(path.join(item.paths.volumeRoot, name)),
+      await readFile(name.startsWith('public/') ? path.join(item.paths.publicRoot,
+        name.slice('public/'.length)) : name === 'create-intent.json' ? item.paths.intentFile :
+          name === 'create-binding.json' ? item.paths.bindingFile :
+            name === 'invocation.json' ? item.paths.invocationFile : item.paths.passwordFile));
+  }
+  for (const name of ['', 'public', 'public/v1'])
+    assert.equal((await lstat(path.join(item.paths.volumeRoot, name))).mode & 0o777, 0o700);
+  assert.equal(await lstat(path.join(item.paths.volumeRoot, 'public/ca.key'))
+    .then(() => true, () => false), false);
+  const scratch = path.join(item.root, 'scratch');
+  await mkdir(scratch, { mode: 0o700 });
+  const previous = process.env.STATION_WRITER_ROLE_PREPARE_FIXTURE;
+  process.env.STATION_WRITER_ROLE_PREPARE_FIXTURE = '1';
+  try {
+    const input = await openWriterRolePrepareInput(item.paths.volumeRoot, scratch,
+      { uid: process.getuid(), gid: process.getgid() });
+    const parsed = await input.readInput();
+    assert.equal(parsed.invocation.originalCreateBindingSha256,
+      item.marker.originalCreateBindingSha256);
+    assert.equal(await input.recheck(), true);
+  } finally {
+    if (previous === undefined) delete process.env.STATION_WRITER_ROLE_PREPARE_FIXTURE;
+    else process.env.STATION_WRITER_ROLE_PREPARE_FIXTURE = previous;
+  }
+});
+
+test('writer preparation transfer rejects changed invocation, extra public leaf and partial copy', async t => {
+  const wrong = await roleFixture(t);
+  await chmod(wrong.paths.invocationFile, 0o600);
+  await assert.rejects(transferWriterRolePrepareInputs(wrong.paths, opts));
+  const extra = await roleFixture(t);
+  await writeFile(path.join(extra.paths.publicRoot, 'ca.key'), 'private', { mode: 0o400 });
+  await assert.rejects(transferWriterRolePrepareInputs(extra.paths, opts));
+  const partial = await roleFixture(t);
+  await assert.rejects(transferWriterRolePrepareInputs(partial.paths, { ...opts,
+    beforeWrite: relative => { if (relative === 'invocation.json') throw Error('partial'); } }));
+  assert.ok((await readdir(partial.paths.volumeRoot)).length > 0);
+  await assert.rejects(transferWriterRolePrepareInputs(partial.paths, opts));
+  const replaced = await roleFixture(t);
+  await assert.rejects(transferWriterRolePrepareInputs(replaced.paths, { ...opts,
+    beforeWrite: async relative => {
+      if (relative !== 'invocation.json') return;
+      const name = replaced.paths.intentFile;
+      const bytes = await readFile(name);
+      await writeFile(`${name}.replacement`, bytes, { mode: 0o400 });
+      await rename(`${name}.replacement`, name);
+    } }));
 });

@@ -3,7 +3,7 @@ import { keys, list, mountsByTarget, bind, volume } from
   './search-attestor-service-config.mjs';
 
 const fail = () => { throw Error('Fixed create apply Compose render failed.'); };
-function service(value, repository, command, user, transfer) {
+function service(value, repository, command, user, transfer, profile) {
   const fields = ['build', 'command', 'user', 'volumes', 'read_only', 'tmpfs',
     'cap_drop', 'security_opt', 'pids_limit', 'mem_limit', 'cpus', 'restart',
     'profiles', transfer ? 'network_mode' : 'networks', ...(transfer ? ['cap_add'] : [])];
@@ -15,7 +15,7 @@ function service(value, repository, command, user, transfer) {
       value.build.dockerfile !== undefined && value.build.dockerfile !== 'Dockerfile' ||
       !list(value.command, ['node', `scripts/${command}.mjs`]) ||
       value.user !== user || value.read_only !== true ||
-      !list(value.profiles, ['search-create-apply']) ||
+      !list(value.profiles, [profile]) ||
       !list(value.cap_drop, ['ALL']) ||
       !list(value.security_opt, ['no-new-privileges:true']) ||
       value.pids_limit !== (transfer ? 64 : 128) ||
@@ -29,19 +29,28 @@ function service(value, repository, command, user, transfer) {
       Object.values(value.networks).some(network => network !== null && !keys(network, []))) fail();
 }
 
-export function verifyCreateApplyServiceConfig(config, expected) {
+function verifyFixedServiceConfig(config, expected, rolePrepare) {
   try {
-    const { repository, project, invocationId, publicRoot, volumeName } = expected;
-    if (!keys(expected, ['repository', 'project', 'invocationId', 'publicRoot', 'volumeName']) ||
+    const { repository, project, invocationId, publicRoot, volumeName, invocationRoot } = expected;
+    const profile = rolePrepare ? 'search-writer-role-prepare' : 'search-create-apply';
+    const inputVolume = rolePrepare ? 'search_writer_role_prepare_input' : 'search_create_apply_input';
+    const transferName = rolePrepare ? 'search-writer-role-prepare-transfer' : 'search-create-apply-transfer';
+    const readName = rolePrepare ? 'search-writer-role-prepare' : 'search-create-index';
+    if (!keys(expected, rolePrepare ? ['repository', 'project', 'invocationId',
+      'publicRoot', 'volumeName', 'invocationRoot'] :
+      ['repository', 'project', 'invocationId', 'publicRoot', 'volumeName']) ||
         path.resolve(repository) !== repository ||
         !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(project) ||
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(invocationId) ||
         publicRoot !== path.join(repository, '.cache/search-create-apply-public', invocationId) ||
-        volumeName !== `${project}_search_create_apply_${invocationId.replaceAll('-', '')}` ||
+        rolePrepare && invocationRoot !== path.join(repository,
+          '.cache/search-writer-role-invocations', invocationId) ||
+        volumeName !== `${project}_${rolePrepare ? 'search_writer_prepare' :
+          'search_create_apply'}_${invocationId.replaceAll('-', '')}` ||
         !keys(config, ['name', 'services', 'networks', 'volumes']) || config.name !== project ||
-        !keys(config.services, ['search-create-apply-transfer', 'search-create-index']) ||
+        !keys(config.services, [transferName, readName]) ||
         !keys(config.networks, ['search_admin_db', 'search_internal']) ||
-        !keys(config.volumes, ['search_create_apply_input', 'search_admin_certs',
+        !keys(config.volumes, [inputVolume, 'search_admin_certs',
           'search_security_state'])) fail();
     for (const name of ['search_admin_db', 'search_internal']) {
       const network = config.networks[name];
@@ -53,41 +62,55 @@ export function verifyCreateApplyServiceConfig(config, expected) {
           network.external !== undefined && network.external !== false ||
           network.ipam !== undefined && !keys(network.ipam, [])) fail();
     }
-    if (!keys(config.volumes.search_create_apply_input, ['name', 'external']) ||
-        config.volumes.search_create_apply_input.name !== volumeName ||
-        config.volumes.search_create_apply_input.external !== true) fail();
+    if (!keys(config.volumes[inputVolume], ['name', 'external']) ||
+        config.volumes[inputVolume].name !== volumeName ||
+        config.volumes[inputVolume].external !== true) fail();
     for (const name of ['search_admin_certs', 'search_security_state']) {
       const item = config.volumes[name];
       if (!keys(item, ['name']) && !keys(item, ['name', 'external']) ||
           item.name !== `${project}_${name}` ||
           item.external !== undefined && item.external !== false) fail();
     }
-    const transfer = config.services['search-create-apply-transfer'];
-    service(transfer, repository, 'search-create-apply-transfer', '0:0', true);
-    const mounts = mountsByTarget(transfer.volumes, ['/run/create-apply-password/password',
-      '/run/create-apply-intent/intent.json', '/run/create-apply-binding/binding.json',
-      '/run/create-apply-public', '/run/search-create-apply']);
-    bind(mounts.get('/run/create-apply-password/password'),
+    const transfer = config.services[transferName];
+    service(transfer, repository, transferName, '0:0', true, profile);
+    const prefix = rolePrepare ? '/run/writer-prepare' : '/run/create-apply';
+    const volumeTarget = rolePrepare ? '/run/search-writer-role-prepare' : '/run/search-create-apply';
+    const mounts = mountsByTarget(transfer.volumes, [`${prefix}-password/password`,
+      rolePrepare ? `${prefix}-intent/create-intent.json` : `${prefix}-intent/intent.json`,
+      rolePrepare ? `${prefix}-binding/create-binding.json` : `${prefix}-binding/binding.json`,
+      ...(rolePrepare ? [`${prefix}-invocation/invocation.json`] : []),
+      `${prefix}-public`, volumeTarget]);
+    bind(mounts.get(`${prefix}-password/password`),
       path.join(repository, '.cache/search-db/initial-v1/transition.password'),
-      '/run/create-apply-password/password', true);
-    bind(mounts.get('/run/create-apply-intent/intent.json'),
+      `${prefix}-password/password`, true);
+    bind(mounts.get(rolePrepare ? `${prefix}-intent/create-intent.json` : `${prefix}-intent/intent.json`),
       path.join(repository, '.cache/search-create-intent/pending.json'),
-      '/run/create-apply-intent/intent.json', true);
-    bind(mounts.get('/run/create-apply-binding/binding.json'),
+      rolePrepare ? `${prefix}-intent/create-intent.json` : `${prefix}-intent/intent.json`, true);
+    bind(mounts.get(rolePrepare ? `${prefix}-binding/create-binding.json` : `${prefix}-binding/binding.json`),
       path.join(repository, '.cache/search-create-apply/binding.json'),
-      '/run/create-apply-binding/binding.json', true);
-    bind(mounts.get('/run/create-apply-public'), publicRoot, '/run/create-apply-public', true);
-    volume(mounts.get('/run/search-create-apply'), 'search_create_apply_input',
-      '/run/search-create-apply', false, true);
-    const consumer = config.services['search-create-index'];
-    service(consumer, repository, 'search-create-apply-consumer', '1000:1000', false);
+      rolePrepare ? `${prefix}-binding/create-binding.json` : `${prefix}-binding/binding.json`, true);
+    if (rolePrepare) bind(mounts.get(`${prefix}-invocation/invocation.json`),
+      path.join(invocationRoot, 'invocation.json'), `${prefix}-invocation/invocation.json`, true);
+    bind(mounts.get(`${prefix}-public`), publicRoot, `${prefix}-public`, true);
+    volume(mounts.get(volumeTarget), inputVolume, volumeTarget, false, true);
+    const consumer = config.services[readName];
+    service(consumer, repository, rolePrepare ? readName : 'search-create-apply-consumer',
+      '1000:1000', false, profile);
     const inputs = mountsByTarget(consumer.volumes,
-      ['/run/search-create-apply', '/run/station-admin', '/run/station-state']);
-    volume(inputs.get('/run/search-create-apply'), 'search_create_apply_input',
-      '/run/search-create-apply', true, true);
+      [volumeTarget, '/run/station-admin', '/run/station-state']);
+    volume(inputs.get(volumeTarget), inputVolume, volumeTarget, true, true);
     volume(inputs.get('/run/station-admin'), 'search_admin_certs', '/run/station-admin', true, true);
     volume(inputs.get('/run/station-state'), 'search_security_state',
       '/run/station-state', true, true);
     return true;
   } catch { fail(); }
+}
+
+export function verifyCreateApplyServiceConfig(config, expected) {
+  return verifyFixedServiceConfig(config, expected, false);
+}
+
+/** Fixed writer-role read-only preparation services; no operation selector. */
+export function verifyWriterRolePrepareServiceConfig(config, expected) {
+  return verifyFixedServiceConfig(config, expected, true);
 }

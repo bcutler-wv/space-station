@@ -3,15 +3,21 @@ import { Buffer } from 'node:buffer';
 import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
-import { createApplyDockerAdapter } from '../../scripts/search-create-boundary-owner-docker.mjs';
+import { createApplyDockerAdapter, createWriterRolePrepareDockerAdapter } from
+  '../../scripts/search-create-boundary-owner-docker.mjs';
 
 const repository = path.resolve('.'), uid = process.getuid(), gid = process.getgid();
 const project = 'create_fixture', id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const publicRoot = path.join(repository, '.cache/search-create-apply-public', id);
 const volumeName = `${project}_search_create_apply_${id.replaceAll('-', '')}`;
-const services = { transfer: 'search-create-apply-transfer', create: 'search-create-index' };
-const ids = { transfer: 'a'.repeat(64), create: 'b'.repeat(64) };
-const images = { transfer: `sha256:${'1'.repeat(64)}`, create: `sha256:${'2'.repeat(64)}` };
+const writerVolumeName = `${project}_search_writer_prepare_${id.replaceAll('-', '')}`;
+const invocationRoot = path.join(repository, '.cache/search-writer-role-invocations', id);
+const applyServices = { transfer: 'search-create-apply-transfer', create: 'search-create-index' };
+const writerServices = { transfer: 'search-writer-role-prepare-transfer',
+  prepare: 'search-writer-role-prepare' };
+const ids = { transfer: 'a'.repeat(64), create: 'b'.repeat(64), prepare: 'b'.repeat(64) };
+const images = { transfer: `sha256:${'1'.repeat(64)}`,
+  create: `sha256:${'2'.repeat(64)}`, prepare: `sha256:${'2'.repeat(64)}` };
 const networks = { search_admin_db: '3'.repeat(64), search_internal: '4'.repeat(64),
   none: '5'.repeat(64) };
 const identity = { project, service: 'postgres', database: 'station', databaseOid: '16384',
@@ -26,9 +32,16 @@ const bind = (source, target) => ({ type: 'bind', source, target, read_only: tru
   bind: { create_host_path: false } });
 const mount = (source, target, readOnly = true) => ({ type: 'volume', source, target,
   ...(readOnly ? { read_only: true } : {}), volume: { nocopy: true } });
-function config() {
+function config(writer = false) {
+  const services = writer ? writerServices : applyServices;
+  const activeVolumeName = writer ? writerVolumeName : volumeName;
+  const inputVolume = writer ? 'search_writer_role_prepare_input' : 'search_create_apply_input';
+  const inputTarget = writer ? '/run/search-writer-role-prepare' : '/run/search-create-apply';
+  const prefix = writer ? '/run/writer-prepare' : '/run/create-apply';
+  const consumer = writer ? 'prepare' : 'create';
   const common = (command, user, transfer) => ({
-    profiles: ['search-create-apply'], build: { context: repository, target: 'search-attestor' },
+    profiles: [writer ? 'search-writer-role-prepare' : 'search-create-apply'],
+    build: { context: repository, target: 'search-attestor' },
     command: ['node', `scripts/${command}.mjs`], user, read_only: true,
     tmpfs: [transfer ? '/tmp:rw,noexec,nosuid,size=8m,uid=0,gid=0,mode=0700' :
       '/tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700'],
@@ -38,34 +51,38 @@ function config() {
     restart: 'no', ...(transfer ? { network_mode: 'none', cap_add: ['CHOWN', 'DAC_OVERRIDE'] } :
       { networks: { search_admin_db: null, search_internal: null } }) });
   return { name: project, services: {
-    [services.transfer]: { ...common('search-create-apply-transfer', '0:0', true), volumes: [
+    [services.transfer]: { ...common(services.transfer, '0:0', true), volumes: [
       bind(path.join(repository, '.cache/search-db/initial-v1/transition.password'),
-        '/run/create-apply-password/password'),
+        `${prefix}-password/password`),
       bind(path.join(repository, '.cache/search-create-intent/pending.json'),
-        '/run/create-apply-intent/intent.json'),
+        writer ? `${prefix}-intent/create-intent.json` : `${prefix}-intent/intent.json`),
       bind(path.join(repository, '.cache/search-create-apply/binding.json'),
-        '/run/create-apply-binding/binding.json'),
-      bind(publicRoot, '/run/create-apply-public'),
-      mount('search_create_apply_input', '/run/search-create-apply', false)] },
-    [services.create]: { ...common('search-create-apply-consumer', '1000:1000', false),
-      volumes: [mount('search_create_apply_input', '/run/search-create-apply'),
+        writer ? `${prefix}-binding/create-binding.json` : `${prefix}-binding/binding.json`),
+      ...(writer ? [bind(path.join(invocationRoot, 'invocation.json'),
+        `${prefix}-invocation/invocation.json`)] : []),
+      bind(publicRoot, `${prefix}-public`),
+      mount(inputVolume, inputTarget, false)] },
+    [services[consumer]]: { ...common(writer ? services.prepare :
+      'search-create-apply-consumer', '1000:1000', false),
+      volumes: [mount(inputVolume, inputTarget),
         mount('search_admin_certs', '/run/station-admin'),
         mount('search_security_state', '/run/station-state')] },
   }, networks: {
     search_admin_db: { name: `${project}_search_admin_db`, internal: true },
     search_internal: { name: `${project}_search_internal`, internal: true },
-  }, volumes: { search_create_apply_input: { name: volumeName, external: true },
+  }, volumes: { [inputVolume]: { name: activeVolumeName, external: true },
     search_admin_certs: { name: `${project}_search_admin_certs` },
     search_security_state: { name: `${project}_search_security_state` } } };
 }
-const volume = name => ({ Name: name, Driver: 'local', Scope: 'local',
+const volume = (name, activeVolumeName = volumeName) => ({ Name: name, Driver: 'local', Scope: 'local',
   CreatedAt: '2026-10-27T00:00:00Z', Mountpoint: `/var/lib/docker/volumes/${name}/_data`,
-  Options: null, Labels: name === volumeName ?
+  Options: null, Labels: name === activeVolumeName ?
     { 'station.create.project': project, 'station.create.invocation': id } :
     { 'com.docker.compose.project': project,
       'com.docker.compose.volume': name.replace(`${project}_`, '') } });
-function container(phase, fault) {
-  const spec = config().services[services[phase]], cfg = config();
+function container(phase, fault, writer = false) {
+  const services = writer ? writerServices : applyServices;
+  const spec = config(writer).services[services[phase]], cfg = config(writer);
   const connected = phase === 'transfer' ? { none: { NetworkID: networks.none } } :
     Object.fromEntries(['search_admin_db', 'search_internal'].map(name =>
       [name, { NetworkID: networks[name] }]));
@@ -96,30 +113,37 @@ function container(phase, fault) {
       FinishedAt: '2026-10-27T00:00:02Z', Running: false, OOMKilled: false,
       Dead: false, Error: '' } };
   if (fault === 'extra-cap') item.HostConfig.CapAdd.push('CAP_SYS_ADMIN');
-  if (fault === 'wrong-network' && phase === 'create')
+  if (fault === 'wrong-network' && phase !== 'transfer')
     item.NetworkSettings.Networks.default = { NetworkID: '9'.repeat(64) };
-  if (fault === 'missing-nocopy' && phase === 'create')
+  if (fault === 'missing-nocopy' && phase !== 'transfer')
     item.HostConfig.Mounts[0].VolumeOptions.NoCopy = false;
-  if (fault === 'extra-mount' && phase === 'create')
+  if (fault === 'extra-mount' && phase !== 'transfer')
     item.Mounts.push({ Type: 'bind', Destination: '/tmp/extra', Source: '/tmp/extra', RW: true });
   return item;
 }
-function rig(fault) {
+function rig(fault, writer = false) {
+  const services = writer ? writerServices : applyServices;
+  const activeVolumeName = writer ? writerVolumeName : volumeName;
+  const activeConsumer = writer ? 'prepare' : 'create';
   const calls = [], seen = new Set(), waitTimeouts = [];
   let created = false, removed = false, ownerCalls = 0, volumeInspects = 0;
   const reply = stdout => ({ code: 0, signal: null, stdout, stderr: '' });
   const command = async (args, env, timeoutMs) => {
     const line = args.join(' '); calls.push(line);
     if (args[0] === 'compose') {
-      assert.equal(line.includes('compose.search-create-apply.yaml'), true);
-      assert.equal(env.STATION_CREATE_APPLY_PUBLIC_ROOT, publicRoot);
-      assert.equal(env.STATION_CREATE_APPLY_VOLUME_NAME, volumeName);
+      assert.equal(line.includes(writer ? 'compose.search-writer-role-prepare.yaml' :
+        'compose.search-create-apply.yaml'), true);
+      assert.equal(env[writer ? 'STATION_WRITER_PREPARE_PUBLIC_ROOT' :
+        'STATION_CREATE_APPLY_PUBLIC_ROOT'], publicRoot);
+      assert.equal(env[writer ? 'STATION_WRITER_PREPARE_VOLUME_NAME' :
+        'STATION_CREATE_APPLY_VOLUME_NAME'], activeVolumeName);
+      if (writer) assert.equal(env.STATION_WRITER_PREPARE_INVOCATION_ROOT, invocationRoot);
       assert.equal(env.COMPOSE_IGNORE_ORPHANS,
         line.includes(' run --detach --no-deps --pull never ') ? 'true' : undefined);
     }
     if (line.includes(' config --format json ')) {
-      const value = config();
-      if (fault === 'config-drift' && seen.size) value.services[services.create].command.push('retry');
+      const value = config(writer);
+      if (fault === 'config-drift' && seen.size) value.services[services[activeConsumer]].command.push('retry');
       return reply(`${JSON.stringify(value)}\n`);
     }
     if (args[0] === 'network' && args[1] === 'inspect') {
@@ -136,15 +160,15 @@ function rig(fault) {
         Env: ['NODE_VERSION=22.23.2'] } }])}\n`);
     }
     if (args[0] === 'volume' && args[1] === 'inspect') {
-      const item = volume(args[2]);
-      if (args[2] === volumeName) volumeInspects++;
-      if (fault === 'volume-replaced' && args[2] === volumeName && volumeInspects > 1)
+      const item = volume(args[2], activeVolumeName);
+      if (args[2] === activeVolumeName) volumeInspects++;
+      if (fault === 'volume-replaced' && args[2] === activeVolumeName && volumeInspects > 1)
         item.CreatedAt = 'changed';
       return reply(`${JSON.stringify([item])}\n`);
     }
     if (args[0] === 'volume' && args[1] === 'ls')
-      return reply(created && !removed ? `${volumeName}\n` : '');
-    if (args[0] === 'volume' && args[1] === 'create') { created = true; return reply(`${volumeName}\n`); }
+      return reply(created && !removed ? `${activeVolumeName}\n` : '');
+    if (args[0] === 'volume' && args[1] === 'create') { created = true; return reply(`${activeVolumeName}\n`); }
     if (line.includes(' run --detach --no-deps --pull never ')) {
       const phase = Object.keys(services).find(key => services[key] === args.at(-1));
       seen.add(phase);
@@ -152,39 +176,42 @@ function rig(fault) {
       return reply(`${ids[phase]}\n`);
     }
     if (args[0] === 'container' && args[1] === 'inspect') {
-      const phase = Object.keys(ids).find(key => ids[key] === args[2]);
-      return reply(`${JSON.stringify([container(phase, fault)])}\n`);
+      const phase = Object.keys(services).find(key => ids[key] === args[2]);
+      return reply(`${JSON.stringify([container(phase, fault, writer)])}\n`);
     }
     if (args[0] === 'container' && args[1] === 'wait') {
       waitTimeouts.push(timeoutMs);
       return reply('0\n');
     }
     if (args[0] === 'container' && args[1] === 'logs') {
-      const phase = Object.keys(ids).find(key => ids[key] === args[2]);
-      return reply(phase === 'transfer' ? 'Private create apply transfer completed.\n' :
+      const phase = Object.keys(services).find(key => ids[key] === args[2]);
+      return reply(phase === 'transfer' ? writer ?
+        'Private writer role preparation transfer completed.\n' :
+        'Private create apply transfer completed.\n' :
         fault === 'false-create-log' ? 'Private create apply failed.\n' :
-          'Private create apply reached uuid_bound; search remains disabled.\n');
+          writer ? '{"fixture":"canonical-output"}\n' :
+            'Private create apply reached uuid_bound; search remains disabled.\n');
     }
     if (args[0] === 'ps') {
       const serviceFilter = args.find(value => value.startsWith('label=com.docker.compose.service='));
       if (serviceFilter) {
         const phase = Object.keys(services).find(key => serviceFilter.endsWith(services[key]));
         if (removed || !seen.has(phase)) return reply('');
-        return reply(fault === 'extra-stopped' && phase === 'create' ?
+        return reply(fault === 'extra-stopped' && phase === activeConsumer ?
           `${ids[phase]}\n${'c'.repeat(64)}\n` : `${ids[phase]}\n`);
       }
       return reply(fault === 'extra-reference' ?
-        `${ids.transfer}\n${ids.create}\n${'c'.repeat(64)}\n` :
-        removed ? '' : `${ids.transfer}\n${ids.create}\n`);
+        `${ids.transfer}\n${ids[activeConsumer]}\n${'c'.repeat(64)}\n` :
+        removed ? '' : `${ids.transfer}\n${ids[activeConsumer]}\n`);
     }
     if (args[0] === 'container' && args[1] === 'rm') {
       if (args[2] === ids.transfer) removed = true;
       return reply(`${args[2]}\n`);
     }
-    if (args[0] === 'volume' && args[1] === 'rm') { removed = true; return reply(`${volumeName}\n`); }
+    if (args[0] === 'volume' && args[1] === 'rm') { removed = true; return reply(`${activeVolumeName}\n`); }
     throw Error('unexpected command');
   };
-  const adapter = createApplyDockerAdapter({ repository, uid, gid, jobLock: {},
+  const adapter = (writer ? createWriterRolePrepareDockerAdapter : createApplyDockerAdapter)({ repository, uid, gid, jobLock: {},
     invocationId: id, deadline: Number.MAX_SAFE_INTEGER, tick: () => {} }, {
     command, ownerFactory: async () => ({
       identity: async () => identity,
@@ -197,12 +224,14 @@ function rig(fault) {
     await adapter.verifyOwner();
     const owner = await adapter.captureOwner();
     await adapter.recheckOwner(owner);
-    await adapter.preflight({ publicRoot, volumeName });
-    await adapter.volumeAbsent(volumeName);
-    const volumeItem = await adapter.createVolume(volumeName);
+    await adapter.preflight({ publicRoot, volumeName: activeVolumeName,
+      ...(writer ? { invocationRoot } : {}) });
+    await adapter.volumeAbsent(activeVolumeName);
+    const volumeItem = await adapter.createVolume(activeVolumeName);
     await adapter.checkVolume(volumeItem);
     const transfer = await adapter.runPhase('transfer');
-    const createdItem = await adapter.runPhase('create');
+    const createdItem = await adapter.runPhase(activeConsumer);
+    if (writer) assert.equal(createdItem.rawOutput, '{"fixture":"canonical-output"}\n');
     await adapter.cleanupRemote([transfer, createdItem], volumeItem);
   };
   return { run, calls, waitTimeouts };
@@ -231,4 +260,18 @@ test('Docker and caller Compose overrides are denied before any dispatch', () =>
     finally { if (original === undefined) delete process.env[key];
       else process.env[key] = original; }
   }
+});
+
+test('fixed writer preparation adapter keeps checked read output and cleans only its original resources', async () => {
+  const item = rig(undefined, true); await item.run();
+  assert.equal(item.calls.filter(line => line.includes(' run --detach ')).length, 2);
+  assert.deepEqual(item.waitTimeouts, [80_000, 210_000]);
+  assert.equal(item.calls.filter(line => line.startsWith('volume create ')).length, 1);
+});
+
+test('writer preparation adapter denies ambiguous command and effective policy drift', async () => {
+  for (const fault of ['lost-transfer', 'lost-prepare', 'config-drift', 'network-replaced',
+    'volume-replaced', 'postgres-replaced', 'extra-cap', 'wrong-network',
+    'missing-nocopy', 'extra-mount', 'extra-reference', 'extra-stopped'])
+    await assert.rejects(rig(fault, true).run(), fault);
 });

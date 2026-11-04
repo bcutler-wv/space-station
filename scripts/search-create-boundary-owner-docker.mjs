@@ -8,7 +8,8 @@ import { runBoundedOwnerDockerCommand } from './search-owner-docker-command.mjs'
 import { operateSearchAdminCredentialsAlreadyJobLocked } from './search-admin-credential-core.mjs';
 import { verifyCreateBoundaryServiceConfig,
   verifyCreateIntentPrepareServiceConfig } from './search-create-boundary-service-config.mjs';
-import { verifyCreateApplyServiceConfig } from './search-create-apply-service-config.mjs';
+import { verifyCreateApplyServiceConfig,
+  verifyWriterRolePrepareServiceConfig } from './search-create-apply-service-config.mjs';
 import { canonicalAttestorValue } from './search-attestor-pure.mjs';
 import { equal, keys, sameStat, sameVolume, verifyOwnerContainerPolicy } from './search-owner-docker-policy.mjs';
 import { CreateBoundaryOwnerDiagnosticError } from './search-create-boundary-owner-diagnostic.mjs';
@@ -60,23 +61,28 @@ async function captureTransition(repository, uid, gid) {
 /** Fixed two-service Docker adapter; options are a private scripted-test seam. */
 function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationId,
   deadline, tick }, options = {}, kind = 'boundary') {
-  const intent = kind === 'intent', apply = kind === 'apply';
-  const names = apply ? { transfer: 'search-create-apply-transfer', create: 'search-create-index' } :
+  const intent = kind === 'intent', apply = kind === 'apply', writer = kind === 'writer-prepare';
+  const names = writer ? { transfer: 'search-writer-role-prepare-transfer',
+    prepare: 'search-writer-role-prepare' } :
+    apply ? { transfer: 'search-create-apply-transfer', create: 'search-create-index' } :
     { transfer: 'search-create-transfer',
       [intent ? 'prepare' : 'inspect']: intent ? 'search-create-intent-prepare' : 'search-create-boundary' };
   const phases = Object.keys(names);
-  const commands = apply ? { transfer: ['node', 'scripts/search-create-apply-transfer.mjs'],
+  const commands = writer ? { transfer: ['node', 'scripts/search-writer-role-prepare-transfer.mjs'],
+    prepare: ['node', 'scripts/search-writer-role-prepare.mjs'] } :
+    apply ? { transfer: ['node', 'scripts/search-create-apply-transfer.mjs'],
     create: ['node', 'scripts/search-create-apply-consumer.mjs'] } :
     { transfer: ['node', 'scripts/search-create-boundary-transfer.mjs'],
     [intent ? 'prepare' : 'inspect']: ['node',
       intent ? 'scripts/search-create-intent-prepare.mjs' : 'scripts/search-create-boundary.mjs'] };
-  const outputs = apply ? { transfer: 'Private create apply transfer completed.\n',
+  const outputs = writer ? { transfer: 'Private writer role preparation transfer completed.\n' } :
+    apply ? { transfer: 'Private create apply transfer completed.\n',
     create: 'Private create apply reached uuid_bound; search remains disabled.\n' } :
     { transfer: 'Private create boundary transfer completed.\n',
       inspect: 'Private create boundary evidence completed.\n' };
   if (Object.keys(process.env).some(key => key.startsWith('DOCKER_') ||
       key.startsWith('COMPOSE_') || key.startsWith('PG') ||
-      key.startsWith('STATION_CREATE_'))) fail();
+      key.startsWith('STATION_CREATE_') || key.startsWith('STATION_WRITER_PREPARE_'))) fail();
   const ownerFactory = options.ownerFactory ?? createSearchAdminDockerAdapter;
   const verifyCredentials = options.verifyCredentials ?? operateSearchAdminCredentialsAlreadyJobLocked;
   const credentialCapture = options.credentialCapture ?? captureTransition;
@@ -91,7 +97,8 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
     tick();
     const env = { ...process.env, ...trusted };
     for (const key of Object.keys(env)) if (key.startsWith('PG') || key.startsWith('COMPOSE_') ||
-        key.startsWith('STATION_CREATE_') && !Object.hasOwn(trusted, key)) delete env[key];
+        (key.startsWith('STATION_CREATE_') || key.startsWith('STATION_WRITER_PREPARE_')) &&
+          !Object.hasOwn(trusted, key)) delete env[key];
     if (ignoreOrphans) env.COMPOSE_IGNORE_ORPHANS = 'true';
     let result;
     try { result = await runCommand(args, env, timeoutMs); }
@@ -107,8 +114,10 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
     return result;
   };
   const compose = (args, timeoutMs) => docker(['compose', '-f', 'compose.yaml',
-    '-f', apply ? 'compose.search-create-apply.yaml' : 'compose.search-create-boundary.yaml', '-p', project,
-    '--profile', apply ? 'search-create-apply' : 'search-create-boundary', ...args], timeoutMs,
+    '-f', writer ? 'compose.search-writer-role-prepare.yaml' :
+      apply ? 'compose.search-create-apply.yaml' : 'compose.search-create-boundary.yaml', '-p', project,
+    '--profile', writer ? 'search-writer-role-prepare' :
+      apply ? 'search-create-apply' : 'search-create-boundary', ...args], timeoutMs,
   args[0] === 'run', args[0] === 'run');
   const inspect = async id => one((await docker(['container', 'inspect', id])).stdout);
   const inspectVolume = async name => one((await docker(['volume', 'inspect', name])).stdout);
@@ -200,14 +209,20 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
     },
     async preflight({ invocationRoot, publicRoot, volumeName: name }) {
       volumeName = name;
-      trusted = apply ? { ...trusted, STATION_CREATE_APPLY_PUBLIC_ROOT: publicRoot,
+      trusted = writer ? { ...trusted,
+        STATION_WRITER_PREPARE_PUBLIC_ROOT: publicRoot,
+        STATION_WRITER_PREPARE_INVOCATION_ROOT: invocationRoot,
+        STATION_WRITER_PREPARE_VOLUME_NAME: volumeName } :
+        apply ? { ...trusted, STATION_CREATE_APPLY_PUBLIC_ROOT: publicRoot,
         STATION_CREATE_APPLY_VOLUME_NAME: volumeName } :
         { ...trusted, STATION_CREATE_INVOCATION_ROOT: invocationRoot,
           STATION_CREATE_VOLUME_NAME: volumeName };
       const response = await compose(['config', '--format', 'json', ...Object.values(names)]);
       if (response.stderr !== '') fail();
       normalized = JSON.parse(response.stdout);
-      if (apply) verifyCreateApplyServiceConfig(normalized,
+      if (writer) verifyWriterRolePrepareServiceConfig(normalized,
+        { project, repository, invocationId, invocationRoot, publicRoot, volumeName });
+      else if (apply) verifyCreateApplyServiceConfig(normalized,
         { project, repository, invocationId, publicRoot, volumeName });
       else (intent ? verifyCreateIntentPrepareServiceConfig : verifyCreateBoundaryServiceConfig)(normalized,
         { project, repository, invocationId, invocationRoot, volumeName });
@@ -274,7 +289,8 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
       const id = sent.stdout.trim();
       checkedContainer(await inspect(id), phase, id, false);
       const waited = await docker(['container', 'wait', id],
-        phase === 'transfer' ? 80_000 : apply ? 330_000 : 90_000, false, true);
+        phase === 'transfer' ? 80_000 : apply ? 330_000 : writer ? 210_000 : 90_000,
+        false, true);
       if (waited.stderr !== '') fail('wait-stderr');
       if (waited.stdout !== '0\n') fail('wait-exit');
       const finished = await inspect(id);
@@ -282,17 +298,27 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
       const logs = await docker(['container', 'logs', id], 10_000, false, true);
       if (logs.stderr !== '') fail('logs-stderr');
       let projection;
-      if (phase === 'prepare') {
+      if (phase === 'prepare' && !writer) {
         if (!logs.stdout.endsWith('\n') || Buffer.byteLength(logs.stdout) > 256 * 1024) fail('logs-stdout');
         try {
           projection = JSON.parse(logs.stdout.slice(0, -1));
           if (`${canonicalAttestorValue(projection, 256 * 1024).bytes.toString('utf8')}\n` !== logs.stdout)
             fail('logs-stdout');
         } catch { fail('logs-stdout'); }
+      } else if (writer && phase === 'prepare') {
+        if (!logs.stdout.endsWith('\n') || Buffer.byteLength(logs.stdout) > 256 * 1024)
+          fail('logs-stdout');
+        try {
+          const value = JSON.parse(logs.stdout.slice(0, -1));
+          if (`${canonicalAttestorValue(value, 256 * 1024).bytes.toString('utf8')}\n` !==
+              logs.stdout) fail('logs-stdout');
+        } catch { fail('logs-stdout'); }
       } else if (logs.stdout !== outputs[phase]) fail('logs-stdout');
       return { id, phase, image: finished.Image, created: finished.Created,
         labels: finished.Config.Labels, startedAt: finished.State.StartedAt,
-        finishedAt: finished.State.FinishedAt, ...(phase === 'prepare' ? { projection } : {}) };
+        finishedAt: finished.State.FinishedAt,
+        ...(phase === 'prepare' && writer ? { rawOutput: logs.stdout } :
+          phase === 'prepare' ? { projection } : {}) };
     },
     async cleanupRemote(containers, capturedVolume) {
       if (!Array.isArray(containers) || !equal(containers.map(x => x.phase), phases)) fail();
@@ -337,4 +363,9 @@ export function createIntentPrepareDockerAdapter(input, options = {}) {
 /** Fixed approved create delivery; the owner supplies the original sealed sources. */
 export function createApplyDockerAdapter(input, options = {}) {
   return fixedBoundaryDockerAdapter(input, options, 'apply');
+}
+
+/** Fixed writer-role read-only proposal adapter; no caller-selected command. */
+export function createWriterRolePrepareDockerAdapter(input, options = {}) {
+  return fixedBoundaryDockerAdapter(input, options, 'writer-prepare');
 }

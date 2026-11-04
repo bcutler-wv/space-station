@@ -5,6 +5,7 @@ import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalAttestorValue } from './search-attestor-pure.mjs';
 import { sealCreateIntent } from './search-create-intent-pure.mjs';
+import { parseWriterRolePrepareInvocation } from './search-writer-role-prepare-input.mjs';
 
 const fail = () => { throw Error('Private create apply transfer failed.'); };
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid &&
@@ -42,17 +43,19 @@ async function syncDir(name) {
 }
 
 /** Fixed network-free copy of the sealed approval and exact prior public inventory. */
-export async function transferCreateApplyInputs(input, fixture = {}) {
+async function transferFixedInputs(input, fixture = {}, rolePrepare = false) {
   try {
     if (Object.keys(input).sort().join('|') !==
-        'bindingFile|intentFile|passwordFile|publicRoot|volumeRoot' ||
+        (rolePrepare ? 'bindingFile|intentFile|invocationFile|passwordFile|publicRoot|volumeRoot' :
+          'bindingFile|intentFile|passwordFile|publicRoot|volumeRoot') ||
         Object.values(input).some(name => typeof name !== 'string' || !path.isAbsolute(name)) ||
         fixture.targetUid !== undefined && fixture.fixture !== true) fail();
     const uid = (await lstat(input.intentFile)).uid;
     if (!fixture.fixture && ![1000, 1001].includes(uid)) fail();
     const target = fixture.targetUid ?? 1000;
     const inputParents = new Map();
-    for (const name of [input.intentFile, input.bindingFile, input.passwordFile]) {
+    for (const name of [input.intentFile, input.bindingFile, input.passwordFile,
+      ...(rolePrepare ? [input.invocationFile] : [])]) {
       const parent = path.dirname(name);
       inputParents.set(parent, await directory(parent, fixture.creatorUid ?? 0, 0o755));
       if ((await readdir(parent)).join('|') !== path.basename(name)) fail();
@@ -60,6 +63,7 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
     const intentFile = await capture(input.intentFile, uid, 0o400, 256 * 1024);
     const bindingFile = await capture(input.bindingFile, uid, 0o400, 1024);
     const passwordFile = await capture(input.passwordFile, uid, [0o400, 0o600], 43);
+    const invocationFile = rolePrepare ? await capture(input.invocationFile, uid, 0o400, 2048) : null;
     const secret = passwordFile.bytes.toString('utf8');
     if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || Buffer.from(secret, 'base64url').length !== 32) fail();
     const intent = JSON.parse(intentFile.bytes.toString('utf8'));
@@ -76,6 +80,17 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
         dispatchId: intent.dispatchId, ownerId: intent.ownerId });
     if (sealed.sha256 !== binding.approvedSha256 ||
         !canonicalAttestorValue(sealed.intent).bytes.equals(intentFile.bytes)) fail();
+    if (rolePrepare) {
+      const invocation = parseWriterRolePrepareInvocation(invocationFile.bytes);
+      if (invocation.createApprovedSha256 !== sealed.sha256 ||
+          invocation.originalCreateBindingSha256 !== sha(bindingFile.bytes) ||
+          invocation.project !== intent.project ||
+          invocation.databaseOid !== intent.databaseOid ||
+          invocation.systemIdentifier !== intent.systemIdentifier ||
+          [invocation.dispatchId, invocation.ownerId, invocation.invocationId].some(id =>
+            id === binding.dispatchId || id === binding.ownerId ||
+            id === binding.invocationId)) fail();
+    }
     const files = intent.publicFiles;
     const dirs = new Set(['']);
     for (const row of files) {
@@ -110,8 +125,10 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
       await mkdir(name, { mode: 0o700 });
       targetDirs.push(name);
     }
-    const output = new Map([['intent.json', intentFile], ['binding.json', bindingFile],
+    const output = new Map([[rolePrepare ? 'create-intent.json' : 'intent.json', intentFile],
+      [rolePrepare ? 'create-binding.json' : 'binding.json', bindingFile],
       ['transition.password', passwordFile],
+      ...(rolePrepare ? [['invocation.json', invocationFile]] : []),
       ...[...publicFiles].map(([name, item]) => [`public/${name}`, item])]);
     for (const [relative, item] of output) {
       await fixture.beforeWrite?.(relative);
@@ -126,11 +143,13 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
       } finally { await handle.close(); }
       await syncDir(path.dirname(name));
     }
-    for (const item of [intentFile, bindingFile, passwordFile, ...publicFiles.values()]) {
+    for (const item of [intentFile, bindingFile, passwordFile,
+      ...(rolePrepare ? [invocationFile] : []), ...publicFiles.values()]) {
       const later = await capture(item.name, uid,
         item.name === input.passwordFile ? [0o400, 0o600] : 0o400,
         item.name === input.passwordFile ? 43 : item.name === input.bindingFile ? 1024 :
-          item.name === input.intentFile ? 256 * 1024 : 16_384);
+          item.name === input.intentFile ? 256 * 1024 :
+            item.name === input.invocationFile ? 2048 : 16_384);
       if (!same(item.stat, later.stat) || !item.bytes.equals(later.bytes)) fail();
     }
     for (const [name, stat] of sourceDirs) {
@@ -144,7 +163,8 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
     }
     for (const [name, stat] of inputParents) {
       if (!same(stat, await directory(name, fixture.creatorUid ?? 0, 0o755))) fail();
-      const source = [input.intentFile, input.bindingFile, input.passwordFile]
+      const source = [input.intentFile, input.bindingFile, input.passwordFile,
+        ...(rolePrepare ? [input.invocationFile] : [])]
         .find(file => path.dirname(file) === name);
       if ((await readdir(name)).join('|') !== path.basename(source)) fail();
     }
@@ -166,16 +186,28 @@ export async function transferCreateApplyInputs(input, fixture = {}) {
     }
     await directory(input.volumeRoot, target, 0o700);
     if ((await readdir(input.volumeRoot)).sort().join('|') !==
-        'binding.json|intent.json|public|transition.password') fail();
+        (rolePrepare ? 'create-binding.json|create-intent.json|invocation.json|public|transition.password' :
+          'binding.json|intent.json|public|transition.password')) fail();
     for (const [relative, item] of output) {
       const copied = await capture(path.join(input.volumeRoot, relative), target, 0o400,
-        relative === 'transition.password' ? 43 : relative === 'binding.json' ? 1024 :
-          relative === 'intent.json' ? 256 * 1024 : 16_384);
+        relative === 'transition.password' ? 43 :
+          ['binding.json', 'create-binding.json'].includes(relative) ? 1024 :
+            ['intent.json', 'create-intent.json'].includes(relative) ? 256 * 1024 :
+              relative === 'invocation.json' ? 2048 : 16_384);
       if (!copied.bytes.equals(item.bytes)) fail();
     }
     await syncDir(input.volumeRoot);
     return { approvedSha256: binding.approvedSha256, invocationId: binding.invocationId };
   } catch { fail(); }
+}
+
+export function transferCreateApplyInputs(input, fixture = {}) {
+  return transferFixedInputs(input, fixture);
+}
+
+/** One additional fixed network-free transfer; no caller-selected mode. */
+export function transferWriterRolePrepareInputs(input, fixture = {}) {
+  return transferFixedInputs(input, fixture, true);
 }
 
 export const productionCreateApplyTransferPaths = Object.freeze({
@@ -184,4 +216,13 @@ export const productionCreateApplyTransferPaths = Object.freeze({
   bindingFile: '/run/create-apply-binding/binding.json',
   publicRoot: '/run/create-apply-public',
   volumeRoot: '/run/search-create-apply',
+});
+
+export const productionWriterRolePrepareTransferPaths = Object.freeze({
+  passwordFile: '/run/writer-prepare-password/password',
+  intentFile: '/run/writer-prepare-intent/create-intent.json',
+  bindingFile: '/run/writer-prepare-binding/create-binding.json',
+  invocationFile: '/run/writer-prepare-invocation/invocation.json',
+  publicRoot: '/run/writer-prepare-public',
+  volumeRoot: '/run/search-writer-role-prepare',
 });
