@@ -119,3 +119,10 @@ registry row and microtimestamp queries, engine open/observe, E0b/admin/source
 files, host resource inspection and final disabled-stage/profile assertions.
 No data or error text is forwarded, no baseline assertion or runtime cap is
 relaxed, and the next Ubuntu result is required to identify the cause.
+
+That rerun localized all four failures to the PostgreSQL host-inspection
+substep. The fixture requested the full container inspection, including a
+password in `Config.Env`, which its unchanged secret-output check rejected.
+Version 0.79.2 requests only ID, creation time and admin-network IP at each
+of the four PostgreSQL probes. Source and local tests pass independently of
+the pending Ubuntu preparation gate; no runtime acceptance is claimed.

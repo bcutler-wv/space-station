@@ -19,6 +19,7 @@ import { buildExpectedSecurityPolicy, compareObservedSecurityCollections } from
   '../../packages/search/dist/opensearch-generation-policy.js';
 import { writerPrecreateDiagnostic } from
   '../support/search-create-boundary-delivery-diagnostic-filter.mjs';
+import { inspectWriterRolePostgres } from '../support/search-writer-role-postgres-probe.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const project = path.basename(repository);
@@ -230,9 +231,9 @@ async function hostResources(diagnostic) {
       driver: item.Driver, options: item.Options }];
   })));
   diagnostic?.step('host-postgres');
-  const pg = JSON.parse(await docker(['container', 'inspect', postgresId]))[0];
-  assert.equal(pg.Id, postgresId);
-  return { postgres: { id: pg.Id, created: pg.Created }, networks, fixedVolumes };
+  const pg = await inspectWriterRolePostgres(docker, postgresId, project);
+  assert.equal(pg.id, postgresId);
+  return { postgres: { id: pg.id, created: pg.created }, networks, fixedVolumes };
 }
 const sourceNames = ['ca.pem', 'admin.pem', 'admin.key', 'indexer.pem', 'query.pem'];
 async function sources() {
@@ -522,8 +523,8 @@ const roleConfig = await sql(`SELECT coalesce(array_to_string(rolconfig,','),'')
 assert.match(roleConfig, /default_transaction_read_only=on/);
 const transitionPassword = (await readFile(path.join(repository,
   '.cache/search-db/initial-v1/transition.password'), 'utf8')).trim();
-const postgresProbe = JSON.parse(await docker(['container', 'inspect', postgresId]))[0];
-const adminIp = postgresProbe.NetworkSettings.Networks[`${project}_search_admin_db`]?.IPAddress;
+const postgresProbe = await inspectWriterRolePostgres(docker, postgresId, project);
+const adminIp = postgresProbe.adminIp;
 assert.match(adminIp, /^(?:\d{1,3}\.){3}\d{1,3}$/);
 const transitionQuery = async query => command('docker', ['exec',
   '-e', `PGPASSWORD=${transitionPassword}`, postgresId, 'psql', '-X', '-h', adminIp,
@@ -1072,13 +1073,13 @@ const terminalFactory = input => {
       if (phase !== 'transfer') return value;
       if (variant === 'default') {
         const previous = postgresId;
-        const prior = JSON.parse(await docker(['container', 'inspect', previous]))[0];
+        const prior = await inspectWriterRolePostgres(docker, previous, project);
         await docker(['compose', '--profile', 'search', 'up', '-d', '--wait',
           '--force-recreate', '--no-deps', 'postgres'], 120_000);
         postgresId = (await docker(['compose', 'ps', '-q', 'postgres'])).trim();
-        const replacement = JSON.parse(await docker(['container', 'inspect', postgresId]))[0];
+        const replacement = await inspectWriterRolePostgres(docker, postgresId, project);
         assert.notEqual(postgresId, previous);
-        assert.notEqual(replacement.Created, prior.Created);
+        assert.notEqual(replacement.created, prior.created);
         assert.equal(await sql('SELECT 1'), '1');
         terminalEvidence = { original: previous, replacement: postgresId };
       } else if (variant === 'runner') {
