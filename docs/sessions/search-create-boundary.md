@@ -191,3 +191,11 @@ only after transfer, apply and owned cleanup are durably confirmed and the
 callback returns normally. Append/fsync attempts, callback failure after
 cleanup and uncertain release remain fail-closed in local filesystem tests.
 No owner adapter or role-delivery runtime gate is connected.
+
+Version 0.86.0 adds only the injected writer-role owner core. It checks the
+approved pending and original-create evidence, stages prior public PEMs,
+passes one fixed command to transfer and apply, and requires a callback fence
+immediately before each eventual container start. Exact phase results and
+owned cleanup precede normal lock release. Local real-file legacy/v2 and
+fault fixtures pass; production Docker execution, CLI and Ubuntu delivery
+review remain separate.

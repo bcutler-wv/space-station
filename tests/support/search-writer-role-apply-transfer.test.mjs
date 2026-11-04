@@ -18,6 +18,9 @@ import { transferWriterRoleApplyInputs } from '../../scripts/search-writer-role-
 import { openWriterRoleApplyInput } from '../../scripts/search-writer-role-apply-input.mjs';
 import { runFixedWriterRoleConsumer } from '../../scripts/search-writer-role-consumer-wrapper.mjs';
 import { issuedWriterRoleRequest } from '../../packages/search/dist/opensearch-writer-role-contract.js';
+import { runWriterRoleApplyOwner } from '../../scripts/search-writer-role-apply-owner-core.mjs';
+import { fixedWriterRoleApplyCommand } from '../../scripts/search-writer-role-apply-service-config.mjs';
+import { withSearchAdminJobLock } from '../../scripts/search-admin-job-lock.mjs';
 
 const token = '11111111-1111-4111-8111-111111111111';
 const transitionToken = '22222222-2222-4222-8222-222222222222';
@@ -181,6 +184,223 @@ async function openCopied(f) {
   return openWriterRoleApplyInput(f.paths.volumeRoot, f.scratch,
     { uid: process.getuid(), gid: process.getgid() });
 }
+
+async function ownerFixture(t, v2 = false) {
+  const f = await fixture(t, v2);
+  const cache = path.join(f.root, '.cache');
+  if (v2) {
+    const generation = path.join(cache, 'search-generations', priorToken.replaceAll('-', ''));
+    await mkdir(generation, { recursive: true, mode: 0o700 });
+    for (const role of ['writer', 'query']) await writeFile(path.join(generation, `${role}.pem`),
+      await readFile(path.join(f.root, `${role}.pem`)), { mode: 0o600 });
+  }
+  for (const name of ['search-db', 'search-create-intent', 'search-create-apply',
+    'search-writer-role-intent']) await mkdir(path.join(cache, name),
+    { recursive: true, mode: 0o700 });
+  const files = { role: path.join(cache, 'search-writer-role-intent/pending.json'),
+    create: path.join(cache, 'search-create-intent/pending.json'),
+    oldBinding: path.join(cache, 'search-create-apply/binding.json'),
+    newBinding: path.join(cache, 'search-writer-role-apply/binding.json'),
+    lock: path.join(cache, 'search-db/.job-operation.lock') };
+  for (const [name, value] of [[files.role, f.role.intent],
+    [files.create, f.create.intent], [files.oldBinding, f.oldBinding]])
+    await writeFile(name, canonical(value), { mode: 0o400 });
+  const i = f.role.intent;
+  const args = [f.role.sha256, String(i.revision), i.transitionToken,
+    i.sourceToken, i.sourceIndex, i.sourceUuid, i.candidateToken,
+    i.candidateIndex, i.candidateUuid];
+  return { ...f, files, args };
+}
+
+function ownerAdapter(f, events, fault = {}) {
+  const original = { project: path.basename(f.root), databaseOid: 16384,
+    systemIdentifier: '123' };
+  let retainedCommand, volume;
+  const effect = name => { events.push(name); if (fault.at === name) throw Error('lost result'); };
+  return async () => ({
+    async verifyOwner() { effect('verify-owner'); },
+    async captureOwner() { effect('capture-owner'); return { ...original }; },
+    async recheckOwner(before) {
+      events.push('recheck-owner');
+      assert.deepEqual(before, original);
+      if (fault.ownerDrift) throw Error('owner drift');
+    },
+    async recheckInfrastructure() { effect('infrastructure'); },
+    async preflight(input) {
+      effect('preflight');
+      assert.equal(input.publicRoot, path.join(f.root, '.cache/search-create-apply-public',
+        input.command[11]));
+      assert.equal(input.volumeName,
+        `${original.project}_search_writer_apply_${input.command[11].replaceAll('-', '')}`);
+      retainedCommand = input.command;
+      assert.deepEqual(retainedCommand, fixedWriterRoleApplyCommand([
+        ...f.args, retainedCommand[11], original.project, '16384', '123']));
+    },
+    async volumeAbsent() { effect('volume-absent'); },
+    async createVolume(name) { effect('create-volume');
+      volume = { name, id: '5'.repeat(64) }; return volume; },
+    async checkVolume(value) { events.push('check-volume'); assert.deepEqual(value, volume); },
+    async runPhase(phase, beforeStart) {
+      effect(`created-${phase}`);
+      await fault.beforeStart?.(phase);
+      if (fault.skipBeforeStart !== phase) {
+        try { await beforeStart(); }
+        catch (error) {
+          if (!fault.onFenceFailure) throw error;
+          await fault.onFenceFailure(phase);
+        }
+      }
+      if (fault.duplicateBeforeStart === phase) await beforeStart();
+      effect(`start-${phase}`);
+      effect(`run-${phase}`);
+      await fault.afterPhase?.(phase);
+      if (phase === 'apply') assert.deepEqual(retainedCommand,
+        fixedWriterRoleApplyCommand([...f.args, retainedCommand[11], original.project, '16384', '123']));
+      return { id: phase === 'transfer' ? 'a'.repeat(64) : 'b'.repeat(64), phase,
+        exitCode: 0, stdout: phase === 'transfer' ?
+          'Private writer role apply transfer completed.\n' :
+          'Private writer role apply reached writer_role_attested; search remains disabled.\n',
+        stderr: fault.stderrAt === phase ? 'unexpected' : '',
+        ...(fault.idOverride ? { id: fault.idOverride } : {}),
+        ...(fault.stdoutAt === phase ? { stdout: 'false success' } : {}) };
+    },
+    async cleanupRemote(items, value) {
+      assert.deepEqual(items.map(item => item.phase), ['transfer', 'apply']);
+      assert.deepEqual(value, volume); effect('cleanup-remote');
+    },
+  });
+}
+
+test('real-file constructor-approved owner completes legacy and v2 one-shot delivery', async t => {
+  for (const v2 of [false, true]) await t.test(v2 ? 'retained v2' : 'legacy', async child => {
+    const f = await ownerFixture(child, v2);
+    const events = [];
+    assert.deepEqual(await runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, events) }),
+    { state: 'writer_role_attested', ready: false });
+    assert.deepEqual(events.filter(item => item.startsWith('run-')),
+      ['run-transfer', 'run-apply']);
+    assert.equal(await readFile(f.files.newBinding, 'utf8').then(() => true), true);
+    await assert.rejects(lstat(f.files.lock), { code: 'ENOENT' });
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, []) }));
+  });
+});
+
+test('created transfer or apply cannot start after original file or binding inode drift', async t => {
+  for (const [phaseToChange, name] of [['transfer', 'role'], ['transfer', 'oldBinding'],
+    ['transfer', 'newBinding'], ['apply', 'role']]) {
+    const f = await ownerFixture(t);
+    const events = [];
+    const adapter = ownerAdapter(f, events, { beforeStart: async phase => {
+      if (phase !== phaseToChange) return;
+      const original = f.files[name];
+      const bytes = await readFile(original);
+      await rename(original, path.join(f.root, `moved-${name}`));
+      await writeFile(original, bytes, { mode: 0o400 });
+    } });
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: adapter }), { message: 'Private writer role apply owner failed.' });
+    assert.ok(events.includes(`created-${phaseToChange}`));
+    assert.deepEqual(events.filter(event => event.startsWith('start-')),
+      phaseToChange === 'apply' ? ['start-transfer'] : []);
+    assert.equal(await lstat(f.files.lock).then(() => true), true);
+    assert.equal(await lstat(f.files.newBinding).then(() => true), true);
+  }
+});
+
+test('owner retains the operation and consumed binding on lost phase or cleanup results', async t => {
+  for (const [name, fault, starts] of [
+    ['transfer result lost', { at: 'run-transfer' }, ['start-transfer']],
+    ['apply result lost', { at: 'run-apply' }, ['start-transfer', 'start-apply']],
+    ['apply response differs', { stdoutAt: 'apply' }, ['start-transfer', 'start-apply']],
+    ['cleanup result lost', { at: 'cleanup-remote' }, ['start-transfer', 'start-apply']],
+    ['apply duplicates transfer id', { idOverride: 'a'.repeat(64) },
+      ['start-transfer', 'start-apply']],
+  ]) await t.test(name, async child => {
+    const f = await ownerFixture(child);
+    const events = [];
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, events, fault) }),
+    { message: 'Private writer role apply owner failed.' });
+    assert.deepEqual(events.filter(event => event.startsWith('start-')), starts);
+    assert.equal(await lstat(f.files.lock).then(() => true), true);
+    assert.equal(await lstat(f.files.newBinding).then(() => true), true);
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, []) }));
+  });
+});
+
+test('owner requires the inspected pre-start fence and original host identity', async t => {
+  for (const [name, fault, starts] of [
+    ['missing fence', { skipBeforeStart: 'transfer' }, ['start-transfer']],
+    ['duplicate fence', { duplicateBeforeStart: 'transfer' }, []],
+    ['changed original owner', { ownerDrift: true }, []],
+    ['lost infrastructure check', { at: 'infrastructure' }, []],
+  ]) await t.test(name, async child => {
+    const f = await ownerFixture(child);
+    const events = [];
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, events, fault) }),
+    { message: 'Private writer role apply owner failed.' });
+    assert.deepEqual(events.filter(event => event.startsWith('start-')), starts);
+    assert.equal(await lstat(f.files.lock).then(() => true), true);
+    assert.equal(await lstat(f.files.newBinding).then(() => true), true);
+  });
+});
+
+test('caught pre-start fence failure cannot be converted into an accepted phase response', async t => {
+  const f = await ownerFixture(t);
+  const events = [];
+  const original = f.files.role, moved = path.join(f.root, 'temporarily-moved-role');
+  await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+    uid: process.getuid(), gid: process.getgid(), args: f.args,
+    adapterFactory: ownerAdapter(f, events, {
+      beforeStart: async phase => {
+        if (phase === 'transfer') {
+          const bytes = await readFile(original);
+          await rename(original, moved);
+          await writeFile(original, bytes, { mode: 0o400 });
+        }
+      },
+      onFenceFailure: async () => {
+        await rm(original);
+        await rename(moved, original);
+      },
+    }) }), { message: 'Private writer role apply owner failed.' });
+  assert.deepEqual(events.filter(event => event.startsWith('start-')), ['start-transfer']);
+  assert.equal(await lstat(f.files.lock).then(() => true), true);
+  assert.equal(await lstat(f.files.newBinding).then(() => true), true);
+});
+
+test('owner cannot claim success when original lock release is uncertain', async t => {
+  const f = await ownerFixture(t);
+  const events = [];
+  const before = process.env.STATION_JOB_LOCK_FIXTURE;
+  process.env.STATION_JOB_LOCK_FIXTURE = '1';
+  try {
+    await assert.rejects(runWriterRoleApplyOwner({ repository: f.root,
+      uid: process.getuid(), gid: process.getgid(), args: f.args,
+      adapterFactory: ownerAdapter(f, events),
+      lock: (options, work) => withSearchAdminJobLock({ ...options,
+        fixtureFaultAt: 'before-release-rm' }, work) }),
+    { message: 'Private writer role apply owner failed.' });
+  } finally {
+    if (before === undefined) delete process.env.STATION_JOB_LOCK_FIXTURE;
+    else process.env.STATION_JOB_LOCK_FIXTURE = before;
+  }
+  assert.deepEqual(events.filter(event => event.startsWith('start-')),
+    ['start-transfer', 'start-apply']);
+  assert.equal(events.filter(event => event === 'cleanup-remote').length, 1);
+  assert.equal(await lstat(f.files.lock).then(() => true), true);
+  assert.equal(await lstat(f.files.newBinding).then(() => true), true);
+});
 
 test('fixed consumer wrapper runs with the actual copied reader and real public PEM capture', async t => {
   const f = await fixture(t);
