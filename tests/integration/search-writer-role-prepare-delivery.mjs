@@ -17,6 +17,8 @@ import { verifyProfile } from '../../packages/search/dist/opensearch-runtime.js'
 import { verifyV2IndexProfile } from '../../packages/search/dist/opensearch-v2-profile.js';
 import { buildExpectedSecurityPolicy, compareObservedSecurityCollections } from
   '../../packages/search/dist/opensearch-generation-policy.js';
+import { writerPrecreateDiagnostic } from
+  '../support/search-create-boundary-delivery-diagnostic-filter.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const project = path.basename(repository);
@@ -102,14 +104,18 @@ async function databaseIdentity() {
   assert.equal(owner, 'station');
   return { systemIdentifier, databaseOid: Number(databaseOid), owner };
 }
-async function registry() {
-  const rows = JSON.parse(await sql(`SELECT json_build_object(
+async function registry(diagnostic) {
+  diagnostic?.step('registry-rows-command');
+  const rowText = await sql(`SELECT json_build_object(
     'control',(SELECT row_to_json(c) FROM search_generation_control c WHERE singleton=1),
     'history',(SELECT coalesce(json_agg(row_to_json(h) ORDER BY generation_token),'[]'::json)
       FROM search_generation_history h),
     'dispatch',(SELECT coalesce(json_agg(row_to_json(d) ORDER BY generation_token,operation),'[]'::json)
-      FROM search_generation_dispatch d))`));
-  const microseconds = JSON.parse(await sql(`SELECT json_build_object(
+      FROM search_generation_dispatch d))`);
+  diagnostic?.step('registry-rows-parse');
+  const rows = JSON.parse(rowText);
+  diagnostic?.step('registry-micro-command');
+  const microText = await sql(`SELECT json_build_object(
     'control',(SELECT to_char(updated_at AT TIME ZONE 'UTC',
       'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') FROM search_generation_control WHERE singleton=1),
     'history',(SELECT coalesce(json_agg(json_build_array(generation_token,
@@ -117,25 +123,38 @@ async function registry() {
       ORDER BY generation_token),'[]'::json) FROM search_generation_history),
     'dispatch',(SELECT coalesce(json_agg(json_build_array(generation_token,operation,
       to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
-      ORDER BY generation_token,operation),'[]'::json) FROM search_generation_dispatch))`));
+      ORDER BY generation_token,operation),'[]'::json) FROM search_generation_dispatch))`);
+  diagnostic?.step('registry-micro-parse');
+  const microseconds = JSON.parse(microText);
+  diagnostic?.step('registry-micro-shape');
   assert.match(microseconds.control, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
   for (const section of ['history', 'dispatch'])
     for (const row of microseconds[section])
       assert.match(row.at(-1), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
   return { ...rows, microseconds };
 }
-async function engine(fromSource = false) {
+async function engine(fromSource = false, diagnostic) {
   const script = String.raw`import {openSearchAdminObserver} from '/app/packages/search/dist/opensearch-runtime.js';
     const o=await openSearchAdminObserver({endpoint:'https://opensearch:9200',identityDir:'/run/station-admin'});
+    if(process.env.STATION_WRITER_PRECREATE_TRACE==='1')process.stderr.write('STATION_WRITER_PRECREATE_OBSERVE\n');
     try {const v=await o.observe();process.stdout.write(JSON.stringify(v));}
     finally {await o.close();}`;
-  return JSON.parse(await docker(['run', '--rm', '--pull', 'never', '--network',
+  const args = ['run', '--rm', '--pull', 'never', '--network',
     `${project}_search_internal`, '--label', `station.create.gate=${project}`,
     '--read-only', '--cap-drop', 'ALL', '--user', fromSource ? `${uid}:${gid}` : '1000:1000',
+    ...(diagnostic ? ['-e', 'STATION_WRITER_PRECREATE_TRACE=1'] : []),
     ...(fromSource ? ['ca.pem', 'admin.pem', 'admin.key'].flatMap(name =>
       ['--mount', `type=bind,source=${path.join(sourceRoot, name)},target=/run/station-admin/${name},readonly`]) :
       ['--mount', `type=volume,source=${project}_search_admin_certs,target=/run/station-admin,readonly`]),
-    `${project}-search-writer-role-prepare`, 'node', '--input-type=module', '-e', script], 45_000));
+    `${project}-search-writer-role-prepare`, 'node', '--input-type=module', '-e', script];
+  if (!diagnostic) return JSON.parse(await docker(args, 45_000));
+  diagnostic.step('engine-open');
+  const result = await command('docker', args, ownerEnv, 45_000);
+  if (result.stderr.split('\n').includes('STATION_WRITER_PRECREATE_OBSERVE'))
+    diagnostic.step('engine-observe');
+  assert.equal(result.code, 0); assert.equal(result.signal, null);
+  diagnostic.step('engine-parse');
+  return JSON.parse(result.stdout);
 }
 async function rawEngineDigest() {
   const script = String.raw`import {createHash} from 'node:crypto';
@@ -168,40 +187,49 @@ async function rawEngineDigest() {
   assert.match(value, /^[0-9a-f]{64}$/);
   return value;
 }
-async function state() {
+async function state(diagnostic) {
   const script = String.raw`const fs=require('node:fs'),c=require('node:crypto');
     const root='/state'; const rows=fs.readdirSync(root).sort().map(n=>{const s=fs.lstatSync(root+'/'+n);
       return[n,s.uid,s.gid,s.mode&0o777,s.ino,s.isFile()?c.createHash('sha256').update(fs.readFileSync(root+'/'+n)).digest('hex'):null]});
     process.stdout.write(JSON.stringify(rows));`;
-  return JSON.parse(await docker(['run', '--rm', '--pull', 'never', '--network', 'none',
+  diagnostic?.step('e0b-command');
+  const value = await docker(['run', '--rm', '--pull', 'never', '--network', 'none',
     '--label', `station.create.gate=${project}`, '--user', '1000:1000', '--mount',
     `type=volume,source=${project}_search_security_state,target=/state,readonly`,
-    `${project}-search-writer-role-prepare`, 'node', '-e', script]));
+    `${project}-search-writer-role-prepare`, 'node', '-e', script]);
+  diagnostic?.step('e0b-parse');
+  return JSON.parse(value);
 }
-async function adminFiles() {
+async function adminFiles(diagnostic) {
   const script = String.raw`const fs=require('node:fs'),c=require('node:crypto');
     const root='/run/station-admin';process.stdout.write(JSON.stringify(['ca.pem','admin.pem','admin.key'].map(n=>{
       const s=fs.lstatSync(root+'/'+n);return[n,s.uid,s.gid,s.mode&0o777,s.ino,
         c.createHash('sha256').update(fs.readFileSync(root+'/'+n)).digest('hex')]})));`;
-  return JSON.parse(await docker(['run', '--rm', '--pull', 'never', '--network', 'none',
+  diagnostic?.step('admin-command');
+  const value = await docker(['run', '--rm', '--pull', 'never', '--network', 'none',
     '--label', `station.create.gate=${project}`, '--user', '1000:1000', '--mount',
     `type=volume,source=${project}_search_admin_certs,target=/run/station-admin,readonly`,
-    `${project}-search-writer-role-prepare`, 'node', '-e', script]));
+    `${project}-search-writer-role-prepare`, 'node', '-e', script]);
+  diagnostic?.step('admin-parse');
+  return JSON.parse(value);
 }
-async function hostResources() {
+async function hostResources(diagnostic) {
   const networkNames = [`${project}_search_admin_db`, `${project}_search_internal`, 'none'];
   const volumeNames = [`${project}_search_admin_certs`, `${project}_search_security_state`];
+  diagnostic?.step('host-networks');
   const networks = Object.fromEntries(await Promise.all(networkNames.map(async name => {
     const item = JSON.parse(await docker(['network', 'inspect', name]))[0];
     assert.match(item.Id, fullId);
     return [name, { id: item.Id, internal: item.Internal, labels: item.Labels }];
   })));
+  diagnostic?.step('host-volumes');
   const fixedVolumes = Object.fromEntries(await Promise.all(volumeNames.map(async name => {
     const item = JSON.parse(await docker(['volume', 'inspect', name]))[0];
     assert.equal(item.Name, name);
     return [name, { created: item.CreatedAt, labels: item.Labels,
       driver: item.Driver, options: item.Options }];
   })));
+  diagnostic?.step('host-postgres');
   const pg = JSON.parse(await docker(['container', 'inspect', postgresId]))[0];
   assert.equal(pg.Id, postgresId);
   return { postgres: { id: pg.Id, created: pg.Created }, networks, fixedVolumes };
@@ -223,11 +251,19 @@ function sameSources(actual, expected) {
       assert.equal(actual[i][key], expected[i][key]);
   }
 }
-async function snapshot() {
-  return { registry: await registry(), engine: await engine(), state: await state(),
-    admin: await adminFiles(), sources: await sources(), host: await hostResources() };
+async function snapshot(diagnostic) {
+  const currentRegistry = await registry(diagnostic);
+  const currentEngine = await engine(false, diagnostic);
+  const currentState = await state(diagnostic);
+  const currentAdmin = await adminFiles(diagnostic);
+  diagnostic?.step('sources');
+  const currentSources = await sources();
+  const host = await hostResources(diagnostic);
+  return { registry: currentRegistry, engine: currentEngine, state: currentState,
+    admin: currentAdmin, sources: currentSources, host };
 }
-function checkBeforeCreate(value) {
+function checkBeforeCreate(value, diagnostic) {
+  diagnostic?.step('baseline-stage');
   assert.equal(value.registry.control.stage, 'disabled_intent');
   assert.equal(value.registry.control.revision, 3);
   assert.equal(value.registry.control.publication_enabled, false);
@@ -235,12 +271,14 @@ function checkBeforeCreate(value) {
   assert.equal(value.registry.dispatch.length, 0);
   assert.ok(value.engine.indexes['station-mail-v1']);
   assert.equal(Object.hasOwn(value.engine.indexes, candidate), false);
+  diagnostic?.step('baseline-profile');
   assert.equal(verifyProfile({ 'station-mail-v1': value.engine.indexes['station-mail-v1'] }),
     value.registry.history.find(row => row.generation_token === 'legacy-v1').index_uuid);
 }
-checkpoint = 'precreate-baseline';
-const precreate = await snapshot();
-checkBeforeCreate(precreate);
+const precreateDiagnostic = writerPrecreateDiagnostic(value => { checkpoint = value; });
+const precreate = await snapshot(precreateDiagnostic);
+checkBeforeCreate(precreate, precreateDiagnostic);
+precreateDiagnostic.restore();
 checkpoint = 'create-intent';
 const intentResult = await command('node', ['scripts/search-create-intent-owner.mjs'], ownerEnv, 245_000);
 assert.equal(intentResult.code, 0); assert.equal(intentResult.stderr, '');

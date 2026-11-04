@@ -111,3 +111,11 @@ constructor-issued role contract before admin TLS file reads, uses one bounded
 original SDK PUT, and rejects replacement or uncertain results without a
 confirming GET. It has no owner, consumer, CAS or live invocation, and the
 failed 0.78 preparation gate remains a separate acceptance step.
+
+Version 0.79.1 narrows only the disposable first-baseline diagnostic after
+the first actual four writer-preparation jobs all failed at the broad
+`precreate-baseline` label. The label now preserves finite substeps for the
+registry row and microtimestamp queries, engine open/observe, E0b/admin/source
+files, host resource inspection and final disabled-stage/profile assertions.
+No data or error text is forwarded, no baseline assertion or runtime cap is
+relaxed, and the next Ubuntu result is required to identify the cause.

@@ -6,7 +6,7 @@ import process from 'node:process';
 import { test } from 'node:test';
 import { createApplyPrepareDiagnostic,
   filteredCreateBoundaryDiagnostics, persistWriterRolePrepareSummary,
-  writerRolePrepareSummary } from
+  writerPrecreateDiagnostic, writerRolePrepareSummary } from
   './search-create-boundary-delivery-diagnostic-filter.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
   const log = ['private-secret-do-not-print',
@@ -96,6 +96,32 @@ test('writer preparation diagnostics and retained summary are finite', () => {
     'Writer role preparation fixture failed at fault-private-secret.'].join('\n');
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
     ['Writer role preparation fixture failed at fault-mounted-e0b.']);
+});
+test('precreate diagnostic preserves the failing finite substep until successful restore', () => {
+  let checkpoint = 'setup';
+  const trace = [];
+  const diagnostic = writerPrecreateDiagnostic(value => {
+    checkpoint = value; trace.push(value);
+  });
+  diagnostic.step('registry-rows-command');
+  diagnostic.step('registry-micro-shape');
+  diagnostic.step('engine-observe');
+  assert.equal(checkpoint, 'precreate-baseline-engine-observe');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(
+    `Writer role preparation fixture failed at ${checkpoint}.`),
+  [`Writer role preparation fixture failed at ${checkpoint}.`]);
+  assert.deepEqual(filteredCreateBoundaryDiagnostics([
+    'Writer role preparation fixture failed at precreate-baseline-engine-observe.private-secret.',
+    'Writer role preparation fixture failed at precreate-baseline-secret.',
+    'Writer role preparation fixture failed at precreate-baseline-host-networks/',
+  ].join('\n')), []);
+  assert.throws(() => diagnostic.step('secret/private'));
+  assert.equal(checkpoint, 'precreate-baseline-engine-observe');
+  diagnostic.restore();
+  assert.equal(checkpoint, 'precreate-baseline');
+  assert.deepEqual(trace, ['precreate-baseline', 'precreate-baseline-registry-rows-command',
+    'precreate-baseline-registry-micro-shape', 'precreate-baseline-engine-observe',
+    'precreate-baseline']);
 });
 test('writer summary survives explicit cleanup and EXIT cleanup without raw output', async t => {
   await mkdir('.cache/results', { recursive: true });

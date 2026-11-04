@@ -100,6 +100,23 @@ for (const name of [...writerCheckpoints].filter(value => value.startsWith('term
   for (const stage of ['owner', 'logs', 'evidence'])
     writerCheckpoints.add(`${name}-${stage}`);
 const writerVariants = new Set(['default', 'runner', 'runner-volume', 'runner-missing-o']);
+const writerPrecreateSteps = new Set(['registry-rows-command', 'registry-rows-parse',
+  'registry-micro-command', 'registry-micro-parse', 'registry-micro-shape',
+  'engine-open', 'engine-observe', 'engine-parse', 'e0b-command', 'e0b-parse',
+  'admin-command', 'admin-parse', 'sources', 'host-networks', 'host-volumes',
+  'host-postgres', 'baseline-stage', 'baseline-profile']);
+export function writerPrecreateDiagnostic(setCheckpoint) {
+  if (typeof setCheckpoint !== 'function') throw Error('Writer precreate diagnostic callback');
+  setCheckpoint('precreate-baseline');
+  return {
+    step(name) {
+      if (!writerPrecreateSteps.has(name)) throw Error('Writer precreate diagnostic step');
+      setCheckpoint(`precreate-baseline-${name}`);
+    },
+    restore() { setCheckpoint('precreate-baseline'); },
+  };
+}
+for (const step of writerPrecreateSteps) writerCheckpoints.add(`precreate-baseline-${step}`);
 export function writerRolePrepareSummary(log, variant) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024 ||
       !writerVariants.has(variant)) throw Error('Writer summary input');
