@@ -113,9 +113,11 @@ async function instance(mode) {
       const first = await rolePut(contract, 'first');
       process.stdout.write(`${writerRoleShapeLine('first', first.envelope, target, first.counts)}\n`);
       await assertStage(contract, 'post');
-      checkpoint = 'update';
+      checkpoint = 'update-send';
       const update = await rolePut(contract, 'update');
+      checkpoint = 'update-shape';
       process.stdout.write(`${writerRoleShapeLine('update', update.envelope, target, update.counts)}\n`);
+      checkpoint = 'update-readback';
       await assertStage(contract, 'post');
     } else {
       checkpoint = 'ambiguous';

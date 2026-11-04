@@ -13,8 +13,8 @@ export function writerRoleShapeLine(phase, envelope, target, counts) {
   if (!['first', 'update'].includes(phase) || typeof target !== 'string' || !role.test(target)) fail();
   const bounded = values(envelope, ['body', 'statusCode', 'bytes']);
   const attempts = values(counts, ['producer', 'connection']);
-  if (!Number.isInteger(bounded.statusCode) || bounded.statusCode < 200 ||
-      bounded.statusCode >= 300 || !Number.isInteger(bounded.bytes) ||
+  if (bounded.statusCode !== (phase === 'first' ? 201 : 200) ||
+      !Number.isInteger(bounded.bytes) ||
       bounded.bytes < 1 || bounded.bytes > 32_768 ||
       attempts.producer !== 1 || attempts.connection !== 1) fail();
   const body = bounded.body;
@@ -26,7 +26,7 @@ export function writerRoleShapeLine(phase, envelope, target, counts) {
     keys.join('|') === 'status' ? 'status-only' : fail();
   const descriptors = Object.getOwnPropertyDescriptors(body);
   if (keys.some(key => !descriptors[key]?.enumerable || !('value' in descriptors[key]))) fail();
-  const expectedStatus = phase === 'first' ? 'CREATED' : 'UPDATED';
+  const expectedStatus = phase === 'first' ? 'CREATED' : 'OK';
   if (descriptors.status.value !== expectedStatus) fail();
   const message = schema === 'status-only' ? 'none' :
     descriptors.message.value === `'${target}' ${phase === 'first' ? 'created' : 'updated'}.` ?
