@@ -5,6 +5,7 @@ import { Client } from '@opensearch-project/opensearch';
 import { OPENSEARCH_MAPPING, OPENSEARCH_PROFILE, type SearchCompileResult } from './opensearch-compiler.js';
 import { observerBudget } from './opensearch-observer-budget.js';
 import { PINNED_STATIC_ACTION_GROUPS } from './opensearch-static-action-groups.js';
+import { issuedWriterRoleRequest, type WriterRoleContract } from './opensearch-writer-role-contract.js';
 
 export const SEARCH_INDEX = OPENSEARCH_PROFILE;
 export const SEARCH_ENGINE_VERSION = '3.9.0';
@@ -309,6 +310,44 @@ export async function openSearchAdminCreateClient(input: { endpoint: string; ide
     create: client.indices.create.bind(client.indices),
     get: client.indices.get.bind(client.indices),
   }, close: () => client.close() };
+}
+
+/** One constructor-issued role, one original SDK PUT result, no readback or retry. */
+export async function openSearchAdminWriterRoleSender(
+  input: { endpoint: string; identityDir: string }, contract: WriterRoleContract) {
+  // This must precede every read of input and all credential I/O.
+  const request = issuedWriterRoleRequest(contract);
+  const path = `/_plugins/_security/api/roles/${request.target}`;
+  const client = await searchClient({ ...input, role: 'admin' });
+  let attempted = false;
+  let closed = false;
+  return {
+    async sendOnce(): Promise<Readonly<{ created: true }>> {
+      if (arguments.length !== 0 || attempted || closed) throw new SearchEngineError('configuration');
+      attempted = true;
+      const result = await boundedEnvelope<unknown>(options =>
+        client.transport.request({ method: 'PUT', path, body: request.body }, options) as Abortable,
+      32_768, REQUEST_MS);
+      const body = result.body;
+      if (result.statusCode !== 201 || !body || typeof body !== 'object' ||
+          Array.isArray(body) || Object.getPrototypeOf(body) !== Object.prototype)
+        throw new SearchEngineError('partial');
+      const keys = Reflect.ownKeys(body);
+      if (keys.length !== 2 || keys.some(key => typeof key !== 'string') ||
+          keys.sort().join('|') !== 'message|status') throw new SearchEngineError('partial');
+      const descriptors = Object.getOwnPropertyDescriptors(body);
+      if (!descriptors.status?.enumerable || !('value' in descriptors.status) ||
+          !descriptors.message?.enumerable || !('value' in descriptors.message) ||
+          descriptors.status.value !== 'CREATED' ||
+          descriptors.message.value !== `'${request.target}' created.`)
+        throw new SearchEngineError('partial');
+      return Object.freeze({ created: true });
+    },
+    async close(): Promise<void> {
+      closed = true;
+      await client.close();
+    },
+  };
 }
 
 export async function openSearchAccess(input: { endpoint: string; identityDir: string; role: Role }) {

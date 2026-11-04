@@ -114,6 +114,14 @@ export function buildWriterRoleContract(prior: RegistryExpectedInput,
   return result;
 }
 
+/** Return only the fixed request from a constructor-issued, same-process contract. */
+export function issuedWriterRoleRequest(contract: WriterRoleContract): Readonly<{
+  target: string; body: RoleBody; bodySha256: string; dispatchBodyIdentity: string }> {
+  if (!contract || typeof contract !== 'object' || !issued.has(contract)) invalid();
+  return Object.freeze({ target: contract.target, body: contract.body,
+    bodySha256: contract.bodySha256, dispatchBodyIdentity: contract.dispatchBodyIdentity });
+}
+
 /** Only same-process constructor output is accepted; serialized callers must reconstruct it.
  * Complete visible evidence still requires separate pinned-engine hidden-resource proof. */
 export function compareWriterRoleStage(contract: WriterRoleContract, observed: unknown,

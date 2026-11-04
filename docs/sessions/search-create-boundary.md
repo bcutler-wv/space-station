@@ -102,3 +102,12 @@ reached faults, terminal resource checks, and post-teardown private-log scans.
 Those new runtime jobs have not run or been accepted yet. No role send, CAS,
 mapping, principal, publication, or readiness authority follows from this
 source change.
+
+The first 0.78.0 Ubuntu run failed its four new writer-preparation jobs at
+`precreate-baseline` after bootstrap; the exact cause is under separate review.
+Version 0.79.0 adds an uncalled one-shot writer-role SDK sender based on the
+accepted 0.73.1 actual first-create response measurement. It binds one
+constructor-issued role contract before admin TLS file reads, uses one bounded
+original SDK PUT, and rejects replacement or uncertain results without a
+confirming GET. It has no owner, consumer, CAS or live invocation, and the
+failed 0.78 preparation gate remains a separate acceptance step.

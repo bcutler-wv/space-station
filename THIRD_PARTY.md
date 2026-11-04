@@ -56,7 +56,8 @@ The official `@opensearch-project/opensearch` 3.9.0 client is pinned both as a
 independent manual fake-data proof. The fixed create consumer uses only the
 official client's `indices.create` and `indices.get` methods through the
 one-shot adapter and the reviewed fixed owner dispatch. The pure writer-role
-contract adds no SDK request. The [official JavaScript client guide](https://docs.opensearch.org/latest/clients/javascript/index/)
+contract adds no SDK request; the uncalled fixed 0.79.0 sender uses the same
+pinned client's single role PUT transport path with no new dependency. The [official JavaScript client guide](https://docs.opensearch.org/latest/clients/javascript/index/)
 documents index creation; the tagged upstream release and license below bind
 the installed API and provenance. Its published Apache-2.0
 `LICENSE.txt` SHA-256 is
@@ -65,7 +66,8 @@ the committed pnpm lock pins npm integrity
 `sha512-ksIEi0wyIjVncfRwaxt5v6H4qL1aQO2eE3MxKyXGCLnR70YTSCDp+JGhdx2LpyMjtCFvr71DWtYQg9SK3pcNnA==`.
 The [official client release](https://github.com/opensearch-project/opensearch-js/releases/tag/3.9.0)
 and [tagged license](https://raw.githubusercontent.com/opensearch-project/opensearch-js/3.9.0/LICENSE.txt)
-were checked on 2026-10-21.
+were checked on 2026-10-21. The official tagged license was independently
+rechecked on 2026-11-04 against the same SHA-256 before the writer-role sender.
 
 `packages/search/src/opensearch-static-action-groups.ts` is a narrow
 projection of the pinned Security plugin's [3.9.0.0 static action-group
