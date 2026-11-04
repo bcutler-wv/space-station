@@ -26,7 +26,7 @@ The 0.70.3 Ubuntu run `40618540595` passed the inode and same-size fault cases, 
 
 The 0.70.4 Ubuntu run `40619902442` passed the preceding certificate fault cases, then stopped at the expired-admin-public fixture. Local reproduction showed OpenSSL rejected the fixture's attempt to CA-sign an already CA-signed certificate as input. Version 0.70.5 generates a certificate request from the original admin key and signs it with the existing fixture CA for zero days, with the exact admin subject and client extensions. The gate checks CA signature, admin key match, certificate profile and actual expiry before injection; a local real-certificate test proves the valid baseline captures and the expired replacement is rejected. Finite redacted setup, fault and restoration checkpoints retain the privacy boundary. This is gate-only; actual Ubuntu acceptance remains pending.
 
-Full Ubuntu run `40621241977` passed all ten jobs at `00f14f33b4e7f2e8ea78732a3191f7520777f50b`; Astra accepted the actual 3a prepare/certificate runtime review. Version 0.71.0 begins only the first 3b source slice: a fixed positional owner approval parser, exact nofollow/canonical pending reader, fresh apply-lock B and an exclusive private binding file. Binding attempt is latched before its lock record and file I/O, and a bound or uncertain lock cannot be released by this source stage. The binding file and pending proposal stay consumed after an offline proof; no live apply CLI, Docker dispatch, DB CAS, SDK create, publication or serving is connected. Source review and later actual create-send gates remain pending.
+Full Ubuntu run `40621241977` passed all ten jobs at `00f14f33b4e7f2e8ea78732a3191f7520777f50b`; Astra accepted the actual 3a prepare/certificate runtime review. Version 0.71.0 began only the first 3b source slice: a fixed positional owner approval parser, exact nofollow/canonical pending reader, fresh apply-lock B and an exclusive private binding file. Binding attempt is latched before its lock record and file I/O, and a bound or uncertain lock cannot be released by this source stage. The binding file and pending proposal stay consumed after an offline proof; that first slice connected no live apply CLI, Docker dispatch, DB CAS, SDK create, publication or serving. The later actual create-send acceptance is recorded below.
 # Fixed create apply source slice
 
 The one-shot create consumer uses a finite `presend` evidence phase after its
@@ -72,9 +72,8 @@ evidence. Version 0.71.1 adds an explicit finite scenario to every prepare
 invocation, redacted substeps around its DB/engine/source/owner/seal checks,
 and distinct typed-approval negative labels. The filter accepts only these
 fixed names and never forwards dynamic details or private command output.
-No product path or acceptance assertion changes. A fresh complete Ubuntu run
-and independent runtime review remain required; 0.71.0 did not pass its
-actual create gate.
+No product path or acceptance assertion changed in 0.71.1. Its fresh Ubuntu
+rerun is recorded below; 0.71.0 did not pass its actual create gate.
 
 The 0.71.1 Ubuntu rerun `41742511683` passed preparation and reported the
 `preexisting-candidate` checkpoint. The fixture's readiness probe classified
@@ -84,4 +83,11 @@ only the explicit `control`, `history`, and `dispatch` projection for both
 database roles; the full verifier snapshot still enters attestor validation.
 Finite substeps now distinguish the preexisting candidate's real SDK creation,
 engine readback, readiness/grant probe, owner denial, and retained evidence.
-This correction has local regression proof but no Ubuntu runtime acceptance yet.
+This correction first had local regression proof; its later Ubuntu runtime
+acceptance is recorded below.
+
+Full Ubuntu run `41745057024` at `ff7e83c` passed all ten jobs, including both
+UID pairs of the disposable create-apply gate. Astra accepted only the fixed
+create-through-`uuid_bound` runtime prerequisite; publication and serving gates
+remain false. Version 0.72.0 starts a separately reviewed pure writer-role
+contract with no network request or database transition.
