@@ -71,6 +71,7 @@ jobs:
       - run: node --test tests/support/search-create-apply-public-stage.test.mjs tests/support/search-create-apply-owner-docker.test.mjs
       - run: node --test tests/support/search-create-apply-gate-file.test.mjs
       - run: node --test tests/support/search-create-apply-gate-transport.test.mjs
+      - run: node --test tests/support/opensearch-writer-role-api-shape.test.mjs tests/support/opensearch-writer-role-api-transport.test.mjs
       - run: bash tests/support/search-create-apply-render-proof.sh
       - run: node --test tests/support/search-create-boundary-lock.test.mjs
       - run: node --test tests/support/search-create-boundary-transfer.test.mjs
@@ -237,6 +238,7 @@ jobs:
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=shadow-restore search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-profile-bootstrap
       - run: bash scripts/opensearch-generation-proof-gate.sh
+      - run: docker compose --profile search --profile fixture run --rm -T --no-deps search-profile-drift node tests/integration/opensearch-writer-role-api-proof.mjs
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps search-profile-drift node tests/integration/opensearch-observer-proof.mjs
       - run: docker compose --profile search --profile fixture run --rm -T --no-deps -e SEARCH_DRIFT_PHASE=role search-profile-drift
       - run: docker compose --profile search run --rm -T --no-deps search-security-bootstrap
