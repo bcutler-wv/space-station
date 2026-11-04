@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -31,13 +31,28 @@ const finishAttestor = async attestor => {
   }
   await attestor.confirmOwnedCleanup();
 };
+const publishSignal = async (signal, contents, pause, resume) => {
+  const temporary = `${signal}.pending`;
+  const handle = await open(temporary, 'wx', 0o600);
+  try {
+    if (pause) {
+      await mkdir(pause);
+      await waitFor(() => existsSync(resume));
+    }
+    await handle.writeFile(contents);
+    await handle.sync();
+  } finally { await handle.close(); }
+  await rename(temporary, signal);
+  const directory = await open(path.dirname(signal), 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+};
 
 if (process.argv[2] === 'hold') {
-  const [, , , root, signal, release, phase] = process.argv;
+  const [, , , root, signal, release, phase, pause, resume] = process.argv;
   await withSearchAdminJobLock({ root, uid }, async lock => {
     const attestor = lock.beginAttestor();
     if (phase === 'prepare') await attestor.markDispatched('prepare');
-    await writeFile(signal, attestor.invocationId);
+    await publishSignal(signal, attestor.invocationId, pause, resume);
     await waitFor(() => existsSync(release));
     if (phase !== 'prepare') await attestor.markDispatched('prepare');
     await attestor.confirmCompletion('prepare');
@@ -66,13 +81,20 @@ if (process.argv[2] === 'hold') {
     assert.equal((await operate('create')).state, 'created');
     const signal = path.join(parent, 'held');
     const release = path.join(parent, 'release');
-    child = spawn(process.execPath, [script, 'hold', root, signal, release, 'preflight'],
+    const publicationPause = path.join(parent, 'publication-paused');
+    const publicationResume = path.join(parent, 'publication-resume');
+    child = spawn(process.execPath, [script, 'hold', root, signal, release, 'preflight',
+      publicationPause, publicationResume],
       { stdio: 'ignore' });
     const heldResult = new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code, terminated) => resolve({ code, terminated }));
     });
     try {
+      await waitFor(() => existsSync(publicationPause));
+      assert.equal(existsSync(signal), false, 'empty temporary is not a published signal');
+      assert.equal((await stat(`${signal}.pending`)).size, 0);
+      await mkdir(publicationResume);
       await waitFor(() => existsSync(signal));
       assert.match(await readFile(signal, 'utf8'), /^[a-f0-9-]{36}$/);
       await assert.rejects(operate('verify'), /job locked/);

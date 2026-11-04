@@ -212,3 +212,11 @@ calls the owner's pre-start fence, then starts only the captured full ID.
 Scripted and both-UID daemon-free merged-render checks pass. Actual
 created-state fields and writer-role delivery await the Ubuntu runtime gate;
 both search readiness gates remain false.
+
+Version 0.87.1 fixes only the shared attestor lock fixture's publication race.
+The child now writes and syncs a temporary signal before atomic rename;
+the parent fixture reaches an empty temporary and proves the final signal
+is absent until publication. The 0.86.0 Ubuntu run `41788671990` at
+`fd0cad933386a7a231c1b93f27150a4f3b67b591` failed at the old signal
+read, blocking downstream regression jobs. Product lock and sender code are
+unchanged; the actual role-delivery gate is not yet implemented.
