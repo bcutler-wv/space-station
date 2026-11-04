@@ -184,3 +184,10 @@ has no approval arguments and fails before I/O if run as rendered. A later
 owner must supply and inspect the independently approved thirteen-field
 override, original input volume and host identities. Daemon-free both-UID
 render checks do not establish Docker execution or role delivery.
+
+Version 0.85.0 adds only the finite writer-role lock phases for a later owner.
+Offline binding continues to retain the lock. Same-call delivery releases it
+only after transfer, apply and owned cleanup are durably confirmed and the
+callback returns normally. Append/fsync attempts, callback failure after
+cleanup and uncertain release remain fail-closed in local filesystem tests.
+No owner adapter or role-delivery runtime gate is connected.

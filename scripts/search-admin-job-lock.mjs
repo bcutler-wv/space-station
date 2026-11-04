@@ -6,6 +6,10 @@ import process from 'node:process';
 const held = new WeakSet();
 const applyOperations = new WeakMap();
 const writerRoleOperations = new WeakMap();
+const writerDeliveryRecords = ['transfer-dispatched', 'transfer-confirmed',
+  'apply-dispatched', 'apply-confirmed', 'cleanup-complete'];
+const writerDeliveryFaults = writerDeliveryRecords.flatMap(name =>
+  [`writer-${name}-after-append`, `writer-${name}-after-file-sync`]);
 const fail = kind => { throw new Error(`Search admin ${kind}.`); };
 const filename = '.job-operation.lock';
 const applyUuid = value => typeof value === 'string' &&
@@ -52,7 +56,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         'apply-binding-after-append', 'apply-binding-after-file-sync',
         'writer-binding-after-append', 'writer-binding-after-file-sync',
         'writer-prepare-final-after-append',
-        'writer-prepare-final-after-file-sync'].includes(fixtureFaultAt)))
+        'writer-prepare-final-after-file-sync', 'writer-release-after-rm',
+        'writer-release-after-sync', ...writerDeliveryFaults].includes(fixtureFaultAt)))
     fail('job lock configuration');
   if (path.resolve(root) !== root || !root.endsWith('/.cache/search-db') ||
       !Number.isSafeInteger(uid) || uid < 1 || uid !== process.getuid?.() ||
@@ -81,6 +86,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let applyTerminalAttempted = false, applyCleanup = false, applySuccess = false;
   let applyKnown;
   let writerAttempted = false, writerBindingDurable = false, writerKnown;
+  let writerStage = 'preflight', writerDurablePhase = null;
+  let writerTerminalAttempted = false, writerCleanup = false, writerSuccess = false;
   let rolePrepareStage = 'preflight', rolePrepareAttempted = false;
   let rolePrepareDurablePhase = null, rolePrepareTerminalAttempted = false;
   let rolePrepareSuccess = false, rolePrepareFinalAttempted = false;
@@ -112,6 +119,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     await assertOwned();
     await handle.writeFile(`\n${JSON.stringify({ version: 1, operationId, pid: process.pid,
       role: 'attestor', ...record })}\n`);
+    const writerFault = record.role === 'writer-role-apply' ?
+      `writer-${record.phase}-${record.state}` : null;
     if (fixtureFaultAt === 'after-append' ||
         fixtureFaultAt === 'intent-pending-after-append' &&
           record.role === 'create-intent' && record.phase === 'pending' ||
@@ -121,7 +130,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
           record.role === 'writer-role-apply' && record.phase === 'binding' ||
         fixtureFaultAt === 'writer-prepare-final-after-append' &&
           record.role === 'writer-role-prepare' && record.phase === 'pending' &&
-          record.state === 'prepared') fail('job record fault');
+          record.state === 'prepared' || fixtureFaultAt === `${writerFault}-after-append` &&
+          writerDeliveryRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
     await handle.sync();
     if (fixtureFaultAt === 'after-file-sync' ||
         fixtureFaultAt === 'intent-pending-after-file-sync' &&
@@ -132,7 +142,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
           record.role === 'writer-role-apply' && record.phase === 'binding' ||
         fixtureFaultAt === 'writer-prepare-final-after-file-sync' &&
           record.role === 'writer-role-prepare' && record.phase === 'pending' &&
-          record.state === 'prepared') fail('job record fault');
+          record.state === 'prepared' || fixtureFaultAt === `${writerFault}-after-file-sync` &&
+          writerDeliveryRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
     await syncDirectory(root);
     await assertOwned();
   };
@@ -314,6 +325,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       await appendRecord({ role: 'writer-role-apply', phase: 'binding', state: 'attempted',
         ...writerKnown });
       writerBindingDurable = true;
+      writerStage = 'binding-confirmed';
     },
     assertBindingAttempted(input) {
       if (!active || mode !== 'writer-role-apply' || !writerAttempted ||
@@ -323,6 +335,37 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
           known.dispatchId !== writerKnown.dispatchId ||
           known.ownerId !== writerKnown.ownerId) fail('writer role binding');
       return true;
+    },
+    async markDispatched(phase) {
+      if (!active || mode !== 'writer-role-apply' || !writerBindingDurable ||
+          !['transfer', 'apply'].includes(phase) ||
+          writerStage !== (phase === 'transfer' ? 'binding-confirmed' : 'transfer-confirmed') ||
+          writerCleanup || writerTerminalAttempted) fail('writer role dispatch');
+      writerAttempted = true;
+      writerStage = `${phase}-dispatched`;
+      writerDurablePhase = null;
+      await appendRecord({ role: 'writer-role-apply', phase, state: 'dispatched',
+        ...writerKnown });
+      writerDurablePhase = phase;
+    },
+    async confirmCompletion(phase) {
+      if (!active || mode !== 'writer-role-apply' || !['transfer', 'apply'].includes(phase) ||
+          writerStage !== `${phase}-dispatched` || writerDurablePhase !== phase ||
+          writerTerminalAttempted) fail('writer role completion');
+      writerTerminalAttempted = true;
+      await appendRecord({ role: 'writer-role-apply', phase, state: 'confirmed', ...writerKnown });
+      writerStage = `${phase}-confirmed`;
+      writerDurablePhase = null;
+      writerTerminalAttempted = false;
+    },
+    async confirmOwnedCleanup() {
+      if (!active || mode !== 'writer-role-apply' || writerStage !== 'apply-confirmed' ||
+          writerCleanup || writerTerminalAttempted) fail('writer role cleanup');
+      writerTerminalAttempted = true;
+      await appendRecord({ role: 'writer-role-apply', phase: 'cleanup',
+        state: 'complete', ...writerKnown });
+      writerStage = 'cleanup-confirmed';
+      writerCleanup = true;
     },
   });
   const writerPrepare = Object.freeze({
@@ -465,6 +508,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (mode === 'writer-role-apply') {
       if (!writerBindingDurable) fail('writer role incomplete');
       await assertOwned();
+      if (writerStage !== 'binding-confirmed' && !writerCleanup)
+        fail('writer role incomplete');
+      if (writerCleanup) writerSuccess = true;
     }
     if (mode === 'writer-role-prepare' && !rolePrepareSuccess)
       fail('writer role prepare incomplete');
@@ -480,7 +526,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       mode === 'create-boundary' ? !boundaryAttempted || boundaryCleanup :
         mode === 'create-intent' ? !intentAttempted || intentCleanup : !dispatched || confirmed;
     if (mode === 'create-apply') canRelease = !applyAttempted || applyCleanup;
-    if (mode === 'writer-role-apply') canRelease = !writerAttempted;
+    if (mode === 'writer-role-apply') canRelease = !writerAttempted || writerSuccess;
     if (mode === 'writer-role-prepare') canRelease =
       !rolePrepareAttempted || rolePrepareSuccess;
     let released = false;
@@ -498,11 +544,15 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
           try {
             if ((mode === 'attestor' || mode === 'create-boundary' ||
                 mode === 'create-intent' || mode === 'create-apply' ||
-                mode === 'writer-role-prepare') &&
+                mode === 'writer-role-prepare' || mode === 'writer-role-apply') &&
                 fixtureFaultAt === 'before-release-rm')
               fail('fixture release fault');
             await rm(lockPath);
+            if (mode === 'writer-role-apply' && fixtureFaultAt === 'writer-release-after-rm')
+              fail('fixture release fault');
             await syncDirectory(root);
+            if (mode === 'writer-role-apply' && fixtureFaultAt === 'writer-release-after-sync')
+              fail('fixture release fault');
             released = true;
           } catch (error) {
             releaseError(error);
@@ -514,6 +564,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (boundarySuccess && !released) fail('create boundary lock release');
     if (intentSuccess && !released) fail('create intent lock release');
     if (applySuccess && !released) fail('create apply lock release');
+    if (writerSuccess && !released) fail('writer role lock release');
     if (rolePrepareSuccess && !released) fail('writer role prepare lock release');
   }
 }

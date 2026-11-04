@@ -411,3 +411,115 @@ test('constructor-backed pending rejects malformed E0b, calendar and role identi
     args: [sha(bytes), ...v2.args.slice(1)] }));
   assert.equal(await exists(v2.names.newBinding), false);
 });
+
+async function deliverUnderLock(f, fixtureFaultAt, work) {
+  const previous = process.env.STATION_JOB_LOCK_FIXTURE;
+  if (fixtureFaultAt !== undefined) process.env.STATION_JOB_LOCK_FIXTURE = '1';
+  try {
+    return await withSearchAdminJobLock({ root: path.join(f.repository, '.cache/search-db'),
+      uid, fixtureFaultAt }, async lock => {
+      const pending = await readWriterRolePending(f.repository, uid, gid,
+        parseWriterRoleApprovalArgs(f.args));
+      const known = { approvedSha256: pending.approvedSha256,
+        dispatchId: pending.dispatchId, ownerId: pending.ownerId };
+      const operation = lock.beginWriterRoleApply(known);
+      await pending.recheck();
+      await operation.markBindingAttempted();
+      const binding = await writeWriterRoleBinding(f.repository, uid, gid, operation, known);
+      await pending.recheck(); await binding.recheck(); await operation.assertOwned();
+      return work(operation, binding);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.STATION_JOB_LOCK_FIXTURE;
+    else process.env.STATION_JOB_LOCK_FIXTURE = previous;
+  }
+}
+
+const deliverySteps = [
+  ['transfer', 'dispatched', operation => operation.markDispatched('transfer')],
+  ['transfer', 'confirmed', operation => operation.confirmCompletion('transfer')],
+  ['apply', 'dispatched', operation => operation.markDispatched('apply')],
+  ['apply', 'confirmed', operation => operation.confirmCompletion('apply')],
+  ['cleanup', 'complete', operation => operation.confirmOwnedCleanup()],
+];
+
+test('same-call writer delivery records exact phases, releases only after owned cleanup', async t => {
+  const f = await fixture(t);
+  let expired;
+  const result = await deliverUnderLock(f, undefined, async operation => {
+    expired = operation;
+    await assert.rejects(operation.markDispatched('apply'));
+    await assert.rejects(operation.confirmOwnedCleanup());
+    for (const [, , step] of deliverySteps) await step(operation);
+    await assert.rejects(operation.confirmOwnedCleanup());
+    return { state: 'writer_role_attested', ready: false };
+  });
+  assert.deepEqual(result, { state: 'writer_role_attested', ready: false });
+  assert.equal(await exists(f.names.lock), false);
+  assert.equal(await exists(f.names.newBinding), true);
+  await assert.rejects(expired.assertOwned());
+  await assert.rejects(expired.markDispatched('transfer'));
+  await assert.rejects(bindWriterRoleOffline({ repository: f.repository, uid, gid, args: f.args }));
+});
+
+test('each writer dispatch, completion and cleanup append/fsync fault is one terminal attempt', async t => {
+  for (const [phase, state] of deliverySteps) for (const point of ['after-append', 'after-file-sync']) {
+    const f = await fixture(t);
+    const fault = `writer-${phase}-${state}-${point}`;
+    await assert.rejects(deliverUnderLock(f, fault, async operation => {
+      for (const [currentPhase, currentState, step] of deliverySteps) {
+        if (`${currentPhase}-${currentState}` === `${phase}-${state}`) {
+          await assert.rejects(step(operation));
+          await assert.rejects(step(operation));
+          return { state: 'caught-failure' };
+        }
+        await step(operation);
+      }
+    }));
+    assert.equal(await exists(f.names.lock), true);
+    assert.equal(await exists(f.names.newBinding), true);
+    const records = (await readFile(f.names.lock, 'utf8')).trim().split(/\n+/).map(JSON.parse);
+    const last = records.at(-1);
+    assert.equal(last.role, 'writer-role-apply');
+    assert.equal(last.phase, phase); assert.equal(last.state, state);
+    assert.equal(records.filter(row => row.phase === phase && row.state === state).length, 1);
+  }
+});
+
+test('writer cleanup followed by callback failure retains original lock', async t => {
+  const f = await fixture(t);
+  await assert.rejects(deliverUnderLock(f, undefined, async operation => {
+    for (const [, , step] of deliverySteps) await step(operation);
+    throw Error('fixture failure after cleanup');
+  }));
+  assert.equal(await exists(f.names.lock), true);
+  assert.equal(await exists(f.names.newBinding), true);
+});
+
+test('writer release uncertainty fails and consumed binding denies replay after lock loss', async t => {
+  for (const fault of ['before-release-rm', 'writer-release-after-rm',
+    'writer-release-after-sync']) {
+    const f = await fixture(t);
+    await assert.rejects(deliverUnderLock(f, fault, async operation => {
+      for (const [, , step] of deliverySteps) await step(operation);
+      return { state: 'writer_role_attested', ready: false };
+    }), { message: 'Search admin writer role lock release.' });
+    assert.equal(await exists(f.names.lock), fault === 'before-release-rm');
+    assert.equal(await exists(f.names.newBinding), true);
+    await assert.rejects(bindWriterRoleOffline({ repository: f.repository, uid, gid, args: f.args }));
+    assert.equal(await exists(f.names.newBinding), true);
+  }
+});
+
+test('same-byte lock replacement after cleanup cannot be released as the original', async t => {
+  const f = await fixture(t);
+  await assert.rejects(deliverUnderLock(f, undefined, async operation => {
+    for (const [, , step] of deliverySteps) await step(operation);
+    const bytes = await readFile(f.names.lock);
+    await rename(f.names.lock, `${f.names.lock}.original`);
+    await writeFile(f.names.lock, bytes, { mode: 0o600 });
+    return { state: 'writer_role_attested', ready: false };
+  }), { message: 'Search admin job lock identity.' });
+  assert.equal(await exists(f.names.lock), true);
+  assert.equal(await exists(f.names.newBinding), true);
+});
