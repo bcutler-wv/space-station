@@ -18,6 +18,20 @@ const proof = [first, replacement, ambiguous, observed,
   'Pinned writer mapping API proof passed.'].join('\n') + '\n';
 const response = (code, stdout = '', stderr = '') =>
   ({ code, stdout, stderr, failed: false });
+const missing = reference => response(1, '\n',
+  `Error response from daemon: No such container: ${reference}\n`);
+function absenceResponse(effect, reference) {
+  if (effect?.endsWith('wrong-ref')) return missing('other-container');
+  if (effect?.endsWith('daemon-error')) return response(1, '\n',
+    'Error response from daemon: permission denied\n');
+  if (effect?.endsWith('timeout')) return { ...missing(reference), code: null,
+    failed: true };
+  if (effect?.endsWith('extra-space')) return response(1, '\n',
+    `Error response from daemon: No such container: ${reference} \n`);
+  if (effect?.endsWith('empty-stdout')) return response(1, '',
+    `Error response from daemon: No such container: ${reference}\n`);
+  return missing(reference);
+}
 
 async function fixture(t) {
   await mkdir('.cache/results', { recursive: true });
@@ -43,8 +57,8 @@ function commandRig({ effect = 'success', raw = proof, root }) {
           failed: true } : response(0, '28.5.1 1.51\n');
     if (joined === 'compose version --short') return response(0, 'v2.40.3\n');
     if (joined === `container inspect --format {{.Id}} ${name}`)
-      return response(effect === 'preexisting' ? 0 : 1,
-        effect === 'preexisting' ? `${id}\n` : '');
+      return effect === 'preexisting' ? response(0, `${id}\n`) :
+        absenceResponse(effect?.startsWith('absence-') ? effect : null, name);
     if (joined.includes(' run -d ')) {
       assert.ok(args.includes('-p'));
       assert.equal(args[args.indexOf('-p') + 1], path.basename(root).toLowerCase());
@@ -76,7 +90,8 @@ function commandRig({ effect = 'success', raw = proof, root }) {
       return response(0, `${id}\n`);
     }
     if (joined === `container inspect --format {{.Id}} ${id}`)
-      return response(removed ? 1 : 0, removed ? '' : `${id}\n`);
+      return removed ? absenceResponse(effect?.startsWith('postrm-') ? effect : null,
+        id) : response(0, `${id}\n`);
     throw Error('Unexpected fixed command');
   };
   return { command, calls };
@@ -131,6 +146,26 @@ test('all failure paths retain finite status and scan private output before forw
       assert.equal(rig.calls.filter(args => args[0] === 'logs').length, 1);
       if (effect === 'wait-timeout-secret')
         assert.equal(result.output.includes('Writer mapping API shape'), false);
+    }
+  }
+});
+
+test('source-shaped absence rejects wrong reference, daemon errors, timeout and altered bytes at both boundaries', async t => {
+  for (const boundary of ['absence', 'postrm']) {
+    for (const variant of ['wrong-ref', 'daemon-error', 'timeout',
+      'extra-space', 'empty-stdout']) {
+      const root = await fixture(t);
+      const rig = commandRig({ root, effect: `${boundary}-${variant}` });
+      const result = await runWriterMappingApiHost({ root, command: rig.command,
+        nonce: '111111111111', uid: 1001 });
+      assert.equal(result.code, 1, `${boundary}-${variant}`);
+      assert.match(result.output, new RegExp(`failed at ${boundary === 'absence' ?
+        'absence' : 'cleanup'}; scan=complete`), `${boundary}-${variant}`);
+      assert.equal(rig.calls.some(args => args.includes('run')), boundary === 'postrm');
+      assert.equal(rig.calls.filter(args => args[0] === 'rm').length,
+        boundary === 'postrm' ? 1 : 0);
+      assert.equal(result.output.includes(secret), false);
+      assert.equal(result.output.includes(id), false);
     }
   }
 });

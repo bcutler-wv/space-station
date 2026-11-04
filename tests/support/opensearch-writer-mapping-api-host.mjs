@@ -43,6 +43,10 @@ function required(value) {
   if (value.failed || value.code !== 0) fail();
   return value.stdout;
 }
+function missingContainer(value, reference) {
+  return !value.failed && value.code === 1 && value.stdout === '\n' &&
+    value.stderr === `Error response from daemon: No such container: ${reference}\n`;
+}
 function finiteProof(stdout) {
   if (Buffer.byteLength(stdout) > 4096 || !stdout.endsWith('\n')) fail();
   const lines = stdout.trimEnd().split('\n');
@@ -118,7 +122,7 @@ export async function runWriterMappingApiHost({ root = process.cwd(),
     host = versionLine(engine, composeVersion, uid);
     phase = 'absence';
     const absent = await call('docker', ['container', 'inspect', '--format', '{{.Id}}', name]);
-    if (absent.failed || absent.code !== 1 || absent.stdout !== '') fail();
+    if (!missingContainer(absent, name)) fail();
     phase = 'run';
     const started = await call('docker', [...compose(project), 'run', '-d', '--no-deps',
       '--name', name, 'search-profile-drift', 'node', proofScript]);
@@ -152,7 +156,7 @@ export async function runWriterMappingApiHost({ root = process.cwd(),
       const removed = required(await call('docker', ['rm', owned]));
       if (removed.trim() !== owned) fail();
       const absent = await call('docker', ['container', 'inspect', '--format', '{{.Id}}', owned]);
-      if (absent.failed || absent.code !== 1 || absent.stdout !== '') fail();
+      if (!missingContainer(absent, owned)) fail();
       cleanupVerified = true;
     } catch {
       if (!failure) phase = 'cleanup';
