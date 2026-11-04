@@ -482,13 +482,14 @@ async function readinessAndGrantProbe() {
     const role='station_search_transition';
     const db={role,host:'postgres',port:5432,database:'station',passwordFile:'/run/transition/password'};
     const snapshot=await withSearchAdminDatabase(db,x=>readSearchAdminRegistrySnapshot(x,role));
-    const result=classifySearchGenerationRegistry(snapshot);
-    if(result.status==='ready'||result.status==='incident')process.exit(2);
+    const registry=({control,history,dispatch})=>({control,history,dispatch});
+    const result=classifySearchGenerationRegistry(registry(snapshot));
+    if(result.status!=='incomplete')process.exit(2);
     const verifierRole='station_search_verifier';
     const verifier=await withSearchAdminDatabase({...db,role:verifierRole,
       passwordFile:'/run/verifier/password'},x=>readSearchAdminRegistrySnapshot(x,verifierRole));
     if(verifier.identity.sessionUser!==verifierRole||verifier.identity.currentUser!==verifierRole||
-      classifySearchGenerationRegistry(verifier).status==='ready')process.exit(4);
+      classifySearchGenerationRegistry(registry(verifier)).status!=='incomplete')process.exit(4);
     let attestorDenied=false,ddlDenied=false,roleDenied=false;
     try {makePreparedAttestorManifest(verifier,randomUUID());} catch {attestorDenied=true;}
     try {await withSearchAdminDatabase(db,x=>x.execute(sql.raw('CREATE TABLE public.create_apply_forbidden(id integer)')));}
@@ -813,6 +814,7 @@ await reset();
 
 checkpoint = 'preexisting-candidate';
 approved = await prepare('preexisting-candidate');
+checkpoint = 'preexisting-candidate-probe-create';
 const createProbe = String.raw`import {openSearchAdminCreateClient} from '/app/packages/search/dist/opensearch-runtime.js';
   import {createLiteralV2IndexOnce} from '/app/packages/search/dist/opensearch-create-index.js';
   const c=await openSearchAdminCreateClient({endpoint:'https://opensearch:9200',identityDir:'/run/station-admin'});
@@ -824,10 +826,14 @@ await docker(['run', '--rm', '--pull', 'never', '--network', `${project}_search_
   '--user', '1000:1000', '--mount',
   `type=volume,source=${project}_search_admin_certs,target=/run/station-admin,readonly`,
   `${project}-search-create-index`, 'node', '--input-type=module', '-e', createProbe, candidate], 45_000);
+checkpoint = 'preexisting-candidate-engine';
 checkPrior(await engine(), true);
+checkpoint = 'preexisting-candidate-readiness';
 await readinessAndGrantProbe();
+checkpoint = 'preexisting-candidate-owner';
 const preexistingDb = await registry();
 const preexisting = await runInstrumented('passthrough', approved.args);
+checkpoint = 'preexisting-candidate-evidence';
 assert.equal(preexisting.failed, true);
 assert.deepEqual(Object.keys(preexisting.ids).sort(), ['create', 'transfer']);
 assert.deepEqual(preexisting.markers.create, []);

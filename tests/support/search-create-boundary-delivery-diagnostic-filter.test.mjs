@@ -71,3 +71,10 @@ test('apply diagnostics reject dynamic case, step and hostile suffix', () => {
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
     ['Create apply runtime fixture failed at e0b-drift-prepare-owner-run.']);
 });
+test('preexisting candidate substeps are finite and redact dynamic details', () => {
+  for (const step of ['probe-create', 'engine', 'readiness', 'owner', 'evidence']) {
+    const line = `Create apply runtime fixture failed at preexisting-candidate-${step}.`;
+    assert.deepEqual(filteredCreateBoundaryDiagnostics(`${line}\n` +
+      'Create apply runtime fixture failed at preexisting-candidate-private-secret.'), [line]);
+  }
+});

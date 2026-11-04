@@ -73,6 +73,8 @@ export function createApplyPrepareDiagnostic(scenario, setCheckpoint) {
 }
 const applyCheckpoints = new Set(['setup', 'fixture-reset',
   ...applyScenarios,
+  ...['probe-create', 'engine', 'readiness', 'owner', 'evidence']
+    .map(step => `preexisting-candidate-${step}`),
   ...applyScenarios.flatMap(scenario =>
     prepareSteps.map(step => `${scenario}-prepare-${step}`)),
   ...applyNames.flatMap(name => [`image-${name}`, `evidence-${name}`])]);

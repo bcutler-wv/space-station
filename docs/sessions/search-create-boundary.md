@@ -75,3 +75,13 @@ fixed names and never forwards dynamic details or private command output.
 No product path or acceptance assertion changes. A fresh complete Ubuntu run
 and independent runtime review remain required; 0.71.0 did not pass its
 actual create gate.
+
+The 0.71.1 Ubuntu rerun `41742511683` passed preparation and reported the
+`preexisting-candidate` checkpoint. The fixture's readiness probe classified
+the complete raw admin snapshot, whose additional identity and exact timestamp
+fields violate the registry oracle's exact root shape. Version 0.71.2 classifies
+only the explicit `control`, `history`, and `dispatch` projection for both
+database roles; the full verifier snapshot still enters attestor validation.
+Finite substeps now distinguish the preexisting candidate's real SDK creation,
+engine readback, readiness/grant probe, owner denial, and retained evidence.
+This correction has local regression proof but no Ubuntu runtime acceptance yet.

@@ -55,6 +55,23 @@ const result = (input: { control: Control; history: History[]; dispatch: Dispatc
   classifySearchGenerationRegistry(input);
 
 describe('pure search generation registry oracle', () => {
+  it('classifies only the registry projection of a complete admin snapshot', () => {
+    const registry = state(0);
+    const raw = { ...registry,
+      identity: { sessionUser: 'station_search_verifier', currentUser: 'station_search_verifier',
+        database: 'station', databaseOid: 16384, databaseOwner: 'station' },
+      exactTimestamps: { control: { singleton: 1,
+        updatedAt: '2026-10-22T00:00:00.000000Z' },
+      history: registry.history.map(row => ({ generationToken: row.generationToken,
+        createdAt: '2026-10-22T00:00:00.000000Z' })),
+      dispatch: registry.dispatch.map(row => ({ generationToken: row.generationToken,
+        operation: row.operation, dispatchId: row.dispatchId,
+        createdAt: '2026-10-22T00:00:00.000000Z' })) } };
+    expect(classifySearchGenerationRegistry(raw)).toEqual({ status: 'incident', reason: 'registry_mismatch' });
+    expect(classifySearchGenerationRegistry({ control: raw.control, history: raw.history,
+      dispatch: raw.dispatch })).toMatchObject({ status: 'incomplete' });
+  });
+
   it('accepts only enrolled v1 and complete v2 helper states as registry ready', () => {
     expect(result({ control: control(), history: [legacy()], dispatch: [] })).toMatchObject({ status: 'ready' });
     const terminal = result(state(10));
