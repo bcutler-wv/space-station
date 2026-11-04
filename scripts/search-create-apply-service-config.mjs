@@ -29,6 +29,9 @@ function service(value, repository, command, user, transfer, profile) {
       Object.values(value.networks).some(network => network !== null && !keys(network, []))) fail();
 }
 
+// Shared fixed shape, without granting the existing create/prepare validators a new mode.
+export { service as verifyFixedApplyServiceShape };
+
 function verifyFixedServiceConfig(config, expected, rolePrepare) {
   try {
     const { repository, project, invocationId, publicRoot, volumeName, invocationRoot } = expected;

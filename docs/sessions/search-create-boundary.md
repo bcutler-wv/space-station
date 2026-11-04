@@ -177,3 +177,10 @@ The project and system identifier remain trusted owner declarations checked
 against the seal, not synthetic in-container host observations. Local tests
 cover the fixed CAS/sender wiring and real copied public-certificate reader.
 Actual preparation and role-delivery runtime acceptance remain separate.
+
+Version 0.84.0 adds only the fixed writer-role transfer CLI, opt-in Compose
+overlay and exact render/effective-container policy checks. The base consumer
+has no approval arguments and fails before I/O if run as rendered. A later
+owner must supply and inspect the independently approved thirteen-field
+override, original input volume and host identities. Daemon-free both-UID
+render checks do not establish Docker execution or role delivery.
