@@ -39,7 +39,7 @@ export function parseWriterRolePrepareInvocation(bytes) {
   } catch { fail(); }
 }
 
-async function fixedDir(name, uid, gid, prior) {
+export async function fixedDir(name, uid, gid, prior) {
   const stat = await lstat(name);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || stat.gid !== gid ||
       (stat.mode & 0o777) !== 0o700 || await realpath(name) !== name ||
@@ -47,7 +47,7 @@ async function fixedDir(name, uid, gid, prior) {
         stat.uid !== prior.uid || stat.gid !== prior.gid || stat.mode !== prior.mode)) fail();
   return stat;
 }
-async function fixedFile(name, uid, gid, max, prior) {
+export async function fixedFile(name, uid, gid, max, prior) {
   const handle = await open(name, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();

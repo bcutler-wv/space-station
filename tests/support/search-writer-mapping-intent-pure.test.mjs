@@ -39,8 +39,6 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const publicCa = Buffer.from('-----BEGIN CERTIFICATE-----\n' + 'A'.repeat(140) +
   '\n-----END CERTIFICATE-----\n');
 const publicWriter = readFileSync(new URL('../fixtures/writer-mapping-pure-public.pem', import.meta.url));
-const writerFingerprint = new X509Certificate(publicWriter).fingerprint256
-  .replaceAll(':', '').toLowerCase();
 const expected = phase => ({ status: 'writer-mapping-evidence', phase, ready: false });
 const rejected = { status: 'writer-mapping-evidence-rejected', ready: false };
 const successor = (snapshotValue, second) => {
@@ -106,7 +104,8 @@ function observed(bound, roleBody, mappingBody, retained = null) {
   return { indexes, roles: roleBody ? { ...policy.roles, [roleName]: roleBody } : policy.roles,
     mappings: mappingBody ? { ...policy.mappings, [roleName]: mappingBody } : policy.mappings };
 }
-export function fixture({ absent = false, retainedSource = false } = {}) {
+export function fixture({ absent = false, retainedSource = false,
+  caPem = publicCa, writerPem = publicWriter } = {}) {
   const initial = snapshot(false), bound = snapshot(true);
   let retained = null;
   if (retainedSource) {
@@ -153,7 +152,7 @@ export function fixture({ absent = false, retainedSource = false } = {}) {
   const initialView = observed(false, null, null, retained);
   const preRole = observed(true, null, null, retained);
   const priorDigests = createPriorPublicFiles(initial, token).map(row =>
-    ({ path: row.path, sha256: row.path === 'ca.pem' ? sha(publicCa) : 'a'.repeat(64) }));
+    ({ path: row.path, sha256: row.path === 'ca.pem' ? sha(caPem) : 'a'.repeat(64) }));
   const create = sealCreateIntent(makeCreateIntentProjection(initial, initialView, state),
     priorDigests, { project: 'stationfixture', systemIdentifier: '123',
       dispatchId: ids[0], ownerId: ids[1] });
@@ -178,12 +177,13 @@ export function fixture({ absent = false, retainedSource = false } = {}) {
   attested.exactTimestamps.dispatch.push({ generationToken: token, operation: 'writer_role',
     dispatchId: ids[3], createdAt: micro });
   const pre = observed(true, roleBody, null, retained);
-  const publicEvidence = { originalCaPemHex: publicCa.toString('hex'),
-    candidateCaPemHex: publicCa.toString('hex'), writerPemHex: publicWriter.toString('hex'),
-    candidateDigests: [{ path: 'ca.pem', sha256: sha(publicCa) },
+  const publicEvidence = { originalCaPemHex: caPem.toString('hex'),
+    candidateCaPemHex: caPem.toString('hex'), writerPemHex: writerPem.toString('hex'),
+    candidateDigests: [{ path: 'ca.pem', sha256: sha(caPem) },
       { path: `generations/${token.replaceAll('-', '')}/writer.pem`,
-        sha256: sha(publicWriter) }],
-    writerPrincipal: principal, writerCertFingerprint: writerFingerprint };
+        sha256: sha(writerPem) }],
+    writerPrincipal: principal, writerCertFingerprint: new X509Certificate(writerPem)
+      .fingerprint256.replaceAll(':', '').toLowerCase() };
   const projection = makeWriterMappingIntentProjection(attested, pre, state,
     createEvidence, roleEvidence, priorDigests, publicEvidence);
   const sealed = sealWriterMappingIntent(projection,
