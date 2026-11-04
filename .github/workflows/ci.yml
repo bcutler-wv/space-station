@@ -74,6 +74,7 @@ jobs:
       - run: node --test tests/support/opensearch-writer-role-api-shape.test.mjs tests/support/opensearch-writer-role-api-transport.test.mjs
       - run: node --test tests/support/search-writer-role-intent-pure.test.mjs
       - run: node --test tests/support/search-writer-role-offline-binding.test.mjs
+      - run: node --test tests/support/search-writer-role-apply-transfer.test.mjs
       - run: node --test tests/support/search-writer-role-prepare-core.test.mjs
       - run: node --test tests/support/search-writer-role-prepare-lock.test.mjs tests/support/search-writer-role-prepare-owner.test.mjs
       - run: bash tests/support/search-writer-role-prepare-render-proof.sh

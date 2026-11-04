@@ -126,3 +126,11 @@ password in `Config.Env`, which its unchanged secret-output check rejected.
 Version 0.79.2 requests only ID, creation time and admin-network IP at each
 of the four PostgreSQL probes. Source and local tests pass independently of
 the pending Ubuntu preparation gate; no runtime acceptance is claimed.
+
+Version 0.80.0 adds an uncalled offline writer-role transfer and copied-input
+reader. They copy only the fixed sealed role/create files, transition password
+and prior public PEM inventory into a private UID-1000 volume, then enforce
+canonical bytes, distinct IDs, fixed file identity and real certificate
+digests. The copied reader retains original inodes for later rechecks; it
+does not establish a current approved caller, live U or send authority.
+The 0.79.2 preparation runtime gate remains a separate pending acceptance.
