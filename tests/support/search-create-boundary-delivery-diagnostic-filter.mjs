@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { lstat, open, readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
 import { isCreateBoundaryDiagnosticLine } from '../../scripts/search-create-boundary-owner-diagnostic.mjs';
 
@@ -78,6 +79,62 @@ const applyCheckpoints = new Set(['setup', 'fixture-reset',
   ...applyScenarios.flatMap(scenario =>
     prepareSteps.map(step => `${scenario}-prepare-${step}`)),
   ...applyNames.flatMap(name => [`image-${name}`, `evidence-${name}`])]);
+const writerCheckpoints = new Set(['setup', 'precreate-baseline', 'create-intent',
+  'create-apply', 'bound-baseline', 'unmodified-owner', 'instrumented-image',
+  'readonly-grant', 'instrumented-owner', 'fault-lost-transfer-return',
+  'fault-lost-prepare-return', 'fault-lost-cleanup-return', 'fault-cleanup-refused',
+  'fault-create-pending-inode', 'fault-create-binding-inode', 'fault-public-pem-inode',
+  'fault-public-pem-bytes', 'fault-registry-revision',
+  'fault-registry-candidate-uuid', 'fault-create-dispatch-owner', 'fault-mounted-admin-pem',
+  'fault-mounted-e0b', 'fault-engine-hidden-index', 'fault-engine-alias',
+  'fault-engine-role', 'fault-candidate-profile', 'fault-stopped-service',
+  'fault-concurrent-owners', 'fault-partial-pending',
+  'fault-writer-prepare-final-after-append',
+  'fault-writer-prepare-final-after-file-sync',
+  'terminal-default', 'terminal-runner', 'terminal-runner-volume',
+  'terminal-runner-missing-o']);
+for (const name of [...writerCheckpoints].filter(value => value.startsWith('fault-')))
+  for (const stage of ['owner', 'logs', 'evidence', 'restore', 'cleanup'])
+    writerCheckpoints.add(`${name}-${stage}`);
+for (const name of [...writerCheckpoints].filter(value => value.startsWith('terminal-')))
+  for (const stage of ['owner', 'logs', 'evidence'])
+    writerCheckpoints.add(`${name}-${stage}`);
+const writerVariants = new Set(['default', 'runner', 'runner-volume', 'runner-missing-o']);
+export function writerRolePrepareSummary(log, variant) {
+  if (typeof log !== 'string' || log.length > 8 * 1024 * 1024 ||
+      !writerVariants.has(variant)) throw Error('Writer summary input');
+  const matches = log.split('\n').filter(line =>
+    line.startsWith('Writer role preparation summary '));
+  if (!matches.length) return '';
+  if (matches.length !== 1) throw Error('Writer summary count');
+  const line = matches[0];
+  const match = /^Writer role preparation summary variant=(default|runner|runner-volume|runner-missing-o) transfer=(\d{1,3}) read=(\d{1,3}) get=(\d{1,3}) head=(\d{1,3}) cleanup=(\d{1,3})\.$/.exec(line);
+  if (!match || match[1] !== variant ||
+      match.slice(2).some(value => Number(value) > 999)) throw Error('Writer summary shape');
+  return `${line}\n`;
+}
+async function checkedSummaryFile(name, value) {
+  const info = await lstat(name);
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 ||
+      info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o600 ||
+      info.size !== Buffer.byteLength(value) || await readFile(name, 'utf8') !== value)
+    throw Error('Writer summary file');
+}
+export async function persistWriterRolePrepareSummary(name, log, variant) {
+  const value = writerRolePrepareSummary(log, variant);
+  if (!value) return false;
+  let handle;
+  try { handle = await open(name, 'wx', 0o600); }
+  catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    await checkedSummaryFile(name, value);
+    return true;
+  }
+  try { await handle.writeFile(value); await handle.sync(); }
+  finally { await handle.close(); }
+  await checkedSummaryFile(name, value);
+  return true;
+}
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
@@ -87,11 +144,14 @@ export function filteredCreateBoundaryDiagnostics(log) {
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
     const intent = /^Create intent prepare fixture failed at ([a-z-]+)\.$/.exec(line);
     const apply = /^Create apply runtime fixture failed at ([a-z0-9-]+)\.$/.exec(line);
+    const writer = /^Writer role preparation fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && apply && applyCheckpoints.has(apply[1])) {
+      found.push(line); checkpoint = true;
+    } else if (!checkpoint && writer && writerCheckpoints.has(writer[1])) {
       found.push(line); checkpoint = true;
     } else if (!diagnostic && isCreateBoundaryDiagnosticLine(line)) {
       found.push(line); diagnostic = true;
@@ -99,9 +159,20 @@ export function filteredCreateBoundaryDiagnostics(log) {
   }
   return found;
 }
-if (process.argv.length === 3 && process.argv[1]?.endsWith('/search-create-boundary-delivery-diagnostic-filter.mjs')) {
+if (process.argv[1]?.endsWith('/search-create-boundary-delivery-diagnostic-filter.mjs')) {
   try {
-    if ((await stat(process.argv[2])).size > 8 * 1024 * 1024) process.exitCode = 1;
-    else process.stdout.write(`${filteredCreateBoundaryDiagnostics(await readFile(process.argv[2], 'utf8')).join('\n')}\n`);
+    if (process.argv.length === 3) {
+      if ((await stat(process.argv[2])).size > 8 * 1024 * 1024) process.exitCode = 1;
+      else process.stdout.write(`${filteredCreateBoundaryDiagnostics(await readFile(process.argv[2], 'utf8')).join('\n')}\n`);
+    } else if (process.argv.length === 6 && process.argv[2] === '--writer-summary') {
+      await persistWriterRolePrepareSummary(process.argv[4],
+        await readFile(process.argv[3], 'utf8'), process.argv[5]);
+    } else if (process.argv.length === 5 && process.argv[2] === '--writer-emit') {
+      const name = process.argv[3], variant = process.argv[4];
+      const value = await readFile(name, 'utf8');
+      if (writerRolePrepareSummary(value, variant) !== value) throw Error('Writer summary emit');
+      await checkedSummaryFile(name, value);
+      process.stdout.write(value);
+    } else process.exitCode = 1;
   } catch { process.exitCode = 1; }
 }

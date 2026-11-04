@@ -7,7 +7,13 @@ if [[ ! -d .git || -e .env || -e .cache/search-db || -e .cache/search-security ]
   echo 'Create boundary delivery gate requires a clean CI checkout.' >&2
   exit 1
 fi
+writer_variant=${STATION_WRITER_PREPARE_GATE_VARIANT:-}
+if [[ -n $writer_variant && ! $writer_variant =~ ^(default|runner|runner-volume|runner-missing-o)$ ]]; then
+  echo 'Create boundary delivery gate has an invalid disposable variant.' >&2
+  exit 1
+fi
 runner_root=$PWD
+source "$runner_root/tests/support/search-create-private-log-scan.sh"
 runner_uid=$(id -u)
 runner_gid=$(id -g)
 docker_gid=$(stat -c '%g' /var/run/docker.sock)
@@ -26,6 +32,7 @@ pair_gid=''
 private_log="$gate_root/gate.log"
 : > "$private_log"
 teardown_failed=0
+marker_files=()
 ancestor_paths=()
 ancestor_modes=()
 make_traversable() {
@@ -88,7 +95,8 @@ cleanup_pair() {
       fi
     done <<< "$listing"
     for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift \
-      search-create-apply-transfer search-create-index; do
+      search-create-apply-transfer search-create-index search-writer-role-prepare-transfer \
+      search-writer-role-prepare; do
       if ! listing=$(docker ps -a --no-trunc --filter "label=com.docker.compose.project=$project_name" \
         --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>> "$private_log"); then
         teardown_failed=1; listing=''
@@ -109,15 +117,42 @@ cleanup_pair() {
     [[ ${#listing} -le 8192 ]] || teardown_failed=1
     while IFS= read -r volume; do
       [[ -n $volume ]] || continue
-    if [[ $volume =~ ^${project_name}_search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})$ ]]; then
+    if [[ $volume =~ ^${project_name}_(search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})|search_writer_prepare_[0-9a-f]{32})$ ]]; then
         docker volume rm "$volume" >> "$private_log" 2>&1 || teardown_failed=1
       else
         teardown_failed=1
       fi
     done <<< "$listing"
   fi
-  if [[ -n $checkout ]]; then sudo rm -rf -- "$checkout" || teardown_failed=1; fi
-  if [[ -n $pair_home ]]; then sudo rm -rf -- "$pair_home" || teardown_failed=1; fi
+  if [[ -n $checkout && -d $checkout ]]; then
+    local marker_file="$gate_root/markers-${pair:-none}"
+    if sudo "$(command -v node)" \
+      "$runner_root/tests/support/search-create-private-log-scan.mjs" \
+      --capture "$checkout" "$marker_file" >> "$private_log" 2>&1; then
+      marker_files+=("$marker_file")
+    else
+      teardown_failed=1
+    fi
+  fi
+  if [[ -n $checkout ]]; then sudo rm -rf -- "$checkout" >> "$private_log" 2>&1 || teardown_failed=1; fi
+  if [[ -n $pair_home ]]; then sudo rm -rf -- "$pair_home" >> "$private_log" 2>&1 || teardown_failed=1; fi
+  if [[ -n $writer_variant && -n $checkout ]]; then
+    "$(command -v node)" \
+      "$runner_root/tests/support/search-create-boundary-delivery-diagnostic-filter.mjs" \
+      --writer-summary "$private_log" \
+      "$runner_root/.cache/results/writer-role-prepare-${writer_variant}.txt" \
+      "$writer_variant" >> "$private_log" 2>&1 || teardown_failed=1
+  fi
+  if (( ${#marker_files[@]} == 0 )); then
+    local marker_file="$gate_root/markers-empty"
+    if [[ ! -e $marker_file ]]; then printf '[]' > "$marker_file"; chmod 600 "$marker_file"; fi
+    marker_files+=("$marker_file")
+  fi
+  for marker_file in "${marker_files[@]}"; do
+    scan_create_private_log_after_teardown "$runner_root" "$marker_file" \
+      "$private_log" yes \
+      >> "$private_log" 2>&1 || teardown_failed=1
+  done
   checkout=''
   pair_home=''
 }
@@ -161,6 +196,17 @@ test -f "$compose_plugin" && test -x "$compose_plugin"
 test -f "$buildx_plugin" && test -x "$buildx_plugin"
 
 for pair in default runner; do
+  if [[ -n $writer_variant ]]; then
+    case "$writer_variant:$pair" in
+      default:default|runner:runner|runner-volume:runner|runner-missing-o:runner) ;;
+      *) continue ;;
+    esac
+  fi
+  if [[ -n $writer_variant && $pair == runner &&
+      ( $runner_uid != 1001 || $runner_gid != 1001 ) ]]; then
+    echo 'Writer preparation gate requires exact runner UID/GID 1001.' >&2
+    exit 1
+  fi
   phase=clone
   if [[ $pair == default ]]; then pair_uid=1000; pair_gid=1000;
   else pair_uid=$runner_uid; pair_gid=$runner_gid; fi
@@ -212,15 +258,33 @@ for pair in default runner; do
   run_step buildx-plugin run_pair docker buildx version
   run_step init-env run_pair node scripts/init-env.mjs
   run_step init-search-security run_pair node scripts/init-search-security.mjs
-  run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
-    STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
-    STATION_CREATE_APPLY_PUBLIC_ROOT="$checkout/.cache" \
-    STATION_CREATE_APPLY_VOLUME_NAME="${name}_search_create_apply_buildplaceholder" \
-    docker compose -f compose.yaml -f compose.search-create-boundary.yaml -f compose.search-create-apply.yaml \
-    --profile search --profile fixture --profile search-create-boundary --profile search-create-apply build \
-    migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
-    search-create-transfer search-create-boundary search-create-intent-prepare \
-    search-create-apply-transfer search-create-index
+  if [[ -n $writer_variant ]]; then
+    run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
+      STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
+      STATION_CREATE_APPLY_PUBLIC_ROOT="$checkout/.cache" \
+      STATION_CREATE_APPLY_VOLUME_NAME="${name}_search_create_apply_buildplaceholder" \
+      STATION_WRITER_PREPARE_PUBLIC_ROOT="$checkout/.cache" \
+      STATION_WRITER_PREPARE_INVOCATION_ROOT="$checkout/.cache" \
+      STATION_WRITER_PREPARE_VOLUME_NAME="${name}_search_writer_prepare_buildplaceholder" \
+      docker compose -f compose.yaml -f compose.search-create-boundary.yaml \
+      -f compose.search-create-apply.yaml -f compose.search-writer-role-prepare.yaml \
+      --profile search --profile fixture --profile search-create-boundary \
+      --profile search-create-apply --profile search-writer-role-prepare build \
+      migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
+      search-create-transfer search-create-boundary search-create-intent-prepare \
+      search-create-apply-transfer search-create-index \
+      search-writer-role-prepare-transfer search-writer-role-prepare
+  else
+    run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
+      STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
+      STATION_CREATE_APPLY_PUBLIC_ROOT="$checkout/.cache" \
+      STATION_CREATE_APPLY_VOLUME_NAME="${name}_search_create_apply_buildplaceholder" \
+      docker compose -f compose.yaml -f compose.search-create-boundary.yaml -f compose.search-create-apply.yaml \
+      --profile search --profile fixture --profile search-create-boundary --profile search-create-apply build \
+      migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
+      search-create-transfer search-create-boundary search-create-intent-prepare \
+      search-create-apply-transfer search-create-index
+  fi
   run_step image-code-readability run_pair docker run --rm --pull never --network none \
     --read-only --user 1000:1000 --entrypoint node "${name}-search-create-boundary" \
     -e 'const fs=require("node:fs"); const c=fs.constants;
@@ -310,14 +374,29 @@ for pair in default runner; do
     -c "BEGIN; INSERT INTO search_generation_history (generation_token,physical_index,profile_id,index_uuid,lifecycle) VALUES ('legacy-v1','station-mail-v1','station-mail-v1','$index_uuid','roles_attested'); UPDATE search_generation_control SET source_generation_token='legacy-v1',revision=revision+1 WHERE singleton=1 AND stage='disabled' AND source_generation_token IS NULL; COMMIT;"
   run_step candidate-reservation run_pair docker compose --profile search run --rm -T --no-deps \
     migrate node tests/integration/search-create-boundary-reserve.mjs
-  run_step intent-prepare-delivery run_pair node tests/integration/search-create-intent-prepare-delivery.mjs
-  run_step create-apply-runtime run_pair node tests/integration/search-create-apply-delivery.mjs
-  run_step delivery run_pair node tests/integration/search-create-boundary-delivery.mjs
-  run_step create-apply-terminal-missing-o run_pair node tests/integration/search-create-apply-terminal-missing-o.mjs
+  if [[ -n $writer_variant ]]; then
+    run_step writer-role-prepare-runtime run_pair env \
+      STATION_WPREP_GATE_CASE="$writer_variant" \
+      node tests/integration/search-writer-role-prepare-delivery.mjs
+  else
+    run_step intent-prepare-delivery run_pair node tests/integration/search-create-intent-prepare-delivery.mjs
+    run_step create-apply-runtime run_pair node tests/integration/search-create-apply-delivery.mjs
+    run_step delivery run_pair node tests/integration/search-create-boundary-delivery.mjs
+    run_step create-apply-terminal-missing-o run_pair node tests/integration/search-create-apply-terminal-missing-o.mjs
+  fi
   run_step secret-scan sudo "$(command -v node)" tests/support/search-attestor-delivery-log-scan.mjs "$private_log"
   phase=teardown
   cleanup_pair
   [[ $teardown_failed == 0 ]]
+  if [[ -n $writer_variant ]]; then
+    "$(command -v node)" \
+      "$runner_root/tests/support/search-create-boundary-delivery-diagnostic-filter.mjs" \
+      --writer-emit "$runner_root/.cache/results/writer-role-prepare-${writer_variant}.txt" \
+      "$writer_variant" || {
+        echo 'Writer role preparation sanitized summary unavailable.' >&2
+        exit 1
+      }
+  fi
   echo "PASS: disposable PG16/OpenSearch TLS create boundary delivery for $pair owner pair."
   cd "$runner_root"
 done

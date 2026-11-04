@@ -91,3 +91,14 @@ UID pairs of the disposable create-apply gate. Astra accepted only the fixed
 create-through-`uuid_bound` runtime prerequisite; publication and serving gates
 remain false. Version 0.72.0 starts a separately reviewed pure writer-role
 contract with no network request or database transition.
+
+Later writer-role work remains separate from the accepted create gate. The
+0.75.0 offline binding regression was accepted after one unchanged browser-job
+rerun; the 0.76.0 read-contract regression passed all ten Ubuntu jobs. Version
+0.77.0 added a source-reviewed fixed read-only preparation owner. Version
+0.78.0 adds four disposable preparation runtime jobs with an unmodified owner
+control, forwarded-SDK read counts, exact original O/N/U and create evidence,
+reached faults, terminal resource checks, and post-teardown private-log scans.
+Those new runtime jobs have not run or been accepted yet. No role send, CAS,
+mapping, principal, publication, or readiness authority follows from this
+source change.

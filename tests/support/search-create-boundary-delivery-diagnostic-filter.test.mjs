@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import process from 'node:process';
 import { test } from 'node:test';
 import { createApplyPrepareDiagnostic,
-  filteredCreateBoundaryDiagnostics } from './search-create-boundary-delivery-diagnostic-filter.mjs';
+  filteredCreateBoundaryDiagnostics, persistWriterRolePrepareSummary,
+  writerRolePrepareSummary } from
+  './search-create-boundary-delivery-diagnostic-filter.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
   const log = ['private-secret-do-not-print',
     'Create boundary delivery fixture failed at complete-cli.',
@@ -77,4 +83,55 @@ test('preexisting candidate substeps are finite and redact dynamic details', () 
     assert.deepEqual(filteredCreateBoundaryDiagnostics(`${line}\n` +
       'Create apply runtime fixture failed at preexisting-candidate-private-secret.'), [line]);
   }
+});
+test('writer preparation diagnostics and retained summary are finite', () => {
+  const safe = 'Writer role preparation summary variant=runner transfer=17 read=14 get=42 head=3 cleanup=4.';
+  assert.equal(writerRolePrepareSummary(`secret\n${safe}\n`, 'runner'), `${safe}\n`);
+  for (const line of [`${safe} secret`, safe.replace('42', 'private'),
+    safe.replace('runner', 'default'), `${safe}\n${safe}`])
+    assert.throws(() => writerRolePrepareSummary(line, 'runner'));
+  const log = ['hostile-private-value',
+    'Writer role preparation fixture failed at fault-mounted-e0b.',
+    'Writer role preparation fixture failed at fault-mounted-e0b.private-secret',
+    'Writer role preparation fixture failed at fault-private-secret.'].join('\n');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(log),
+    ['Writer role preparation fixture failed at fault-mounted-e0b.']);
+});
+test('writer summary survives explicit cleanup and EXIT cleanup without raw output', async t => {
+  await mkdir('.cache/results', { recursive: true });
+  const root = await mkdtemp(path.join(process.cwd(), '.cache/results/writer-summary-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const privateLog = path.join(root, 'private.log');
+  const summary = path.join(root, 'summary.txt');
+  const line = 'Writer role preparation summary variant=runner transfer=2 read=3 get=4 head=5 cleanup=6.\n';
+  await writeFile(privateLog, `private-secret-never-print\n${line}`);
+  const command = 'set -euo pipefail\n' +
+    'cleanup_pair() { "$NODE_BIN" "$FILTER" --writer-summary "$PRIVATE_LOG" "$SUMMARY" runner; }\n' +
+    'trap cleanup_pair EXIT\ncleanup_pair\n';
+  const result = spawnSync('bash', ['-c', command], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env,
+      NODE_BIN: process.execPath,
+      FILTER: path.join(process.cwd(), 'tests/support/search-create-boundary-delivery-diagnostic-filter.mjs'),
+      PRIVATE_LOG: privateLog, SUMMARY: summary },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+  assert.equal(await readFile(summary, 'utf8'), line);
+  assert.equal((await stat(summary)).mode & 0o777, 0o600);
+  const emit = spawnSync(process.execPath,
+    ['tests/support/search-create-boundary-delivery-diagnostic-filter.mjs',
+      '--writer-emit', summary, 'runner'], { cwd: process.cwd(), encoding: 'utf8' });
+  assert.equal(emit.status, 0, emit.stderr);
+  assert.equal(emit.stdout, line);
+  assert.equal(emit.stderr, '');
+  await writeFile(summary, `${line}private-secret-never-print\n`);
+  await assert.rejects(persistWriterRolePrepareSummary(summary,
+    await readFile(privateLog, 'utf8'), 'runner'));
+  const hostile = spawnSync(process.execPath,
+    ['tests/support/search-create-boundary-delivery-diagnostic-filter.mjs',
+      '--writer-emit', summary, 'runner'], { cwd: process.cwd(), encoding: 'utf8' });
+  assert.notEqual(hostile.status, 0);
+  assert.equal(hostile.stdout, '');
+  assert.equal(hostile.stderr, '');
 });
