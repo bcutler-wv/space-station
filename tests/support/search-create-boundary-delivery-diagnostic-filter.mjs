@@ -2,6 +2,8 @@ import { Buffer } from 'node:buffer';
 import { lstat, open, readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
 import { isCreateBoundaryDiagnosticLine } from '../../scripts/search-create-boundary-owner-diagnostic.mjs';
+import { isWriterDeliveryTraceLine, isWriterDeliveryShapeLine } from
+  './search-writer-role-delivery-diagnostic.mjs';
 
 const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-cli',
   'record-io-fault', 'lost-volume-create-response', 'lost-transfer-response', 'lost-inspect-response',
@@ -102,7 +104,8 @@ for (const name of [...writerCheckpoints].filter(value => value.startsWith('term
 const writerVariants = new Set(['default', 'runner', 'runner-volume', 'runner-missing-o']);
 const deliveryCases = new Set(['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout']);
 const deliverySteps = new Set(['approval', 'derived-image', 'owner', 'phase-evidence',
-  'consumer-markers', 'replay']);
+  'phase-counts', 'phase-registry', 'phase-originals', 'phase-engine',
+  'phase-binding', 'phase-resources', 'consumer-markers', 'replay']);
 for (const value of deliveryCases) writerCheckpoints.add(`writer-delivery-${value}`);
 const writerPrecreateSteps = new Set(['registry-rows-command', 'registry-rows-parse',
   'registry-micro-command', 'registry-micro-parse', 'registry-micro-shape',
@@ -159,9 +162,10 @@ export async function persistWriterRolePrepareSummary(name, log, variant) {
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
-  let checkpoint = false, diagnostic = false;
+  let checkpoint = false, diagnostic = false, deliveryTrace = false;
+  const deliveryShapes = new Set();
   for (const line of log.split('\n')) {
-    if (line.length > 160) continue;
+    if (line.length > 240) continue;
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
     const intent = /^Create intent prepare fixture failed at ([a-z-]+)\.$/.exec(line);
     const apply = /^Create apply runtime fixture failed at ([a-z0-9-]+)\.$/.exec(line);
@@ -178,6 +182,11 @@ export function filteredCreateBoundaryDiagnostics(log) {
     } else if (!checkpoint && delivery && deliveryCases.has(delivery[1]) &&
         deliverySteps.has(delivery[2])) {
       found.push(line); checkpoint = true;
+    } else if (!deliveryTrace && isWriterDeliveryTraceLine(line)) {
+      found.push(line); deliveryTrace = true;
+    } else if (isWriterDeliveryShapeLine(line)) {
+      const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
+      if (!deliveryShapes.has(phase)) { found.push(line); deliveryShapes.add(phase); }
     } else if (!diagnostic && isCreateBoundaryDiagnosticLine(line)) {
       found.push(line); diagnostic = true;
     }

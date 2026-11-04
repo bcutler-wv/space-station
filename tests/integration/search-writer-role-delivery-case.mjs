@@ -7,6 +7,11 @@ import { createWriterRoleApplyDockerAdapter } from '../../scripts/search-create-
 import { deriveWriterRoleRequest } from '../../packages/search/dist/opensearch-writer-role-contract.js';
 import { compareObservedSecurityCollections } from
   '../../packages/search/dist/opensearch-generation-policy.js';
+import { readWriterRolePending } from '../../scripts/search-writer-role-pending.mjs';
+import { writeWriterRoleBinding } from '../../scripts/search-writer-role-binding.mjs';
+import { stageCreateApplyPublic } from '../../scripts/search-create-apply-public-stage.mjs';
+import { writerDeliveryTrace, writerDeliveryShape, writerDeliveryMethodTracker } from
+  '../support/search-writer-role-delivery-diagnostic.mjs';
 
 const micro = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/;
 const modes = ['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout'];
@@ -89,6 +94,34 @@ export async function runWriterRoleDeliveryCase(ctx) {
     assert.equal(await present(roleBinding), false);
     assert.equal(await present(lock), false);
     const created = [], starts = [], fences = [], createdStates = [], order = [];
+    const diagnostic = { method: 'none', phase: 'owner', command: 'none',
+      outcome: 'none', last: 'none', create: 0, inspect: 0, fence: 0, start: 0 };
+    const trackMethod = writerDeliveryMethodTracker(diagnostic);
+    const increment = value => value === 'many' || value === 2 ? 'many' : value + 1;
+    const shapes = [];
+    const category = args => {
+      if (args[0] === 'compose') {
+        if (args.includes('create') && args.includes('--no-recreate')) return 'compose-create';
+        if (args.includes('config')) return 'compose-config';
+        if (args.includes('ps')) return 'compose-ps';
+      }
+      if (args[0] === 'container') {
+        const value = { inspect: 'container-inspect', start: 'container-start',
+          wait: 'container-wait', logs: 'container-logs', rm: 'container-rm' }[args[1]];
+        if (value) return value;
+      }
+      if (args[0] === 'volume') {
+        const value = { inspect: 'volume-inspect', create: 'volume-create',
+          rm: 'volume-rm' }[args[1]];
+        if (value) return value;
+      }
+      return 'other';
+    };
+    const phaseMethod = name => async (...params) => trackMethod(name, () => ({
+        'pending-read': readWriterRolePending,
+        'binding-write': writeWriterRoleBinding,
+        'public-stage': stageCreateApplyPublic,
+      }[name])(...params));
     const applyLogReturns = [];
     const captureApplyLog = async id => {
       if (applyLogReturns.length) return;
@@ -99,7 +132,16 @@ export async function runWriterRoleDeliveryCase(ctx) {
     let prestartReached = false;
     let heldOriginal;
     const faultCommand = async (args, env, timeoutMs) => {
-      const result = await command('docker', args, env, timeoutMs);
+      diagnostic.command = category(args);
+      if (diagnostic.command === 'compose-create') diagnostic.create = increment(diagnostic.create);
+      if (diagnostic.command === 'container-inspect' && created.length > createdStates.length)
+        diagnostic.inspect = increment(diagnostic.inspect);
+      if (diagnostic.command === 'container-start') diagnostic.start = increment(diagnostic.start);
+      let result;
+      try { result = await command('docker', args, env, timeoutMs); }
+      catch (error) { diagnostic.outcome = 'threw'; throw error; }
+      diagnostic.outcome = result.signal ? 'signaled' :
+        result.code === 0 ? 'returned-zero' : 'returned-nonzero';
       if (args[0] === 'compose' && args.includes('create') && args.includes('--no-recreate'))
         { created.push(args.at(-1)); order.push(`create:${args.at(-1)}`); }
       if (args[0] === 'container' && args[1] === 'start') {
@@ -123,6 +165,39 @@ export async function runWriterRoleDeliveryCase(ctx) {
       if (args[0] === 'container' && args[1] === 'inspect' && result.code === 0) {
         const item = JSON.parse(result.stdout)[0];
         const service = item?.Config?.Labels?.['com.docker.compose.service'];
+        if (['search-writer-role-apply-transfer', 'search-writer-role-apply'].includes(service) &&
+            created.length > createdStates.length) {
+          const networkNames = Object.keys(item.NetworkSettings?.Networks ?? {}).sort();
+          const networkShape = service === 'search-writer-role-apply-transfer' ?
+            networkNames.length === 0 ? 'empty' : networkNames.join('|') === 'none' ? 'none' : 'invalid' :
+            networkNames.join('|') === [`${project}_search_admin_db`,
+              `${project}_search_internal`].sort().join('|') ? 'admin-internal' : 'invalid';
+          const zeroTime = value => value === '0001-01-01T00:00:00Z' ? 'zero' :
+            value === undefined ? 'missing' : typeof value === 'string' ? 'nonzero' : 'other';
+          const operationalEmpty = item.State.Error === '' &&
+            item.State.OOMKilled === false && item.State.Dead === false &&
+            item.State.ExitCode === 0 && item.State.Paused === false &&
+            item.State.Restarting === false;
+          const endpointMap = item.NetworkSettings?.Networks;
+          const networkFields = !endpointMap || typeof endpointMap !== 'object' ?
+            'unknown' : Object.values(endpointMap).every(endpoint => endpoint &&
+              typeof endpoint === 'object' && !endpoint.EndpointID &&
+              !endpoint.Gateway && !endpoint.IPAddress && !endpoint.MacAddress &&
+              !endpoint.IPPrefixLen && !endpoint.IPv6Gateway &&
+              !endpoint.GlobalIPv6Address && !endpoint.GlobalIPv6PrefixLen &&
+              !endpoint.Links?.length &&
+              (!endpoint.IPAMConfig || Object.keys(endpoint.IPAMConfig).length === 0) &&
+              !endpoint.DriverOpts && !endpoint.GwPriority && !endpoint.DNSNames?.length) ?
+            'empty' : 'nonempty';
+          shapes.push({ caseName: mode, phase: service === 'search-writer-role-apply-transfer' ?
+            'transfer' : 'apply', state: item.State.Status === 'created' ? 'created' : 'other',
+          running: String(item.State.Running) === 'true' ? 'true' :
+            item.State.Running === false ? 'false' : 'other',
+          started: zeroTime(item.State.StartedAt), finished: zeroTime(item.State.FinishedAt),
+          network: ['empty', 'none', 'admin-internal'].includes(networkShape) ?
+            networkShape : 'other', stateFields: operationalEmpty ? 'empty' : 'other',
+          networkFields });
+        }
         if (item?.State?.Status === 'created' &&
             ['search-writer-role-apply-transfer', 'search-writer-role-apply'].includes(service)) {
           const networkNames = Object.keys(item.NetworkSettings?.Networks ?? {}).sort();
@@ -181,17 +256,45 @@ export async function runWriterRoleDeliveryCase(ctx) {
     } else {
       try {
         await runWriterRoleApplyOwner({ repository, uid, gid, args,
+          pendingReader: phaseMethod('pending-read'),
+          bindingWriter: phaseMethod('binding-write'),
+          publicStage: phaseMethod('public-stage'),
           adapterFactory: input => {
+            diagnostic.method = 'adapter-factory';
             const adapter = createWriterRoleApplyDockerAdapter(input, { command: faultCommand });
-            return { ...adapter, runPhase: (phase, beforeStart) => adapter.runPhase(phase,
-              async () => { await beforeStart(); fences.push(phase);
-                order.push(`fence:search-writer-role-apply${phase === 'transfer' ? '-transfer' : ''}`); }) };
+            diagnostic.last = 'adapter-factory';
+            const wrapped = {};
+            for (const [key, label] of Object.entries({ verifyOwner: 'verify-owner',
+              captureOwner: 'capture-owner', recheckOwner: 'recheck-owner',
+              recheckInfrastructure: 'recheck-infrastructure', preflight: 'preflight',
+              volumeAbsent: 'volume-absent', createVolume: 'create-volume',
+              checkVolume: 'check-volume', cleanupRemote: 'cleanup-remote',
+              cleanupPrivate: 'cleanup-private' })) {
+              wrapped[key] = (...params) => trackMethod(label, async () => {
+                diagnostic.phase = label.startsWith('cleanup') ? 'cleanup' : diagnostic.phase;
+                return adapter[key](...params);
+              });
+            }
+            wrapped.runPhase = (phase, beforeStart) => trackMethod(
+              phase === 'transfer' ? 'run-transfer' : 'run-apply', () => {
+              diagnostic.phase = phase;
+              return adapter.runPhase(phase, () => trackMethod(
+                phase === 'transfer' ? 'fence-transfer' : 'fence-apply', async () => {
+                await beforeStart();
+                diagnostic.fence = increment(diagnostic.fence);
+                fences.push(phase);
+                order.push(`fence:search-writer-role-apply${phase === 'transfer' ? '-transfer' : ''}`);
+              }));
+            });
+            return wrapped;
           } });
         outcome = { status: 'fulfilled' };
       } catch { outcome = { status: 'rejected' }; }
+      process.stderr.write(`${writerDeliveryTrace({ caseName: mode, ...diagnostic })}\n`);
+      for (const shape of shapes) process.stderr.write(`${writerDeliveryShape(shape)}\n`);
       assert.equal(outcome.status, 'rejected');
     }
-    step = 'phase-evidence';
+    step = 'phase-counts';
     assert.equal(created.length, mode === 'positive' ? 0 : mode === 'prestart' ? 2 : 2);
     assert.equal(starts.length, mode === 'positive' ? 0 : mode === 'prestart' ? 1 : 2);
     if (mode !== 'positive') {
@@ -206,14 +309,17 @@ export async function runWriterRoleDeliveryCase(ctx) {
         ...(mode === 'prestart' ? [] : [`fence:${apply}`, `start:${apply}`])]);
     }
     assert.equal(prestartReached, mode === 'prestart');
+    step = 'phase-registry';
     const rows = await registry();
     const observed = await engine();
+    step = 'phase-originals';
     same(await state(), original.state);
     same(await adminFiles(), original.admin);
     same(await hostResources(), original.host);
     const freshSources = await sources();
     assert.equal(freshSources.length, original.sources.length);
     for (let i = 0; i < freshSources.length; i++) same(freshSources[i], original.sources[i]);
+    step = 'phase-registry';
     const expectedRevision = original.registry.control.revision +
       (mode === 'positive' ? 5 : mode === 'prestart' ? 0 : 3);
     assert.equal(rows.control.revision, expectedRevision);
@@ -245,6 +351,7 @@ export async function runWriterRoleDeliveryCase(ctx) {
       const roleTime = rows.microseconds.dispatch.find(item => item[1] === 'writer_role')?.[2];
       assert.match(roleTime, micro);
     }
+    step = 'phase-engine';
     same(observed.indexes, original.engine.indexes);
     same(observed.mappings, original.engine.mappings);
     if (mode === 'positive' || mode === 'lost-return' || mode === 'false-ack' || mode === 'held-timeout') {
@@ -259,12 +366,14 @@ export async function runWriterRoleDeliveryCase(ctx) {
       assert.equal(compareObservedSecurityCollections(postPolicy,
         observed.roles, observed.mappings), 'exact');
     } else same(observed.roles, original.engine.roles);
+    step = 'phase-binding';
     const bindingBytes = await readFile(roleBinding);
     const binding = JSON.parse(bindingBytes.toString('utf8'));
     assert.equal(binding.approvedSha256, approvedSha);
     assert.equal(binding.dispatchId, intent.dispatchId);
     assert.equal(binding.ownerId, intent.ownerId);
     assert.equal(await present(lock), mode !== 'positive');
+    step = 'phase-resources';
     for (const [index, service] of ['search-writer-role-apply-transfer',
       'search-writer-role-apply'].entries()) {
       const remaining = (await docker(['ps', '-a', '--no-trunc', '--filter',

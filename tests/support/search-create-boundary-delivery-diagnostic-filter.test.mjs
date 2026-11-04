@@ -8,6 +8,8 @@ import { createApplyPrepareDiagnostic,
   filteredCreateBoundaryDiagnostics, persistWriterRolePrepareSummary,
   writerPrecreateDiagnostic, writerRolePrepareSummary } from
   './search-create-boundary-delivery-diagnostic-filter.mjs';
+import { writerDeliveryTrace, writerDeliveryShape, writerDeliveryMethodTracker } from
+  './search-writer-role-delivery-diagnostic.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
   const log = ['private-secret-do-not-print',
     'Create boundary delivery fixture failed at complete-cli.',
@@ -112,6 +114,62 @@ test('writer delivery failure forwards one finite case and step without hostile 
   assert.deepEqual(filteredCreateBoundaryDiagnostics(
     'Writer role preparation fixture failed at writer-delivery-prestart.'),
   ['Writer role preparation fixture failed at writer-delivery-prestart.']);
+});
+test('writer delivery trace and actual created shape are finite and duplicate-safe', () => {
+  const trace = writerDeliveryTrace({ caseName: 'lost-return', method: 'run-apply',
+    phase: 'apply', command: 'container-inspect', outcome: 'returned-zero',
+    last: 'run-transfer', create: 2, inspect: 2, fence: 1, start: 1 });
+  const transfer = writerDeliveryShape({ caseName: 'lost-return', phase: 'transfer',
+    state: 'created', running: 'false', started: 'zero', finished: 'zero',
+    network: 'none', stateFields: 'empty', networkFields: 'empty' });
+  const apply = writerDeliveryShape({ caseName: 'lost-return', phase: 'apply',
+    state: 'other', running: 'other', started: 'missing', finished: 'nonzero',
+    network: 'other', stateFields: 'other', networkFields: 'nonempty' });
+  const checkpoint = 'Writer role delivery fixture case=lost-return step=phase-registry.';
+  assert.deepEqual(filteredCreateBoundaryDiagnostics([
+    'private-secret-do-not-print', trace, transfer, apply, checkpoint,
+    trace, transfer, apply, `${trace} private-secret-do-not-print`,
+    trace.replace('create=2', 'create=3'),
+    trace.replace('method=run-apply', 'method=secret'),
+    apply.replace('network=other', 'network=private-secret'),
+    `\u001b[31m${trace}`, 'x'.repeat(201),
+  ].join('\n')), [trace, transfer, apply, checkpoint]);
+  assert.throws(() => writerDeliveryTrace({ caseName: 'lost-return',
+    method: 'run-apply', phase: 'apply', command: 'other', outcome: 'threw',
+    last: 'none', create: 3, inspect: 0, fence: 0, start: 0 }));
+  assert.match(writerDeliveryTrace({ caseName: 'lost-return', method: 'run-apply',
+    phase: 'apply', command: 'container-start', outcome: 'returned-zero',
+    last: 'fence-apply', create: 'many', inspect: 2, fence: 2, start: 2 }),
+  /create=many/);
+  let accessed = false;
+  const hostile = { caseName: 'prestart', method: 'none', phase: 'owner',
+    command: 'none', outcome: 'none', last: 'none', create: 0, inspect: 0,
+    fence: 0, start: 0 };
+  Object.defineProperty(hostile, 'method', { get() { accessed = true; return 'none'; } });
+  assert.throws(() => writerDeliveryTrace(hostile));
+  assert.equal(accessed, false);
+});
+test('writer delivery nested recheck preserves the post-fence phase failure boundary', async () => {
+  const diagnostic = { method: 'none', last: 'none' };
+  const run = writerDeliveryMethodTracker(diagnostic);
+  const reached = [];
+  await assert.rejects(run('run-apply', async () => {
+    await run('fence-apply', async () => {
+      await run('recheck-owner', async () => { reached.push('recheck-owner'); });
+      assert.equal(diagnostic.method, 'fence-apply');
+      await run('check-volume', async () => { reached.push('check-volume'); });
+      assert.equal(diagnostic.method, 'fence-apply');
+    });
+    reached.push('post-fence');
+    assert.equal(diagnostic.method, 'run-apply');
+    throw Error('private post-fence failure');
+  }), /private post-fence failure/);
+  assert.deepEqual(reached, ['recheck-owner', 'check-volume', 'post-fence']);
+  assert.equal(diagnostic.method, 'run-apply');
+  assert.equal(diagnostic.last, 'fence-apply');
+  await assert.rejects(run('run-transfer', async () => run('fence-transfer',
+    async () => run('check-volume', async () => { throw Error('private fence failure'); }))));
+  assert.equal(diagnostic.method, 'check-volume');
 });
 test('precreate diagnostic preserves the failing finite substep until successful restore', () => {
   let checkpoint = 'setup';
