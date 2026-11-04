@@ -162,3 +162,8 @@ writer transitions compare complete predecessor and successor rows and exact
 microsecond sidecars before commit. A local disposable migrated PostgreSQL
 fixture verifies restricted-role grants, rollback and one-winner concurrency.
 Actual preparation and role-delivery gates still require Ubuntu evidence.
+
+Version 0.82.1 changes only the terminal runner network fixture's two return
+keys to match its existing evidence assertion. The prior Ubuntu run reached
+that assertion and failed; the corrected gate has not yet passed. All network
+mutation, original identity and teardown checks remain unchanged.

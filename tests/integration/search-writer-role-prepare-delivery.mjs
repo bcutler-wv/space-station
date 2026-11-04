@@ -1023,7 +1023,7 @@ async function replaceNetwork() {
   const after = JSON.parse(await docker(['network', 'inspect', name]))[0];
   assert.notEqual(after.Id, before.Id);
   assert.equal(after.Internal, true);
-  return { before: before.Id, after: after.Id };
+  return { original: before.Id, replacement: after.Id };
 }
 checkpoint = `terminal-${variant}`;
 await docker(['image', 'tag', derivedId, readImage]);
