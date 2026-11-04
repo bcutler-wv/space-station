@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { searchGenerationDispatchSpec } from '../../db/dist/search-generation-manifest.js';
 import { OPENSEARCH_MAPPING, OPENSEARCH_MAPPING_V2 } from './opensearch-compiler.js';
 import { buildWriterRoleContract, compareWriterRoleStage,
-  buildWriterMappingContract, compareWriterMappingStage,
+  buildWriterMappingContract, compareWriterMappingStage, deriveWriterMappingRequest,
   issuedWriterMappingRequest } from './opensearch-writer-role-contract.js';
 
 const token = '11111111-1111-4111-8111-111111111111';
@@ -249,6 +249,12 @@ describe('pure staged writer mapping contract', () => {
     expect(compareWriterMappingStage(value, evidence(true), 'pre')).toBe('mismatch');
     expect(compareWriterMappingStage(value, evidence(false), 'post')).toBe('mismatch');
     expect(issuedWriterMappingRequest(value).body).toBe(value.body);
+    const standalone = deriveWriterMappingRequest(mappingCandidate());
+    expect(standalone).toEqual({ target: value.target, body: value.body,
+      bodySha256: value.bodySha256,
+      dispatchBodyIdentity: value.dispatchBodyIdentity });
+    expect(() => deriveWriterMappingRequest({ ...mappingCandidate(),
+      writerPrincipal: 'other' })).toThrow();
   });
   it('rejects changed candidate, principal, role metadata and mapping metadata', () => {
     for (const changed of [

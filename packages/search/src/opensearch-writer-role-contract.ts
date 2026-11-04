@@ -165,6 +165,26 @@ export function compareWriterRoleStage(contract: WriterRoleContract, observed: u
 }
 
 /** Pure mapping proposal after the exact writer role. It grants one reserved principal only. */
+export function deriveWriterMappingRequest(proposed: MappingCandidate): Readonly<{
+  target: string; body: MappingBody; bodySha256: string;
+  dispatchBodyIdentity: string }> {
+  safeJson(proposed);
+  const candidate = exact(proposed, ['token', 'index', 'profile', 'uuid',
+    'writerRole', 'writerPrincipal']) as unknown as MappingCandidate;
+  const role = deriveWriterRoleRequest({ token: candidate.token, index: candidate.index,
+    profile: candidate.profile, uuid: candidate.uuid, writerRole: candidate.writerRole });
+  const suffix = candidate.token.replaceAll('-', '').toLowerCase();
+  if (candidate.writerPrincipal !== `station-search-indexer-${suffix}`) invalid();
+  const metadata = { operation: 'writer_mapping', target: role.target,
+    index: candidate.index, profile: 'station-mail-v2',
+    principal: candidate.writerPrincipal, actions: null };
+  const body = { users: [candidate.writerPrincipal], backend_roles: [],
+    hosts: [] } as MappingBody;
+  return freeze({ target: role.target, body, bodySha256: hash(body),
+    dispatchBodyIdentity: hash(metadata) });
+}
+
+/** Full strict original profile and staged security policy around the fixed request. */
 export function buildWriterMappingContract(prior: RegistryExpectedInput,
   proposed: MappingCandidate, storedRole: Dispatch, storedMapping: Dispatch): WriterMappingContract {
   safeJson(proposed); safeJson(storedMapping);
@@ -180,19 +200,16 @@ export function buildWriterMappingContract(prior: RegistryExpectedInput,
   const roleCandidate = { token: candidate.token, index: candidate.index,
     profile: candidate.profile, uuid: candidate.uuid, writerRole: candidate.writerRole } as Candidate;
   const roleContract = buildWriterRoleContract(prior, roleCandidate, storedRole);
-  const metadata = { operation: 'writer_mapping', target: roleContract.target,
-    index: roleContract.index, profile: 'station-mail-v2',
-    principal, actions: null };
-  const dispatchBodyIdentity = hash(metadata);
+  const request = deriveWriterMappingRequest(candidate as unknown as MappingCandidate);
+  const { body, bodySha256, dispatchBodyIdentity } = request;
   if (mapping.target !== roleContract.target || mapping.bodyIdentity !== dispatchBodyIdentity) invalid();
-  const body = { users: [principal], backend_roles: [], hosts: [] } as MappingBody;
   const prePolicy = roleContract.postPolicy;
   const postPolicy = { version: prePolicy.version, roles: { ...prePolicy.roles },
     mappings: { ...prePolicy.mappings, [roleContract.target]: body } } as SecurityPolicy;
   if (compareObservedSecurityCollections(postPolicy, postPolicy.roles,
     postPolicy.mappings) !== 'exact') invalid();
   const result = freeze({ target: roleContract.target, principal,
-    body, bodySha256: hash(body), dispatchBodyIdentity, roleContract,
+    body, bodySha256, dispatchBodyIdentity, roleContract,
     prePolicy, postPolicy });
   issuedMappings.add(result);
   return result;

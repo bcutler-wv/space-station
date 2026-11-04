@@ -1,7 +1,8 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { searchGenerationDispatchSpec } from '../packages/db/dist/search-generation-manifest.js';
-import { buildWriterMappingContract, compareWriterMappingStage } from
+import { buildWriterMappingContract, compareWriterMappingStage,
+  deriveWriterMappingRequest } from
   '../packages/search/dist/opensearch-writer-role-contract.js';
 import { canonicalAttestorValue, validatePartialTransitionSnapshot } from './search-attestor-pure.mjs';
 import { assessWriterRoleEvidence, constructApprovedWriterRoleContract,
@@ -21,6 +22,63 @@ const same = (a, b) => hash(a) === hash(b);
 const exact = (value, keys) => value && typeof value === 'object' &&
   !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype &&
   Object.keys(value).sort().join('|') === keys.slice().sort().join('|');
+const serializedFields = ['version', 'revision', 'transitionToken', 'sourceToken',
+  'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex', 'candidateUuid',
+  'databaseOid', 'project', 'systemIdentifier', 'target', 'bodyIdentity',
+  'bodySha256', 'state', 'priorPublicDigests', 'candidatePublic',
+  'createApprovedSha256', 'originalCreateBindingSha256',
+  'roleApprovedSha256', 'originalRoleBindingSha256', 'originalIds',
+  'boundControlUpdatedAt', 'originalHistoryDigest', 'originalHistoryTimesDigest',
+  'originalDispatchDigest', 'originalDispatchTimesDigest', 'originalIndexesDigest',
+  'originalRolesDigest', 'originalMappingsDigest', 'dispatchId', 'ownerId'];
+
+/** Serialized structural links only. This does not reissue the constructor brand. */
+export function validateSerializedWriterMappingIntent(intent, input) {
+  try {
+    intent = canonical(intent);
+    input = canonical(input, 512 * 1024);
+    if (!exact(intent, serializedFields) ||
+        !exact(input, ['invocation', 'createEvidence', 'roleEvidence',
+          'priorPublicDigests', 'publicEvidence'])) fail();
+    const create = input.createEvidence, role = input.roleEvidence.intent;
+    const request = deriveWriterMappingRequest({ token: role.candidateToken,
+      index: role.candidateIndex, profile: 'station-mail-v2',
+      uuid: role.candidateUuid, writerRole: role.target,
+      writerPrincipal: input.publicEvidence.writerPrincipal });
+    const publicLink = publicBinding(input.publicEvidence, input.priorPublicDigests,
+      role, role.candidateToken);
+    const originals = [create.intent.dispatchId, create.intent.ownerId,
+      create.binding.invocationId, role.dispatchId, role.ownerId,
+      input.roleEvidence.binding.invocationId];
+    if (intent.version !== 1 || intent.revision !== role.revision + 5 ||
+        ['transitionToken', 'sourceToken', 'sourceIndex', 'sourceUuid',
+          'candidateToken', 'candidateIndex', 'candidateUuid', 'databaseOid',
+          'project', 'systemIdentifier'].some(key => intent[key] !== role[key]) ||
+        intent.dispatchId !== input.invocation.dispatchId ||
+        intent.ownerId !== input.invocation.ownerId ||
+        !uuid.test(intent.dispatchId) || !uuid.test(intent.ownerId) ||
+        new Set([...originals, input.invocation.invocationId,
+          intent.dispatchId, intent.ownerId]).size !== 9 ||
+        intent.target !== request.target ||
+        intent.bodyIdentity !== request.dispatchBodyIdentity ||
+        intent.bodySha256 !== request.bodySha256 ||
+        intent.createApprovedSha256 !== create.approvedSha256 ||
+        intent.roleApprovedSha256 !== input.roleEvidence.approvedSha256 ||
+        intent.originalCreateBindingSha256 !== hash(create.binding) ||
+        intent.originalRoleBindingSha256 !== hash(input.roleEvidence.binding) ||
+        !same(intent.originalIds, originals) ||
+        !['originalHistoryDigest', 'originalHistoryTimesDigest',
+          'originalDispatchDigest', 'originalDispatchTimesDigest',
+          'originalIndexesDigest', 'originalRolesDigest',
+          'originalMappingsDigest'].every(key =>
+          typeof intent[key] === 'string' && sha.test(intent[key])) ||
+        !exactMicro(intent.boundControlUpdatedAt) ||
+        !same(intent.state, role.state) ||
+        !same(intent.priorPublicDigests, input.priorPublicDigests) ||
+        !same(intent.candidatePublic, publicLink)) fail();
+    return intent;
+  } catch { fail(); }
+}
 function freeze(value) {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child);

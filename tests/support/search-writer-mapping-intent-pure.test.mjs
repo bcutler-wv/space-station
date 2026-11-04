@@ -106,7 +106,7 @@ function observed(bound, roleBody, mappingBody, retained = null) {
   return { indexes, roles: roleBody ? { ...policy.roles, [roleName]: roleBody } : policy.roles,
     mappings: mappingBody ? { ...policy.mappings, [roleName]: mappingBody } : policy.mappings };
 }
-function fixture({ absent = false, retainedSource = false } = {}) {
+export function fixture({ absent = false, retainedSource = false } = {}) {
   const initial = snapshot(false), bound = snapshot(true);
   let retained = null;
   if (retainedSource) {
