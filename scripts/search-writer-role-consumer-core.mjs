@@ -113,8 +113,10 @@ function successor(before, after, kind, intent, roleTime) {
 export function makeWriterRoleConsumer(context, deps) {
   // This entire authority capture is synchronous and occurs before any dependency I/O.
   exact(context, ['approval', 'invocationId', 'project', 'databaseOid',
-    'systemIdentifier', 'host']);
+    'systemIdentifier', 'databaseIdentity']);
   const authority = pin(context);
+  exact(authority.databaseIdentity, ['sessionUser', 'currentUser', 'database',
+    'databaseOwner', 'databaseOid']);
   exact(authority.approval, ['approvedSha256', 'revision', 'transitionToken',
     'sourceToken', 'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex',
     'candidateUuid']);
@@ -126,7 +128,10 @@ export function makeWriterRoleConsumer(context, deps) {
   if (!same(parseWriterRoleApprovalArgs(tuple), authority.approval) ||
       !uuid(authority.invocationId) || typeof authority.project !== 'string' ||
       !Number.isSafeInteger(authority.databaseOid) ||
-      typeof authority.systemIdentifier !== 'string') fail();
+      typeof authority.systemIdentifier !== 'string' ||
+      !same(authority.databaseIdentity, { sessionUser: 'station_search_transition',
+        currentUser: 'station_search_transition', database: 'station',
+        databaseOwner: 'station', databaseOid: authority.databaseOid })) fail();
   let attempted = false;
   return Object.freeze({ async run() {
     if (attempted) fail();
@@ -135,7 +140,6 @@ export function makeWriterRoleConsumer(context, deps) {
     try {
       const original = inputValue(await deps.readInput());
       const { intent, createEvidence } = entry(authority, original);
-      if (!same(pin(await deps.captureContext()), authority.host)) fail();
       const admin = await deps.captureAdmin();
       exact(admin, ['public', 'recheck']);
       if (typeof admin.recheck !== 'function') fail();
@@ -144,7 +148,8 @@ export function makeWriterRoleConsumer(context, deps) {
         row.path === 'ca.pem')?.sha256, adminSha256: intent.publicDigests.find(row =>
         row.path === 'v1/admin.pem')?.sha256 })) fail();
       let current = pin(await deps.readSnapshot());
-      if (current.control?.revision !== intent.revision ||
+      if (!same(current.identity, authority.databaseIdentity) ||
+          current.control?.revision !== intent.revision ||
           current.control?.stage !== 'uuid_bound' ||
           current.exactTimestamps?.control?.updatedAt !== intent.boundControlUpdatedAt) fail();
       let roleTime = null;
@@ -159,11 +164,12 @@ export function makeWriterRoleConsumer(context, deps) {
         const stateAfter = pin(await deps.readState());
         const publicAfter = pin(await deps.capturePriorPublic(structuredClone(intent.publicFiles)));
         const freshInput = inputValue(await deps.readInput());
-        if (!same(now, current) || !same(after, current) || !same(stateAfter, state) ||
+        if (!same(now.identity, authority.databaseIdentity) ||
+            !same(after.identity, authority.databaseIdentity) ||
+            !same(now, current) || !same(after, current) || !same(stateAfter, state) ||
             !same(publicAfter, publicDigests) ||
             !same(freshInput.value, original.value) ||
             !freshInput.password.equals(original.password) ||
-            !same(pin(await deps.captureContext()), authority.host) ||
             !(await deps.recheckInput()) || !(await recheckAdmin()) ||
             !(await deps.recheckSnapshot(structuredClone(current)))) fail();
         const result = assessWriterRoleEvidence(now, observed, state, createEvidence,
@@ -172,9 +178,7 @@ export function makeWriterRoleConsumer(context, deps) {
             roleCreatedAt: roleTime }, authority.approval.approvedSha256);
         if (result.status !== 'writer-role-evidence' || result.phase !== phase ||
             result.ready !== false ||
-            now.identity?.sessionUser !== 'station_search_transition' ||
-            now.identity?.currentUser !== 'station_search_transition' ||
-            now.identity?.databaseOid !== authority.databaseOid) fail();
+            !same(now.identity, authority.databaseIdentity)) fail();
         return { now, observed };
       };
       const bound = await fence('bound');

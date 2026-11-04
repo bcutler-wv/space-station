@@ -167,3 +167,13 @@ Version 0.82.1 changes only the terminal runner network fixture's two return
 keys to match its existing evidence assertion. The prior Ubuntu run reached
 that assertion and failed; the corrected gate has not yet passed. All network
 mutation, original identity and teardown checks remain unchanged.
+
+Version 0.83.0 adds the fixed private writer-role consumer wrapper, without a
+Compose or host invocation. Thirteen nonsecret authority fields are captured
+synchronously; the copied password and admin TLS identity remain file inputs.
+The core now compares the repeated actual registry snapshot identity with the
+independently expected restricted PostgreSQL role, database, owner and OID.
+The project and system identifier remain trusted owner declarations checked
+against the seal, not synthetic in-container host observations. Local tests
+cover the fixed CAS/sender wiring and real copied public-certificate reader.
+Actual preparation and role-delivery runtime acceptance remain separate.

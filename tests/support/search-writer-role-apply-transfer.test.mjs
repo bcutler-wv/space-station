@@ -16,6 +16,8 @@ import { makeCreateIntentProjection, sealCreateIntent, createPriorPublicFiles, d
 import { makeWriterRoleIntentProjection, sealWriterRoleIntent } from '../../scripts/search-writer-role-intent-pure.mjs';
 import { transferWriterRoleApplyInputs } from '../../scripts/search-writer-role-apply-transfer-core.mjs';
 import { openWriterRoleApplyInput } from '../../scripts/search-writer-role-apply-input.mjs';
+import { runFixedWriterRoleConsumer } from '../../scripts/search-writer-role-consumer-wrapper.mjs';
+import { issuedWriterRoleRequest } from '../../packages/search/dist/opensearch-writer-role-contract.js';
 
 const token = '11111111-1111-4111-8111-111111111111';
 const transitionToken = '22222222-2222-4222-8222-222222222222';
@@ -179,6 +181,61 @@ async function openCopied(f) {
   return openWriterRoleApplyInput(f.paths.volumeRoot, f.scratch,
     { uid: process.getuid(), gid: process.getgid() });
 }
+
+test('fixed consumer wrapper runs with the actual copied reader and real public PEM capture', async t => {
+  const f = await fixture(t);
+  await transferWriterRoleApplyInputs(f.paths, opts);
+  const copied = await openCopied(f);
+  let current = snapshot(true);
+  let view = observed(true);
+  let casCount = 0, sends = 0;
+  const intent = f.role.intent;
+  const approval = Object.fromEntries(['revision', 'transitionToken', 'sourceToken',
+    'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex', 'candidateUuid']
+    .map(key => [key, intent[key]]));
+  approval.approvedSha256 = f.role.sha256;
+  const context = { approval, invocationId: f.newBinding.invocationId,
+    project: intent.project, databaseOid: intent.databaseOid,
+    systemIdentifier: intent.systemIdentifier, databaseIdentity: structuredClone(current.identity) };
+  const adapters = { openInput: async () => copied,
+    readSnapshot: async () => structuredClone(current),
+    recheckSnapshot: async expected => { assert.deepEqual(expected, current); return true; },
+    readState: async () => structuredClone(state),
+    captureAdmin: async () => ({ public: { caSha256: intent.publicDigests.find(x => x.path === 'ca.pem').sha256,
+      adminSha256: intent.publicDigests.find(x => x.path === 'v1/admin.pem').sha256 },
+    recheck: async () => true }),
+    observe: async () => structuredClone(view),
+    cas: async (kind, before) => {
+      assert.deepEqual(before, current); casCount++;
+      const next = structuredClone(current);
+      next.control.revision++;
+      if (kind === 'request') next.control.stage = 'writer_role_requested';
+      else if (kind === 'arm') {
+        next.dispatch.push({ generationToken: token, operation: 'writer_role',
+          dispatchId, ownerId, target: intent.target, bodyIdentity: intent.bodyIdentity,
+          state: 'armed', createdAt: date() });
+        next.exactTimestamps.dispatch.push({ generationToken: token, operation: 'writer_role',
+          dispatchId, createdAt: micro });
+      } else if (kind === 'attest') next.control.stage = 'writer_role_attested';
+      else next.dispatch.find(x => x.operation === 'writer_role').state = kind === 'send' ?
+        'sent_unknown' : 'response_confirmed';
+      const key = row => `${row.generationToken}|${row.operation}|${row.dispatchId}`;
+      next.dispatch.sort((a, b) => key(a).localeCompare(key(b)));
+      next.exactTimestamps.dispatch.sort((a, b) => key(a).localeCompare(key(b)));
+      current = next; return structuredClone(next);
+    },
+    openSender: async contract => ({ sendOnce: async () => {
+      sends++;
+      const request = issuedWriterRoleRequest(contract);
+      view = observed(true);
+      view.roles[request.target] = request.body;
+      return { created: true };
+    }, close: async () => {} }) };
+  assert.deepEqual(await runFixedWriterRoleConsumer(context, adapters),
+    { status: 'writer_role_attested', ready: false });
+  assert.equal(casCount, 5); assert.equal(sends, 1);
+  await copied.recheck();
+});
 
 test('real legacy and retained-v2 certificates copy as exact private evidence', async t => {
   for (const v2 of [false, true]) {

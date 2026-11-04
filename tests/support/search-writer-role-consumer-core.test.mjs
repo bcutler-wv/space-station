@@ -12,6 +12,7 @@ import { makeCreateIntentProjection, sealCreateIntent, createPriorPublicFiles } 
 import { makeWriterRoleIntentProjection, sealWriterRoleIntent } from
   '../../scripts/search-writer-role-intent-pure.mjs';
 import { makeWriterRoleConsumer } from '../../scripts/search-writer-role-consumer-core.mjs';
+import { runFixedWriterRoleConsumer } from '../../scripts/search-writer-role-consumer-wrapper.mjs';
 import { issuedWriterRoleRequest } from '../../packages/search/dist/opensearch-writer-role-contract.js';
 
 const token = '11111111-1111-4111-8111-111111111111';
@@ -137,11 +138,11 @@ function rig(options = {}) {
     'sourceToken', 'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex',
     'candidateUuid'].map(key => [key, key === 'approvedSha256' ? f.sealed.sha256 :
     f.sealed.intent[key]]));
-  const host = { project: 'stationfixture', postgresId: 'original' };
+  const databaseIdentity = structuredClone(f.bound.identity);
   const invocationId = '88888888-8888-4888-8888-888888888888';
   const context = { approval, invocationId,
     project: f.sealed.intent.project, databaseOid: f.sealed.intent.databaseOid,
-    systemIdentifier: f.sealed.intent.systemIdentifier, host: structuredClone(host) };
+    systemIdentifier: f.sealed.intent.systemIdentifier, databaseIdentity };
   const input = () => ({ approvedSha256: f.sealed.sha256,
     invocationId, intent: structuredClone(f.sealed.intent),
     binding: { version: 1, invocationId,
@@ -152,7 +153,6 @@ function rig(options = {}) {
   const deps = {
     readInput: async () => { events.push('input'); return input(); },
     recheckInput: async () => true,
-    captureContext: async () => structuredClone(host),
     captureAdmin: async () => ({ public: { caSha256: 'a'.repeat(64),
       adminSha256: 'a'.repeat(64) }, recheck: async () => true }),
     readSnapshot: async () => structuredClone(current),
@@ -243,11 +243,13 @@ test('independent approval and invocation reject before any CAS or sender', asyn
     c => { c.approval.approvedSha256 = 'b'.repeat(64); },
     c => { c.approval.candidateUuid = 'changed'; },
     c => { c.invocationId = '99999999-9999-4999-8999-999999999999'; },
-    c => { c.host.postgresId = 'changed'; },
+    c => { c.databaseIdentity.databaseOwner = 'changed'; },
   ]) {
     const r = rig();
     change(r.context);
-    await assert.rejects(makeWriterRoleConsumer(r.context, r.deps).run());
+    if (r.context.databaseIdentity.databaseOwner === 'changed')
+      assert.throws(() => makeWriterRoleConsumer(r.context, r.deps));
+    else await assert.rejects(makeWriterRoleConsumer(r.context, r.deps).run());
     assert.equal(r.casCount, 0); assert.equal(r.sendCount, 0);
   }
 });
@@ -300,6 +302,27 @@ test('presend reached evidence drifts reject before PUT', async () => {
     assert.equal(r.sendCount, 0);
     assert.equal(r.current.dispatch[1].state, 'sent_unknown');
   }
+});
+
+test('actual database identity drift after observer is rejected before PUT', async () => {
+  const r = rig();
+  let drift = false;
+  const originalObserve = r.deps.observe;
+  r.deps.observe = async () => {
+    const result = await originalObserve();
+    if (r.casCount === 3) drift = true;
+    return result;
+  };
+  const originalRead = r.deps.readSnapshot;
+  r.deps.readSnapshot = async () => {
+    const result = await originalRead();
+    if (drift) result.identity.databaseOwner = 'changed';
+    return result;
+  };
+  await assert.rejects(makeWriterRoleConsumer(r.context, r.deps).run(),
+    { message: 'Private writer role apply failed.' });
+  assert.equal(r.casCount, 3);
+  assert.equal(r.sendCount, 0);
 });
 
 test('public, E0b and original input changes across observer await reject before PUT', async () => {
@@ -427,4 +450,19 @@ test('cleanup failure is sanitized and cannot confirm after a lost response', as
     { message: 'Private writer role apply failed.' });
   assert.equal(r.casCount, 3); assert.equal(r.sendCount, 1);
   assert.equal(r.current.dispatch[1].state, 'sent_unknown');
+});
+
+test('fixed wrapper connects copied-reader recheck and the original five CAS operations', async () => {
+  const r = rig();
+  let rechecks = 0;
+  const adapters = { openInput: async () => ({ readInput: r.deps.readInput,
+    recheck: async () => { rechecks++; return true; },
+    capturePriorPublic: r.deps.capturePriorPublic }),
+  readSnapshot: r.deps.readSnapshot, recheckSnapshot: r.deps.recheckSnapshot,
+  cas: r.deps.cas, readState: r.deps.readState, captureAdmin: r.deps.captureAdmin,
+  observe: r.deps.observe, openSender: r.deps.openSender };
+  assert.deepEqual(await runFixedWriterRoleConsumer(r.context, adapters),
+    { status: 'writer_role_attested', ready: false });
+  assert.equal(r.casCount, 5); assert.equal(r.sendCount, 1);
+  assert.ok(rechecks >= 7);
 });
