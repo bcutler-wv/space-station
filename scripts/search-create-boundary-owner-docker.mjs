@@ -131,7 +131,8 @@ function fixedBoundaryDockerAdapter({ repository, uid, gid, jobLock, invocationI
     ...(withOverride && writerApply ? ['-f', override.file] : []),
     '--profile', writerApply ? 'search-writer-role-apply' : writer ? 'search-writer-role-prepare' :
       apply ? 'search-create-apply' : 'search-create-boundary', ...args], timeoutMs,
-  args[0] === 'run', args[0] === 'run' || writerApply && args[0] === 'create');
+  args[0] === 'run' || writerApply && args[0] === 'create',
+  args[0] === 'run' || writerApply && args[0] === 'create');
   const inspect = async id => one((await docker(['container', 'inspect', id])).stdout);
   const inspectVolume = async name => one((await docker(['volume', 'inspect', name])).stdout);
   const serviceReferences = async phase => listed((await docker(['ps', '-a', '--no-trunc',

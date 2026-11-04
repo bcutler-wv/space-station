@@ -55,7 +55,7 @@ async function scenario(fault = '') {
   const credential = () => ({ rootStat: stat,
     metadata: { stat: { ...stat, size: metadata.length }, bytes: metadata },
     transition: { stat, bytes: Buffer.from('x'.repeat(43)) } });
-  const calls = [], phaseState = { transfer: 'absent', apply: 'absent' };
+  const calls = [], composeCreateFlags = [], phaseState = { transfer: 'absent', apply: 'absent' };
   let volumeExists = false, removedVolume = false;
   const reply = (stdout = '', stderr = '') => ({ code: 0, signal: null, stdout, stderr });
   const volume = name => ({ Name: name, Driver: 'local', Scope: 'local',
@@ -126,6 +126,9 @@ async function scenario(fault = '') {
   const commandRunner = async (args, env, timeoutMs) => {
     const line = args.join(' '); calls.push(line);
     assert.equal(env.APP_UID, String(uid)); assert.equal(env.APP_GID, String(gid));
+    const writerCreate = args[0] === 'compose' && args.includes('create');
+    if (writerCreate) composeCreateFlags.push(env.COMPOSE_IGNORE_ORPHANS);
+    else assert.equal(env.COMPOSE_IGNORE_ORPHANS, undefined);
     if (args[0] === 'compose' && args.includes('config')) {
       const merged = args.filter(x => x === '-f').length === 3;
       return reply(`${JSON.stringify(await rendered(merged))}\n`);
@@ -154,7 +157,15 @@ async function scenario(fault = '') {
       assert.ok(line.includes(' create --no-build --pull never --no-recreate '));
       phaseState[phase] = 'created';
       if (fault === 'lost-create') throw Error('lost original create result');
-      return reply('', ` Container ${names[phase]} Creating\n Container ${names[phase]} Created\n`);
+      if (fault === 'unknown-create-stderr')
+        return reply('', `unexpected warning\n Container ${names[phase]} Created\n`);
+      const effectiveEnv = { ...env };
+      if (fault === 'orphan-warning-unsuppressed')
+        delete effectiveEnv.COMPOSE_IGNORE_ORPHANS;
+      const warning = effectiveEnv.COMPOSE_IGNORE_ORPHANS === 'true' ? '' :
+        'WARN[0000] Found orphan containers ([fixed-prior]) for this project.\n';
+      return reply('', warning +
+        ` Container ${names[phase]} Creating\n Container ${names[phase]} Created\n`);
     }
     if (args[0] === 'ps') {
       const nameFilter = args.find(x => x.startsWith('name=^/'));
@@ -245,6 +256,7 @@ async function scenario(fault = '') {
     assert.ok(started < applyCreated && applyCreated < applyInspected &&
       applyInspected < applyFence && applyFence < applyStarted);
     assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 2);
+    assert.deepEqual(composeCreateFlags, ['true', 'true']);
     assert.equal(calls.filter(x => x.startsWith('container start ')).length, 2);
     completed = true;
   } catch (error) {
@@ -261,6 +273,12 @@ async function scenario(fault = '') {
     }
     if (fault === 'lost-create')
       assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 1);
+    if (fault === 'orphan-warning-unsuppressed' || fault === 'unknown-create-stderr') {
+      assert.equal(calls.filter(x => x.includes(' create --no-build ')).length, 1);
+      assert.deepEqual(composeCreateFlags, ['true']);
+      assert.equal(calls.filter(x => x.startsWith('container inspect ')).length, 0);
+      assert.equal(calls.filter(x => x.startsWith('container start ')).length, 0);
+    }
     if (fault === 'lost-start')
       assert.equal(calls.filter(x => x.startsWith('container start ')).length, 1);
     if (fault === 'post-start-identity') {
@@ -276,14 +294,26 @@ async function scenario(fault = '') {
       assert.equal(calls.filter(x => x.startsWith('container rm ')).length, 0);
     }
   } finally { await rm(repository, { recursive: true, force: true }); }
+  assert.equal(composeCreateFlags.every(flag => flag === 'true'), true);
   if (fault && fault !== 'fast-exited' && completed) throw Error('fault was not rejected');
   if ((!fault || fault === 'fast-exited') && !completed) throw Error('positive did not complete');
 }
 
 try {
+  const ambient = process.env.COMPOSE_IGNORE_ORPHANS;
+  process.env.COMPOSE_IGNORE_ORPHANS = 'true';
+  try {
+    assert.throws(() => createWriterRoleApplyDockerAdapter({ repository: originalRoot,
+      uid, gid, jobLock: {}, invocationId, deadline: Number.MAX_SAFE_INTEGER,
+      tick: () => {} }));
+  } finally {
+    if (ambient === undefined) delete process.env.COMPOSE_IGNORE_ORPHANS;
+    else process.env.COMPOSE_IGNORE_ORPHANS = ambient;
+  }
   for (const fault of ['', 'fast-exited', 'created-command', 'created-network', 'created-image',
     'post-start-identity', 'zero-finished-at', 'lost-create', 'lost-start', 'preexisting-name',
-    'extra-stopped']) await scenario(fault);
+    'extra-stopped', 'orphan-warning-unsuppressed', 'unknown-create-stderr'])
+    await scenario(fault);
   process.stdout.write('Fixed writer role apply Docker command-order fixture passed.\n');
 } catch {
   process.stderr.write('Fixed writer role apply Docker command-order fixture failed.\n');
