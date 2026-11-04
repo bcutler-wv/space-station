@@ -144,3 +144,12 @@ dispatch-owner drift pairs. Exact full registry rows, six-digit timestamps and
 all named guard states are checked before and after each transaction; rollback
 faults are tested against a local disposable PostgreSQL server. This does not
 modify the production guard or establish Ubuntu runtime acceptance.
+
+Version 0.81.0 adds an uncalled fixed writer-role orchestration core. An
+independent approved tuple, invocation and host capture remain fixed across
+all awaits; the existing copied-evidence validator and pure role assessor
+guard the original create, complete prior inventory and seven finite stages.
+Five scripted CAS successors and one original sender response are required
+before a final never-ready result. The next separately reviewed database
+adapter must prove short transaction provenance and exact microtimestamp
+capture; this core adds no runnable consumer or actual role delivery.

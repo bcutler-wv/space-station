@@ -281,3 +281,15 @@ export function assessWriterRoleEvidence(snapshot, observed, state, createEviden
       sealed.intent, phase, expectedTimestamps);
   } catch { return Object.freeze({ status: 'writer-role-evidence-rejected', ready: false }); }
 }
+
+/** Reconstruct the one genuine, constructor-issued request after external approval is checked. */
+export function constructApprovedWriterRoleContract(snapshot, sealed, approvedSha256) {
+  try {
+    canonicalAttestorValue(snapshot);
+    sealed = canonicalAttestorValue(sealed, 256 * 1024).value;
+    if (!exact(sealed, ['intent', 'sha256']) ||
+        typeof approvedSha256 !== 'string' || sealed.sha256 !== approvedSha256 ||
+        hash(sealed.intent) !== approvedSha256) fail();
+    return contractFor(snapshot, sealed.intent);
+  } catch { fail(); }
+}
