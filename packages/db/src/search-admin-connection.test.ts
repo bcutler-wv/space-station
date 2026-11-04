@@ -6,7 +6,7 @@ const identity = { sessionUser: 'station_search_verifier', currentUser: 'station
   database: 'station', databaseOid: 16384, databaseOwner: 'station' };
 
 function fixture(input: { control?: readonly unknown[]; history?: readonly unknown[]; dispatch?: readonly unknown[];
-  identity?: Record<string, unknown> } = {}) {
+  identity?: Record<string, unknown>; commands?: string[] } = {}) {
   const rows = new Map<unknown, readonly unknown[]>([
     [searchGenerationControl, input.control ?? [{ singleton: 1, stage: 'disabled' }]],
     [searchGenerationHistory, input.history ?? []],
@@ -26,7 +26,8 @@ function fixture(input: { control?: readonly unknown[]; history?: readonly unkno
     });
   };
   const tx = {
-    execute: async (statement: unknown) => typeof statement === 'string' ? undefined :
+    execute: async (statement: unknown) => typeof statement === 'string' ?
+      (input.commands?.push(statement), undefined) :
       { rows: [input.identity ?? identity] },
     select: (fields?: Record<string, unknown>) => ({ from: (table: unknown) => ({
       orderBy: () => ({ limit: async (count: number) => selected(table, fields).slice(0, count) }),
@@ -38,6 +39,16 @@ function fixture(input: { control?: readonly unknown[]; history?: readonly unkno
 }
 
 describe('bounded search admin registry reader', () => {
+  it('keeps both public wrappers in read-only repeatable-read transactions', async () => {
+    const commands: string[] = [];
+    const db = fixture({ commands });
+    await readSearchAdminRegistrySnapshot(db, 'station_search_verifier');
+    await readSearchAdminSnapshot(db);
+    expect(commands).toEqual([
+      'set transaction isolation level repeatable read, read only',
+      'set transaction isolation level repeatable read, read only',
+    ]);
+  });
   it('keeps typed rows separate from exact SQL timestamp evidence', async () => {
     const actual = await readSearchAdminRegistrySnapshot(fixture(), 'station_search_verifier');
     expect(actual.exactTimestamps.control.updatedAt).toBe('2026-10-22T18:00:00.000001Z');

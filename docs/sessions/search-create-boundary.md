@@ -153,3 +153,12 @@ Five scripted CAS successors and one original sender response are required
 before a final never-ready result. The next separately reviewed database
 adapter must prove short transaction provenance and exact microtimestamp
 capture; this core adds no runnable consumer or actual role delivery.
+
+Version 0.82.0 adds that fixed writer-role CAS adapter without connecting a
+consumer. The public admin readers still create read-only repeatable-read
+transactions; a narrow extracted query body also runs inside the adapter's
+pre-established bounded write transaction and control-row lock. All five
+writer transitions compare complete predecessor and successor rows and exact
+microsecond sidecars before commit. A local disposable migrated PostgreSQL
+fixture verifies restricted-role grants, rollback and one-winner concurrency.
+Actual preparation and role-delivery gates still require Ubuntu evidence.

@@ -101,6 +101,7 @@ export async function withSearchAdminDatabase<T>(config: SearchAdminConnection,
 }
 
 type AdminDb = NodePgDatabase;
+type AdminTransaction = Parameters<Parameters<AdminDb['transaction']>[0]>[0];
 type SearchAdminIdentity = Readonly<{
   sessionUser: SearchAdminRole; currentUser: SearchAdminRole;
   database: 'station'; databaseOid: number; databaseOwner: 'station';
@@ -114,6 +115,12 @@ function bounded(value: unknown): void {
 async function readRows(db: AdminDb, expectedRole?: SearchAdminRole) {
   return db.transaction(async tx => {
     await tx.execute('set transaction isolation level repeatable read, read only');
+    return readRowsInTransaction(tx, expectedRole);
+  });
+}
+
+/** Query body only. The caller establishes its transaction mode and lock first. */
+async function readRowsInTransaction(tx: AdminTransaction, expectedRole?: SearchAdminRole) {
     const identityRows = await tx.execute(sql<{
       sessionUser: string; currentUser: string; database: string;
       databaseOid: number; databaseOwner: string;
@@ -167,9 +174,18 @@ async function readRows(db: AdminDb, expectedRole?: SearchAdminRole) {
         exactDispatch.some((item, i) => item.generationToken !== dispatch[i]?.generationToken ||
           item.operation !== dispatch[i]?.operation || item.dispatchId !== dispatch[i]?.dispatchId ||
           !timestamp(item.createdAt))) throw new SearchAdminDatabaseError('snapshot');
-    return { control: control[0], history, dispatch, identity: identity as SearchAdminIdentity,
+    return { control: control[0]!, history, dispatch, identity: identity as SearchAdminIdentity,
       exactTimestamps: { control: exactControl[0]!, history: exactHistory, dispatch: exactDispatch } };
-  });
+}
+
+/** Fixed transition-only in-transaction evidence for the writer-role CAS adapter. */
+export async function readTransitionRegistryInTransaction(tx: AdminTransaction) {
+  try {
+    const result = await readRowsInTransaction(tx, 'station_search_transition');
+    bounded({ control: result.control, history: result.history, dispatch: result.dispatch,
+      exactTimestamps: result.exactTimestamps });
+    return result;
+  } catch { throw new SearchAdminDatabaseError('snapshot'); }
 }
 
 /** No row locks; a later engine attestation must recheck this snapshot. */
