@@ -77,6 +77,7 @@ jobs:
       - run: node --test tests/support/opensearch-writer-mapping-api-shape.test.mjs tests/support/opensearch-writer-mapping-api-host.test.mjs
       - run: node --test tests/support/opensearch-writer-mapping-sender.test.mjs
       - run: node --test tests/support/search-writer-mapping-public.test.mjs
+      - run: node --test tests/support/search-writer-mapping-intent-pure.test.mjs
       - run: node --test tests/support/search-writer-role-intent-pure.test.mjs
       - run: node --test tests/support/search-writer-role-consumer-core.test.mjs tests/support/search-writer-role-consumer-wrapper.test.mjs
       - run: node --test tests/support/search-writer-role-offline-binding.test.mjs

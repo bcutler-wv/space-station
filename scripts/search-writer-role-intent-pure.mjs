@@ -46,8 +46,10 @@ function originalCreate(evidence) {
       binding.ownerId !== intent.ownerId) fail();
   return intent;
 }
+export { originalCreate as validateOriginalCreateForWriterRole };
 
-function priorInput(snapshot, candidateToken) {
+/** The fixed prior-generation input for the accepted role and later mapping contracts. */
+export function writerRolePriorInput(snapshot, candidateToken) {
   const manifest = buildSearchGenerationManifest(snapshot.history);
   return { version: 'station-generation-registry-v1', generations: manifest
     .filter(row => row.token !== candidateToken).map(row => ({ ...row,
@@ -77,7 +79,7 @@ function contractFor(snapshot, intent) {
       candidate.writerCertFingerprint !== null || candidate.queryCertFingerprint !== null) fail();
   const spec = searchGenerationDispatchSpec(candidate, 'writer_role');
   if (spec.target !== intent.target || spec.bodyIdentity !== intent.bodyIdentity) fail();
-  const contract = buildWriterRoleContract(priorInput(snapshot, intent.candidateToken),
+  const contract = buildWriterRoleContract(writerRolePriorInput(snapshot, intent.candidateToken),
     { token: intent.candidateToken, index: intent.candidateIndex, profile: 'station-mail-v2',
       uuid: intent.candidateUuid, writerRole: intent.target }, spec);
   if (contract.bodySha256 !== intent.bodySha256 ||
@@ -192,7 +194,7 @@ export function makeWriterRoleIntentProjection(snapshot, observed, state,
           createExpected({ ...old, candidateUuid: candidate.indexUuid }, control.revision))
             .status !== 'create-completion-evidence') fail();
     const spec = searchGenerationDispatchSpec(candidate, 'writer_role');
-    const contract = buildWriterRoleContract(priorInput(snapshot, old.candidateToken),
+    const contract = buildWriterRoleContract(writerRolePriorInput(snapshot, old.candidateToken),
       { token: old.candidateToken, index: old.candidateIndex, profile: 'station-mail-v2',
         uuid: candidate.indexUuid, writerRole: candidate.writerRole }, spec);
     if (compareWriterRoleStage(contract, observed, 'pre') !== 'exact') fail();
