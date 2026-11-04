@@ -34,6 +34,36 @@ const createProjectionKeys = ['version', 'revision', 'stage', 'transitionToken',
   'sourceToken', 'sourceIndex', 'sourceUuid', 'candidateToken', 'candidateIndex',
   'databaseOid', 'priorObservationDigest', 'publicFiles', 'target', 'bodyIdentity'];
 
+/** Shared strict serialized intent check; never grants constructor provenance. */
+export function validateSerializedWriterRoleIntent(intent, expectedSha256, project) {
+  try {
+    const value = canonicalAttestorValue(intent, 256 * 1024).value;
+    const request = deriveWriterRoleRequest({ token: value.candidateToken,
+      index: value.candidateIndex, profile: 'station-mail-v2',
+      uuid: value.candidateUuid, writerRole: value.target });
+    if (Object.keys(value).sort().join('|') !== roleKeys.slice().sort().join('|') ||
+        digest(canonicalAttestorValue(value, 256 * 1024).bytes) !== expectedSha256 ||
+        value.project !== project || value.version !== 1 ||
+        !Number.isSafeInteger(value.revision) || value.revision < 1 ||
+        value.target !== request.target ||
+        value.bodyIdentity !== request.dispatchBodyIdentity ||
+        value.bodySha256 !== request.bodySha256 ||
+        !sha(value.priorEvidenceDigest) || !sha(value.baselineDigest) ||
+        !sha(value.createApprovedSha256) || !sha(value.originalCreateBindingSha256) ||
+        !uuid(value.dispatchId) || !uuid(value.ownerId) ||
+        value.dispatchId === value.ownerId ||
+        !Number.isSafeInteger(value.databaseOid) || value.databaseOid < 1 ||
+        typeof value.systemIdentifier !== 'string' ||
+        !exactMicrotime(value.boundControlUpdatedAt) ||
+        !value.state || Object.keys(value.state).sort().join('|') !==
+          'indexUuid|kind|phase' || value.state.phase !== 'ready' ||
+        value.state.kind !== 'complete' || typeof value.state.indexUuid !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(value.state.indexUuid) ||
+        value.sourceToken === 'legacy-v1' && value.state.indexUuid !== value.sourceUuid) fail();
+    return value;
+  } catch { fail(); }
+}
+
 /** Exactly nine positional approved fields, without a path or operation selector. */
 export function parseWriterRoleApprovalArgs(input) {
   try {
@@ -114,32 +144,13 @@ export async function readWriterRolePending(repository, uid, gid, approved) {
     }
     const roleBytes = captures.get('role').bytes;
     const intent = JSON.parse(roleBytes.toString('utf8'));
-    const request = deriveWriterRoleRequest({ token: intent.candidateToken,
-      index: intent.candidateIndex, profile: 'station-mail-v2',
-      uuid: intent.candidateUuid, writerRole: intent.target });
     if (!canonicalAttestorValue(intent, 256 * 1024).bytes.equals(roleBytes) ||
-        Object.keys(intent).sort().join('|') !== roleKeys.sort().join('|') ||
-        digest(roleBytes) !== approved.approvedSha256 || intent.project !== path.basename(repository) ||
-        intent.version !== 1 || intent.revision !== approved.revision ||
+        intent.revision !== approved.revision ||
         ['transitionToken', 'sourceToken', 'sourceIndex', 'sourceUuid',
           'candidateToken', 'candidateIndex', 'candidateUuid'].some(key =>
-          intent[key] !== approved[key]) ||
-        intent.target !== request.target ||
-        intent.bodyIdentity !== request.dispatchBodyIdentity ||
-        intent.bodySha256 !== request.bodySha256 ||
-        !sha(intent.priorEvidenceDigest) || !sha(intent.baselineDigest) ||
-        !sha(intent.createApprovedSha256) || !sha(intent.originalCreateBindingSha256) ||
-        !uuid(intent.dispatchId) || !uuid(intent.ownerId) ||
-        intent.dispatchId === intent.ownerId ||
-        !Number.isSafeInteger(intent.databaseOid) || intent.databaseOid < 1 ||
-        typeof intent.systemIdentifier !== 'string' ||
-        !exactMicrotime(intent.boundControlUpdatedAt) ||
-        !intent.state || Object.keys(intent.state).sort().join('|') !==
-          'indexUuid|kind|phase' || intent.state.phase !== 'ready' ||
-        intent.state.kind !== 'complete' ||
-        typeof intent.state.indexUuid !== 'string' ||
-        !/^[A-Za-z0-9_-]{1,128}$/.test(intent.state.indexUuid) ||
-        intent.sourceToken === 'legacy-v1' && intent.state.indexUuid !== intent.sourceUuid) fail();
+          intent[key] !== approved[key])) fail();
+    validateSerializedWriterRoleIntent(intent, approved.approvedSha256,
+      path.basename(repository));
     const createBytes = captures.get('create').bytes;
     const create = JSON.parse(createBytes.toString('utf8'));
     if (!canonicalAttestorValue(create, 256 * 1024).bytes.equals(createBytes)) fail();
