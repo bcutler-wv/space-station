@@ -220,3 +220,10 @@ is absent until publication. The 0.86.0 Ubuntu run `41788671990` at
 `fd0cad933386a7a231c1b93f27150a4f3b67b591` failed at the old signal
 read, blocking downstream regression jobs. Product lock and sender code are
 unchanged; the actual role-delivery gate is not yet implemented.
+
+Version 0.87.2 adds finite checkpoints to the disposable admin-DB container
+fixture and forwards only one exact validated diagnostic line from its private
+log when that fixture fails. The older 0.85.0 admin-DB failure in run
+`41787266265` has no identified cause; 0.87.0 run `41791235160` passed its
+admin-DB and scaffold jobs while the overall workflow remained in progress.
+This diagnostic slice changes no product path or runtime acceptance status.

@@ -43,6 +43,7 @@ jobs:
       - run: node tests/integration/search-admin-db-jobs.mjs
       - run: node tests/integration/search-admin-job-lock.mjs
       - run: node tests/integration/search-admin-rotation.mjs
+      - run: node tests/support/search-admin-db-diagnostic.test.mjs
       - run: bash scripts/search-admin-db-jobs-gate.sh
 
   scaffold:

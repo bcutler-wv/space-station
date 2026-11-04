@@ -336,7 +336,14 @@ for pair in default runner; do
   run_as_pair node scripts/search-admin-db-run.mjs verifier >> "$log" 2>&1
   run_as_pair node scripts/search-admin-db-run.mjs transition >> "$log" 2>&1
   phase=container
-  RUN_PAIR_TIMEOUT=300 run_as_pair node tests/integration/search-admin-db-jobs-container.mjs >> "$log" 2>&1
+  container_log="$scratch/container-$pair.log"
+  if RUN_PAIR_TIMEOUT=300 run_as_pair node tests/integration/search-admin-db-jobs-container.mjs > "$container_log" 2>&1; then
+    cat -- "$container_log" >> "$log"
+  else
+    container_status=$?
+    bash scripts/search-admin-db-diagnostic-forward.sh "$container_log" "$log" "$container_status" >&2 || true
+    exit "$container_status"
+  fi
   phase=denials
   for role in verifier transition; do
     service="search-db-$role"
