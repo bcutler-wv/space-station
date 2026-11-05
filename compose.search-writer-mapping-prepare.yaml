@@ -1,6 +1,7 @@
 services:
   search-writer-mapping-prepare-transfer:
     profiles: [search-writer-mapping-prepare]
+    container_name: ${STATION_WRITER_MAPPING_PREPARE_TRANSFER_NAME:?Set STATION_WRITER_MAPPING_PREPARE_TRANSFER_NAME}
     build:
       context: .
       target: search-attestor
@@ -60,6 +61,7 @@ services:
 
   search-writer-mapping-prepare:
     profiles: [search-writer-mapping-prepare]
+    container_name: ${STATION_WRITER_MAPPING_PREPARE_READ_NAME:?Set STATION_WRITER_MAPPING_PREPARE_READ_NAME}
     build:
       context: .
       target: search-attestor

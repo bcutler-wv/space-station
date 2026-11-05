@@ -1,3 +1,4 @@
+/* global structuredClone */
 import path from 'node:path';
 import { keys, mountsByTarget, bind, volume } from './search-attestor-service-config.mjs';
 import { verifyFixedApplyServiceShape } from './search-create-apply-service-config.mjs';
@@ -9,6 +10,28 @@ const transfer = `${profile}-transfer`;
 const inputVolume = 'search_writer_mapping_prepare_input';
 const inputRoot = '/run/search-writer-mapping-prepare';
 const prefix = '/run/writer-mapping-prepare-';
+const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+
+export function fixedWriterMappingPrepareNames(invocationId) {
+  if (typeof invocationId !== 'string' || !uuid.test(invocationId)) fail();
+  const suffix = invocationId.replaceAll('-', '');
+  return Object.freeze({ transfer: `station_mapping_prepare_transfer_${suffix}`,
+    prepare: `station_mapping_prepare_read_${suffix}` });
+}
+
+/** Validate the two trusted names, then reuse the unchanged strict base policy. */
+export function verifyWriterMappingPrepareNamedConfig(config, context) {
+  try {
+    const names = fixedWriterMappingPrepareNames(context.invocationId);
+    if (config.services?.[transfer]?.container_name !== names.transfer ||
+        config.services?.[profile]?.container_name !== names.prepare) fail();
+    const base = structuredClone(config);
+    delete base.services[transfer].container_name;
+    delete base.services[profile].container_name;
+    verifyWriterMappingPrepareServiceConfig(base, context);
+    return base;
+  } catch { fail(); }
+}
 
 /** Mapping-only fixed render policy; expected authority is supplied independently. */
 export function verifyWriterMappingPrepareServiceConfig(config, expected) {
@@ -118,5 +141,63 @@ export function verifyWriterMappingPrepareEffectiveContainer(item, expected) {
       if (item.NetworkSettings.Networks[`${expected.context.project}_${name}`]?.NetworkID !== id)
         fail();
     return true;
+  } catch { fail(); }
+}
+
+/** Post-start mapping policy additionally binds the original fixed name. */
+export function verifyWriterMappingPrepareNamedEffectiveContainer(item, expected) {
+  try {
+    const base = verifyWriterMappingPrepareNamedConfig(expected.config, expected.context);
+    const names = fixedWriterMappingPrepareNames(expected.context.invocationId);
+    if (item.Name !== `/${expected.phase === transfer ? names.transfer : names.prepare}`) fail();
+    return verifyWriterMappingPrepareEffectiveContainer(item,
+      { ...expected, config: base });
+  } catch { fail(); }
+}
+
+/** Created inspection is separate from actual post-start network-ID proof. */
+export function verifyWriterMappingPrepareCreatedContainer(item, expected) {
+  try {
+    const transferPhase = expected.phase === transfer;
+    if (!transferPhase && expected.phase !== profile ||
+        item.State?.Status !== 'created' || item.State.Running !== false ||
+        item.State.Paused !== false || item.State.Restarting !== false ||
+        item.State.OOMKilled !== false || item.State.Dead !== false ||
+        item.State.Error !== '' || item.State.ExitCode !== 0 ||
+        item.RestartCount !== 0 ||
+        item.State.StartedAt !== '0001-01-01T00:00:00Z' ||
+        item.State.FinishedAt !== '0001-01-01T00:00:00Z' ||
+        item.HostConfig?.NetworkMode !== (transferPhase ? 'none' :
+          `${expected.context.project}_search_admin_db`)) fail();
+    const map = item.NetworkSettings?.Networks;
+    const required = transferPhase ? Object.keys(map ?? {}).length === 0 ? [] : ['none'] :
+      [`${expected.context.project}_search_admin_db`,
+        `${expected.context.project}_search_internal`];
+    if (!map || !equal(Object.keys(map).sort(), required.sort())) fail();
+    const byName = { none: expected.noneNetworkId,
+      [`${expected.context.project}_search_admin_db`]: expected.networkIds.search_admin_db,
+      [`${expected.context.project}_search_internal`]: expected.networkIds.search_internal };
+    for (const [name, endpoint] of Object.entries(map)) {
+      if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint) ||
+          Object.keys(endpoint).some(key => !['Aliases', 'NetworkID', 'EndpointID',
+            'Gateway', 'IPAddress', 'IPPrefixLen', 'IPv6Gateway', 'GlobalIPv6Address',
+            'GlobalIPv6PrefixLen', 'MacAddress', 'Links', 'IPAMConfig', 'DriverOpts',
+            'GwPriority', 'DNSNames'].includes(key)) ||
+          endpoint.NetworkID && endpoint.NetworkID !== byName[name] ||
+          endpoint.EndpointID || endpoint.Gateway || endpoint.IPAddress ||
+          endpoint.IPPrefixLen || endpoint.IPv6Gateway || endpoint.GlobalIPv6Address ||
+          endpoint.GlobalIPv6PrefixLen || endpoint.MacAddress || endpoint.Links?.length ||
+          endpoint.IPAMConfig && !keys(endpoint.IPAMConfig, []) ||
+          endpoint.DriverOpts || endpoint.GwPriority || endpoint.DNSNames?.length ||
+          endpoint.Aliases && (!Array.isArray(endpoint.Aliases) ||
+            endpoint.Aliases.some(alias => ![
+              expected.phase, fixedWriterMappingPrepareNames(expected.context.invocationId)[
+                transferPhase ? 'transfer' : 'prepare']].includes(alias)))) fail();
+    }
+    const projected = { ...item, NetworkSettings: { ...item.NetworkSettings,
+      Networks: transferPhase ? {} : Object.fromEntries(required.map(name =>
+        [name, { NetworkID: byName[name] }])) } };
+    return verifyWriterMappingPrepareNamedEffectiveContainer(projected,
+      { ...expected, terminal: false });
   } catch { fail(); }
 }
