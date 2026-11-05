@@ -4,7 +4,8 @@ import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { canonicalAttestorValue } from './search-attestor-pure.mjs';
-import { isWriterRoleBindingOperation } from './search-admin-job-lock.mjs';
+import { isWriterRoleBindingOperation,
+  isWriterMappingBindingOperation } from './search-admin-job-lock.mjs';
 
 const fail = () => { throw Error('Private writer role binding failed.'); };
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid &&
@@ -24,31 +25,39 @@ async function syncDir(name) {
 }
 
 /** Exclusive fixed binding. The writer role lock must already be durably attempted. */
-export async function writeWriterRoleBinding(repository, uid, gid, operation, approved, test = {}) {
+async function writeFixedBinding(repository, uid, gid, operation, approved, test, mapping) {
   try {
     approved = canonicalAttestorValue(approved).value;
     const hooks = Object.getOwnPropertyDescriptors(test);
     if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
-        gid !== process.getgid?.() || !isWriterRoleBindingOperation(operation,
+        gid !== process.getgid?.() || !(mapping ? isWriterMappingBindingOperation :
+          isWriterRoleBindingOperation)(operation,
           path.join(repository, '.cache/search-db'), uid) ||
         typeof operation.invocationId !== 'string' ||
         typeof operation.assertBindingAttempted !== 'function' ||
         typeof operation.assertOwned !== 'function' ||
         Reflect.ownKeys(hooks).some(key => !['afterFileWrite', 'afterFileSync',
           'afterFileClose'].includes(key) || !Object.hasOwn(hooks[key], 'value') ||
-          process.env.STATION_WRITER_ROLE_FIXTURE !== '1' ||
+          process.env[mapping ? 'STATION_WRITER_MAPPING_FIXTURE' :
+            'STATION_WRITER_ROLE_FIXTURE'] !== '1' ||
           typeof hooks[key].value !== 'function')) fail();
     const known = { approvedSha256: approved.approvedSha256,
       dispatchId: approved.dispatchId, ownerId: approved.ownerId };
     operation.assertBindingAttempted(known);
     await operation.assertOwned();
     const cache = path.join(repository, '.cache');
-    const root = path.join(cache, 'search-writer-role-apply');
+    const root = path.join(cache, mapping ? 'search-writer-mapping-apply' :
+      'search-writer-role-apply');
     const name = path.join(root, 'binding.json');
     const cacheStat = await directory(cache, uid, gid, null);
-    try { await mkdir(root, { mode: 0o700 }); await syncDir(cache); }
+    let createdStat;
+    try {
+      await mkdir(root, { mode: 0o700 });
+      createdStat = await directory(root, uid, gid, 0o700);
+      await syncDir(cache);
+    }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
-    const rootStat = await directory(root, uid, gid, 0o700);
+    const rootStat = await directory(root, uid, gid, 0o700, createdStat);
     if ((await readdir(root)).length) fail();
     const binding = { version: 1, invocationId: operation.invocationId, ...known };
     const bytes = canonicalAttestorValue(binding).bytes;
@@ -88,6 +97,9 @@ export async function writeWriterRoleBinding(repository, uid, gid, operation, ap
           if (bytesRead !== bytes.length || !buffer.subarray(0, bytesRead).equals(bytes) ||
               !sameFile(stat, await current.stat()) ||
               !sameFile(stat, await lstat(name))) fail();
+          await directory(root, uid, gid, 0o700, rootStat);
+          if ((await readdir(root)).join('|') !== 'binding.json') fail();
+          await directory(cache, uid, gid, null, cacheStat);
           return true;
         } finally { await current.close(); }
       } catch { fail(); }
@@ -97,4 +109,13 @@ export async function writeWriterRoleBinding(repository, uid, gid, operation, ap
     return Object.freeze({ invocationId: operation.invocationId, binding: () => ({ ...binding }),
       bytes: () => Buffer.from(bytes), recheck });
   } catch { fail(); }
+}
+
+export function writeWriterRoleBinding(repository, uid, gid, operation, approved, test = {}) {
+  return writeFixedBinding(repository, uid, gid, operation, approved, test, false);
+}
+
+/** Fixed, exclusive mapping binding; no caller-selected directory. */
+export function writeWriterMappingBinding(repository, uid, gid, operation, approved, test = {}) {
+  return writeFixedBinding(repository, uid, gid, operation, approved, test, true);
 }

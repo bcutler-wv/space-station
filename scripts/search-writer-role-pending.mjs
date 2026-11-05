@@ -215,6 +215,52 @@ export async function readOriginalWriterMappingFiles(repository, uid, gid) {
   } catch { fail(); }
 }
 
+/** Fixed mapping proposal plus four historical files; no external SHA inference. */
+export async function readWriterMappingPending(repository, uid, gid, approved) {
+  try {
+    approved = canonicalAttestorValue(approved, 4096).value;
+    if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
+        gid !== process.getgid?.() || !approved ||
+        Object.keys(approved).sort().join('|') !==
+          'approvedSha256|candidateIndex|candidateToken|candidateUuid|revision|sourceIndex|sourceToken|sourceUuid|transitionToken' ||
+        !sha(approved.approvedSha256)) fail();
+    const old = await readOriginalWriterMappingFiles(repository, uid, gid);
+    const cache = path.join(repository, '.cache');
+    const repoStat = await directory(repository, uid, gid, null);
+    const cacheStat = await directory(cache, uid, gid, null);
+    const parent = path.join(cache, 'search-writer-mapping-intent');
+    const name = path.join(parent, 'pending.json');
+    const parentStat = await directory(parent, uid, gid, 0o700);
+    const pending = await capture(name, parent, uid, gid, 256 * 1024);
+    const bytes = Buffer.from(pending.bytes);
+    const intent = JSON.parse(bytes.toString('utf8'));
+    if (!canonicalAttestorValue(intent, 256 * 1024).bytes.equals(bytes) ||
+        digest(bytes) !== approved.approvedSha256 ||
+        intent.revision !== approved.revision ||
+        ['transitionToken', 'sourceToken', 'sourceIndex', 'sourceUuid',
+          'candidateToken', 'candidateIndex', 'candidateUuid'].some(key =>
+          intent[key] !== approved[key])) fail();
+    const recheck = async () => {
+      await directory(repository, uid, gid, null, repoStat);
+      await directory(cache, uid, gid, null, cacheStat);
+      await directory(parent, uid, gid, 0o700, parentStat);
+      if ((await readdir(parent)).join('|') !== 'pending.json') fail();
+      await old.recheck();
+      await pending.recheck();
+      await directory(parent, uid, gid, 0o700, parentStat);
+      if ((await readdir(parent)).join('|') !== 'pending.json') fail();
+      await directory(repository, uid, gid, null, repoStat);
+      await directory(cache, uid, gid, null, cacheStat);
+      return true;
+    };
+    await recheck();
+    return Object.freeze({ approvedSha256: approved.approvedSha256,
+      dispatchId: intent.dispatchId, ownerId: intent.ownerId,
+      intent: () => JSON.parse(bytes.toString('utf8')),
+      files: old.files, recheck });
+  } catch { fail(); }
+}
+
 /** Capture all three original files once; every later check compares their inodes and bytes. */
 export async function readWriterRolePending(repository, uid, gid, approved) {
   try {

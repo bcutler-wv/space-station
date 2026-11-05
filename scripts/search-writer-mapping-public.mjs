@@ -17,28 +17,30 @@ const sameDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino &&
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 /** Capture only the candidate writer public certificate and the original public CA. */
-export async function captureCandidateWriterPublic(input) {
+async function captureWriterPublic(input, approvedOnly) {
   try {
     const values = canonicalAttestorValue(input, 4096).value;
     const { repository, uid, gid, candidateToken } = values;
-    const signer = values.signerResult;
+    const signer = approvedOnly ? values.approvedWriter : values.signerResult;
     if (Object.keys(values).sort().join('|') !==
-        'candidateToken|gid|repository|signerResult|uid' ||
+        (approvedOnly ? 'approvedWriter|candidateToken|gid|repository|uid' :
+          'candidateToken|gid|repository|signerResult|uid') ||
         !Number.isSafeInteger(uid) || !Number.isSafeInteger(gid) ||
         uid !== process.getuid?.() || gid !== process.getgid?.() ||
         typeof repository !== 'string' || path.resolve(repository) !== repository ||
         typeof candidateToken !== 'string' || !uuid.test(candidateToken) ||
         !signer || Object.keys(signer).sort().join('|') !==
-          'generationToken|queryCertFingerprint|queryPrincipal|writerCertFingerprint|writerPrincipal') fail();
+          (approvedOnly ? 'writerCertFingerprint|writerPrincipal' :
+            'generationToken|queryCertFingerprint|queryPrincipal|writerCertFingerprint|writerPrincipal')) fail();
     const suffix = candidateToken.replaceAll('-', '').toLowerCase();
     const principal = `station-search-indexer-${suffix}`;
-    if (signer.generationToken !== candidateToken ||
+    if (!approvedOnly && signer.generationToken !== candidateToken ||
         signer.writerPrincipal !== principal ||
-        signer.queryPrincipal !== `station-search-query-${suffix}` ||
+        !approvedOnly && signer.queryPrincipal !== `station-search-query-${suffix}` ||
         typeof signer.writerCertFingerprint !== 'string' ||
         !sha.test(signer.writerCertFingerprint) ||
-        typeof signer.queryCertFingerprint !== 'string' ||
-        !sha.test(signer.queryCertFingerprint)) fail();
+        !approvedOnly && (typeof signer.queryCertFingerprint !== 'string' ||
+          !sha.test(signer.queryCertFingerprint))) fail();
 
     const cache = path.join(repository, '.cache');
     const security = path.join(cache, 'search-security');
@@ -112,4 +114,13 @@ export async function captureCandidateWriterPublic(input) {
         } catch { fail(); }
       } });
   } catch { fail(); }
+}
+
+export function captureCandidateWriterPublic(input) {
+  return captureWriterPublic(input, false);
+}
+
+/** Offline approval has only sealed writer evidence, never a query fingerprint. */
+export function captureApprovedWriterMappingPublic(input) {
+  return captureWriterPublic(input, true);
 }

@@ -98,6 +98,8 @@ async function cleanupScratch(item, uid, gid) {
   await capturePublicDirectory(item.cache, uid, gid, null, item.cacheStat);
   return true;
 }
+export const captureWriterMappingScratch = scratch;
+export const cleanupWriterMappingScratch = cleanupScratch;
 
 function inputBytes(invocation, files, role, publicCapture, caBytes, expected) {
   const writerPath = `generations/${role.candidateToken.replaceAll('-', '')}/writer.pem`;
