@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
-import { createApplyPrepareDiagnostic,
+import { createApplyPrepareDiagnostic, createBoundaryRejectionDiagnostic,
   filteredCreateBoundaryDiagnostics, persistWriterRolePrepareSummary,
   writerPrecreateDiagnostic, writerRolePrepareSummary } from
   './search-create-boundary-delivery-diagnostic-filter.mjs';
@@ -19,6 +19,37 @@ test('only fixed checkpoint and owner diagnostic reach public CI output', () => 
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log), [
     'Create boundary delivery fixture failed at complete-cli.',
     'Private create boundary owner diagnostic stage=transfer-run reason=dispatch-stderr.']);
+});
+test('all four create-boundary rejection modes preserve their finite failing substep', () => {
+  const steps = ['state-mode', 'snapshot', 'owner-command', 'owner-output',
+    'owner-exit', 'owner-assert', 'state-unchanged', 'retained',
+    'combined-evidence', 'cleanup', 'restore', 'restored-state', 'db', 'engine'];
+  for (const mode of ['fresh', 'unintroduced', 'incomplete', 'wrong-uuid']) {
+    let checkpoint = 'unrelated';
+    const diagnostic = createBoundaryRejectionDiagnostic(mode, value => {
+      checkpoint = value;
+    });
+    assert.equal(checkpoint, `${mode}-rejection`);
+    for (const step of steps) {
+      diagnostic.step(step);
+      const safe = `Create boundary delivery fixture failed at ${mode}-rejection-${step}.`;
+      assert.equal(checkpoint, `${mode}-rejection-${step}`);
+      assert.deepEqual(filteredCreateBoundaryDiagnostics(`${safe}\n` +
+        'Create boundary delivery fixture failed at incomplete-rejection-secret.\n' +
+        `${safe}private-secret\n${safe}`), [safe]);
+    }
+    assert.throws(() => diagnostic.step('private-secret'));
+    assert.equal(checkpoint, `${mode}-rejection-engine`);
+    diagnostic.restore();
+    assert.equal(checkpoint, `${mode}-rejection`);
+  }
+  assert.throws(() => createBoundaryRejectionDiagnostic('private-secret', () => {}));
+  assert.throws(() => createBoundaryRejectionDiagnostic('incomplete', null));
+  assert.deepEqual(filteredCreateBoundaryDiagnostics([
+    'Create boundary delivery fixture failed at incomplete-rejection-owner-command.private-secret',
+    'Create boundary delivery fixture failed at incomplete-rejection-owner-command-secret.',
+    'Create boundary delivery fixture failed at incomplete-rejection-owner-command/.',
+  ].join('\n')), []);
 });
 test('only fixed intent checkpoint is forwarded and fake secret suffix is discarded', () => {
   const secret = 'fixture-private-secret-do-not-print';

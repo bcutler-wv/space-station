@@ -11,6 +11,8 @@ import { createBoundaryDockerAdapter } from '../../scripts/search-create-boundar
 import { withSearchAdminJobLock } from '../../scripts/search-admin-job-lock.mjs';
 import { isCreateBoundaryDiagnosticLine } from '../../scripts/search-create-boundary-owner-diagnostic.mjs';
 import { assertAppWorkerWithoutCreateAuthority } from '../support/search-create-boundary-app-worker-config.mjs';
+import { createBoundaryRejectionDiagnostic } from
+  '../support/search-create-boundary-delivery-diagnostic-filter.mjs';
 
 // Real Docker/PG16/OpenSearch delivery. Only the disposable failure cases
 // intercept a CLI response after its actual Docker operation has been sent.
@@ -676,22 +678,37 @@ for (const scenario of ['record-io-fault', 'lost-volume-create-response', 'lost-
   checkpoint = scenario; await injectScenario(scenario);
 }
 for (const mode of ['fresh', 'unintroduced', 'incomplete', 'wrong-uuid']) {
-  checkpoint = `${mode}-rejection`;
+  const diagnostic = createBoundaryRejectionDiagnostic(mode, value => { checkpoint = value; });
+  diagnostic.step('state-mode');
   await stateMode(mode);
+  diagnostic.step('snapshot');
   const before = await stateSnapshot();
+  diagnostic.step('owner-command');
   const denied = await command('node', ['scripts/search-create-boundary-owner.mjs'], process.env, 245_000);
+  diagnostic.step('owner-output');
   secretFree(denied.stdout, denied.stderr);
+  diagnostic.step('owner-exit');
   assert.equal(denied.code, 1);
+  diagnostic.step('owner-assert');
   assert.equal(denied.stdout, '');
   assert.ok(denied.stderr.startsWith(fixedFailure));
+  diagnostic.step('state-unchanged');
   assert.deepEqual(await stateSnapshot(), before);
+  diagnostic.step('retained');
   await retained();
+  diagnostic.step('combined-evidence');
   await failedCombinedEvidence();
+  diagnostic.step('cleanup');
   await fixtureTeardown();
+  diagnostic.step('restore');
   await stateMode('complete');
+  diagnostic.step('restored-state');
   assert.deepEqual(await stateSnapshot(), completeState);
+  diagnostic.step('db');
   assert.equal(await dbEvidence(), initialDb);
+  diagnostic.step('engine');
   assert.equal(await engineEvidence(), initialEngine);
+  diagnostic.restore();
 }
 const drift = async phase => docker(['compose', '--profile', 'search', '--profile', 'fixture',
   'run', '--rm', '-T', '--no-deps', '-e', `SEARCH_DRIFT_PHASE=${phase}`, 'search-profile-drift'], 90_000);

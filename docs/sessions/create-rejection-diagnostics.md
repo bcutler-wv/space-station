@@ -1,0 +1,5 @@
+# Create-boundary rejection diagnostics
+
+The first 0.96.0 Ubuntu run `41941960907` at exact `917ceb5476109e3e32bf5a9e52cb078bb34eb77b` reported only `incomplete-rejection` in the older create-boundary fixture. The raw private body log was removed by checked teardown, so this evidence does not identify the failing substep or establish a relationship to the new, uncalled mapping transfer.
+
+Version 0.96.1 records a finite substep before each existing operation in the `fresh`, `unintroduced`, `incomplete` and `wrong-uuid` rejection loop. The private-log filter forwards one exact allowlisted checkpoint and rejects arbitrary modes, steps and suffixes. Successful loops restore their parent checkpoint. No rejection assertion, command argument, timeout, cleanup rule or production path changed. Local tests exercise every allowed label and hostile output; a subsequent exact-commit Ubuntu run can locate a reproduced failure's substep or establish full regression acceptance. The removed-log failure's cause remains unknown even if the next run passes.

@@ -14,6 +14,25 @@ const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-c
   'extra-reference', 'extra-service-reference', 'cleanup-refusal', 'fresh-rejection',
   'unintroduced-rejection', 'incomplete-rejection', 'wrong-uuid-rejection', 'engine-drift',
   'host-identity-rejection', 'source-loss', 'mapping-drift']);
+const rejectionModes = new Set(['fresh', 'unintroduced', 'incomplete', 'wrong-uuid']);
+const rejectionSteps = new Set(['state-mode', 'snapshot', 'owner-command',
+  'owner-output', 'owner-exit', 'owner-assert', 'state-unchanged', 'retained',
+  'combined-evidence', 'cleanup', 'restore', 'restored-state', 'db', 'engine']);
+export function createBoundaryRejectionDiagnostic(mode, setCheckpoint) {
+  if (!rejectionModes.has(mode) || typeof setCheckpoint !== 'function')
+    throw Error('Unknown create boundary rejection mode');
+  const parent = `${mode}-rejection`;
+  setCheckpoint(parent);
+  return {
+    step(name) {
+      if (!rejectionSteps.has(name)) throw Error('Unknown create boundary rejection step');
+      setCheckpoint(`${parent}-${name}`);
+    },
+    restore() { setCheckpoint(parent); },
+  };
+}
+for (const mode of rejectionModes)
+  for (const step of rejectionSteps) checkpoints.add(`${mode}-rejection-${step}`);
 const intentCheckpoints = new Set(['intent-setup', 'intent-cli', 'intent-public-identity',
   'intent-fixture-scratch',
   'intent-preexisting', 'intent-malformed-pending', 'intent-fresh-projection',
