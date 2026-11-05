@@ -70,6 +70,7 @@ async function originalCa(repository, uid, gid) {
   await recheck();
   return Object.freeze({ bytes: () => Buffer.from(bytes), recheck });
 }
+export const captureOriginalWriterMappingCa = originalCa;
 
 async function scratch(repository, uid, gid, created) {
   const name = path.join(repository, '.cache/search-writer-mapping-public');

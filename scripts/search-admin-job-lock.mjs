@@ -11,6 +11,11 @@ const writerDeliveryRecords = ['transfer-dispatched', 'transfer-confirmed',
   'apply-dispatched', 'apply-confirmed', 'cleanup-complete'];
 const writerDeliveryFaults = writerDeliveryRecords.flatMap(name =>
   [`writer-${name}-after-append`, `writer-${name}-after-file-sync`]);
+const mappingDeliveryRecords = ['transfer-dispatched', 'transfer-confirmed',
+  'apply-dispatched', 'apply-confirmed', 'cleanup-complete'];
+const mappingDeliveryFaults = mappingDeliveryRecords.flatMap(name =>
+  [`mapping-apply-${name}-after-append`,
+    `mapping-apply-${name}-after-file-sync`]);
 const mappingPrepareRecords = ['preflight-failed', 'transfer-confirmed',
   'prepare-dispatched', 'prepare-confirmed', 'cleanup-confirmed', 'pending-attempted'];
 const mappingPrepareFaults = mappingPrepareRecords.flatMap(name =>
@@ -69,7 +74,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         'writer-release-after-sync', 'mapping-prepare-final-after-append',
         'mapping-prepare-final-after-file-sync', 'mapping-prepare-release-after-rm',
         'mapping-prepare-release-after-sync', ...writerDeliveryFaults,
-        ...mappingPrepareFaults, 'mapping-binding-after-append',
+        ...mappingPrepareFaults, ...mappingDeliveryFaults,
+        'mapping-apply-release-after-rm', 'mapping-apply-release-after-sync',
+        'mapping-binding-after-append',
         'mapping-binding-after-file-sync', 'mapping-preflight-failed-after-append',
         'mapping-preflight-failed-after-file-sync'].includes(fixtureFaultAt)))
     fail('job lock configuration');
@@ -102,6 +109,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   let writerAttempted = false, writerBindingDurable = false, writerKnown;
   let writerMappingAttempted = false, writerMappingBindingDurable = false;
   let writerMappingPreflightFailed = false, writerMappingKnown;
+  let writerMappingStage = 'preflight', writerMappingDurablePhase = null;
+  let writerMappingTerminalAttempted = false, writerMappingCleanup = false;
+  let writerMappingSuccess = false;
   let writerStage = 'preflight', writerDurablePhase = null;
   let writerTerminalAttempted = false, writerCleanup = false, writerSuccess = false;
   let rolePrepareStage = 'preflight', rolePrepareAttempted = false;
@@ -145,6 +155,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       `writer-${record.phase}-${record.state}` : null;
     const mappingFault = record.role === 'writer-mapping-prepare' ?
       `mapping-prepare-${record.phase}-${record.state}` : null;
+    const mappingApplyFault = record.role === 'writer-mapping-apply' ?
+      `mapping-apply-${record.phase}-${record.state}` : null;
     if (fixtureFaultAt === 'after-append' ||
         fixtureFaultAt === 'intent-pending-after-append' &&
           record.role === 'create-intent' && record.phase === 'pending' ||
@@ -163,7 +175,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         fixtureFaultAt === 'mapping-prepare-final-after-append' &&
           record.role === 'writer-mapping-prepare' && record.phase === 'pending' &&
           record.state === 'prepared' || fixtureFaultAt === `${mappingFault}-after-append` &&
-          mappingPrepareRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
+          mappingPrepareRecords.includes(`${record.phase}-${record.state}`) ||
+        fixtureFaultAt === `${mappingApplyFault}-after-append` &&
+          mappingDeliveryRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
     await handle.sync();
     if (fixtureFaultAt === 'after-file-sync' ||
         fixtureFaultAt === 'intent-pending-after-file-sync' &&
@@ -183,7 +197,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
         fixtureFaultAt === 'mapping-prepare-final-after-file-sync' &&
           record.role === 'writer-mapping-prepare' && record.phase === 'pending' &&
           record.state === 'prepared' || fixtureFaultAt === `${mappingFault}-after-file-sync` &&
-          mappingPrepareRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
+          mappingPrepareRecords.includes(`${record.phase}-${record.state}`) ||
+        fixtureFaultAt === `${mappingApplyFault}-after-file-sync` &&
+          mappingDeliveryRecords.includes(`${record.phase}-${record.state}`)) fail('job record fault');
     await syncDirectory(root);
     await assertOwned();
   };
@@ -410,6 +426,12 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
   });
   const writerMapping = Object.freeze({
     invocationId: operationId,
+    async assertPreflightOwned() {
+      if (!active || mode !== 'writer-mapping-apply' ||
+          writerMappingAttempted || writerMappingPreflightFailed)
+        fail('writer mapping preflight');
+      await assertOwned();
+    },
     async assertOwned() {
       if (!active || mode !== 'writer-mapping-apply' ||
           !writerMappingBindingDurable) fail('writer mapping binding');
@@ -429,6 +451,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
       await appendRecord({ role: 'writer-mapping-apply', phase: 'binding',
         state: 'attempted', ...writerMappingKnown });
       writerMappingBindingDurable = true;
+      writerMappingStage = 'binding-confirmed';
     },
     assertBindingAttempted(input) {
       const known = readApplyKnown(input);
@@ -438,6 +461,44 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
           known.dispatchId !== writerMappingKnown.dispatchId ||
           known.ownerId !== writerMappingKnown.ownerId) fail('writer mapping binding');
       return true;
+    },
+    async markDispatched(phase) {
+      if (!active || mode !== 'writer-mapping-apply' ||
+          !writerMappingBindingDurable ||
+          !['transfer', 'apply'].includes(phase) ||
+          writerMappingStage !== (phase === 'transfer' ?
+            'binding-confirmed' : 'transfer-confirmed') ||
+          writerMappingCleanup || writerMappingTerminalAttempted) fail('writer mapping dispatch');
+      writerMappingAttempted = true;
+      writerMappingStage = `${phase}-dispatched`;
+      writerMappingDurablePhase = null;
+      await appendRecord({ role: 'writer-mapping-apply', phase,
+        state: 'dispatched', ...writerMappingKnown });
+      writerMappingDurablePhase = phase;
+    },
+    async confirmCompletion(phase) {
+      if (!active || mode !== 'writer-mapping-apply' ||
+          !['transfer', 'apply'].includes(phase) ||
+          writerMappingStage !== `${phase}-dispatched` ||
+          writerMappingDurablePhase !== phase ||
+          writerMappingTerminalAttempted) fail('writer mapping completion');
+      writerMappingTerminalAttempted = true;
+      await appendRecord({ role: 'writer-mapping-apply', phase,
+        state: 'confirmed', ...writerMappingKnown });
+      writerMappingStage = `${phase}-confirmed`;
+      writerMappingDurablePhase = null;
+      writerMappingTerminalAttempted = false;
+    },
+    async confirmOwnedCleanup() {
+      if (!active || mode !== 'writer-mapping-apply' ||
+          writerMappingStage !== 'apply-confirmed' ||
+          writerMappingCleanup || writerMappingTerminalAttempted)
+        fail('writer mapping cleanup');
+      writerMappingTerminalAttempted = true;
+      await appendRecord({ role: 'writer-mapping-apply', phase: 'cleanup',
+        state: 'complete', ...writerMappingKnown });
+      writerMappingStage = 'cleanup-confirmed';
+      writerMappingCleanup = true;
     },
   });
   const writerPrepare = Object.freeze({
@@ -669,6 +730,9 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (mode === 'writer-mapping-apply') {
       if (!writerMappingBindingDurable) fail('writer mapping incomplete');
       await assertOwned();
+      if (writerMappingStage !== 'binding-confirmed' && !writerMappingCleanup)
+        fail('writer mapping incomplete');
+      if (writerMappingCleanup) writerMappingSuccess = true;
     }
     if (mode === 'writer-role-prepare' && !rolePrepareSuccess)
       fail('writer role prepare incomplete');
@@ -690,7 +754,8 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (mode === 'create-apply') canRelease = !applyAttempted || applyCleanup;
     if (mode === 'writer-role-apply') canRelease = !writerAttempted || writerSuccess;
     if (mode === 'writer-mapping-apply') canRelease =
-      !writerMappingAttempted && !writerMappingPreflightFailed;
+      !writerMappingAttempted && !writerMappingPreflightFailed ||
+      writerMappingSuccess;
     if (mode === 'writer-role-prepare') canRelease =
       !rolePrepareAttempted || rolePrepareSuccess;
     if (mode === 'writer-mapping-prepare') canRelease =
@@ -711,17 +776,22 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
             if ((mode === 'attestor' || mode === 'create-boundary' ||
                 mode === 'create-intent' || mode === 'create-apply' ||
                 mode === 'writer-role-prepare' || mode === 'writer-role-apply' ||
-                mode === 'writer-mapping-prepare') &&
+                mode === 'writer-mapping-prepare' ||
+                mode === 'writer-mapping-apply') &&
                 fixtureFaultAt === 'before-release-rm')
               fail('fixture release fault');
             await rm(lockPath);
             if (mode === 'writer-role-apply' && fixtureFaultAt === 'writer-release-after-rm')
               fail('fixture release fault');
+            if (mode === 'writer-mapping-apply' &&
+                fixtureFaultAt === 'mapping-apply-release-after-rm') fail('fixture release fault');
             if (mode === 'writer-mapping-prepare' &&
                 fixtureFaultAt === 'mapping-prepare-release-after-rm') fail('fixture release fault');
             await syncDirectory(root);
             if (mode === 'writer-role-apply' && fixtureFaultAt === 'writer-release-after-sync')
               fail('fixture release fault');
+            if (mode === 'writer-mapping-apply' &&
+                fixtureFaultAt === 'mapping-apply-release-after-sync') fail('fixture release fault');
             if (mode === 'writer-mapping-prepare' &&
                 fixtureFaultAt === 'mapping-prepare-release-after-sync') fail('fixture release fault');
             released = true;
@@ -736,6 +806,7 @@ export async function withSearchAdminJobLock({ root, uid, fixtureFaultAt }, work
     if (intentSuccess && !released) fail('create intent lock release');
     if (applySuccess && !released) fail('create apply lock release');
     if (writerSuccess && !released) fail('writer role lock release');
+    if (writerMappingSuccess && !released) fail('writer mapping lock release');
     if (rolePrepareSuccess && !released) fail('writer role prepare lock release');
     if (mappingPrepareSuccess && !released) fail('writer mapping prepare lock release');
   }
