@@ -1,0 +1,7 @@
+# Writer mapping CAS, v0.102.0
+
+The offline mapping approval and binding passed exact-commit Ubuntu run `41978626539` at `fbba9a5` with all 29 jobs successful and Astra acceptance. This version adds an uncalled fixed registry CAS adapter. Its own exact-commit CI regression remains pending.
+
+The adapter accepts only five literal mapping transitions: request, arm, sent-unknown, original-response confirmation, and writer-attested advance. Each call checks the complete caller predecessor against the actual locked transition-role snapshot, then applies a mapping-specific phase and prior-dispatch predicate before one existing generation CAS operation. It captures and compares the full successor, including exact microsecond sidecars, inside the same short committed transaction. Existing public read-only registry readers and the writer-role CAS path remain separate.
+
+Local migrated PostgreSQL tests use the restricted transition role and verify five committed increments, prohibited but matching live states, same-millisecond drift, rollback, one concurrent winner and an original commit whose return is lost. The local server is PostgreSQL 15; this is not a Docker or PG16 result. The adapter does not acquire or authenticate the approved R/SHA, original files, public PEM, E0b or engine evidence. A later reviewed consumer must bind those to every call; neither a CAS return nor a later read authorizes a mapping PUT, certificate fingerprint write or readiness grant.

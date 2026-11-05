@@ -14,7 +14,7 @@ export { searchDocuments, searchEpochs, searchGenerationControl, searchGeneratio
 export { enrollLegacySearchGeneration, reserveSearchGeneration, advanceSearchGeneration,
   armSearchGenerationDispatch, updateSearchGenerationDispatch,
   recordSearchGenerationCertEvidence } from './search-generation-admin.js';
-export { runWriterRoleCas } from './search-writer-role-cas.js';
+export { runWriterRoleCas, runWriterMappingCas } from './search-writer-role-cas.js';
 export { buildSearchGenerationManifest, searchGenerationDispatchSpec } from './search-generation-manifest.js';
 export { readSearchAdminPassword, withSearchAdminDatabase, readSearchAdminSnapshot,
   recheckSearchAdminSnapshot, readSearchAdminRegistrySnapshot,

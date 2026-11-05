@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { readTransitionRegistryInTransaction, SearchAdminDatabaseError } from
   './search-admin-connection.js';
+import { searchGenerationDispatchSpec } from './search-generation-manifest.js';
 import { advanceSearchGeneration, armSearchGenerationDispatch,
   updateSearchGenerationDispatch, type GenerationExpected } from './search-generation-admin.js';
 import { searchGenerationControl } from './schema.js';
@@ -79,22 +80,25 @@ const expectedControl = (snapshot: Snapshot): GenerationExpected => ({
   profileId: snapshot.control.profileId,
 });
 
-function validateOperation(kind: Kind, operation: unknown): Input {
+function validateOperation(kind: Kind, operation: unknown, mapping = false): Input {
+  const requested = mapping ? 'writer_mapping_requested' : 'writer_role_requested';
+  const attested = mapping ? 'writer_attested' : 'writer_role_attested';
+  const operationName = mapping ? 'writer_mapping' : 'writer_role';
   if (kind === 'request') {
     const input = exact(operation, ['stage']);
-    if (input.stage !== 'writer_role_requested') invalid();
+    if (input.stage !== requested) invalid();
     return input;
   }
   if (kind === 'attest') {
     const input = exact(operation, ['stage']);
-    if (input.stage !== 'writer_role_attested') invalid();
+    if (input.stage !== attested) invalid();
     return input;
   }
   const names = kind === 'arm' ?
     ['operation', 'dispatchId', 'ownerId', 'target', 'bodyIdentity'] :
     ['operation', 'dispatchId', 'ownerId', 'state'];
   const input = exact(operation, names);
-  if (input.operation !== 'writer_role' ||
+  if (input.operation !== operationName ||
       typeof input.dispatchId !== 'string' || typeof input.ownerId !== 'string' ||
       (kind === 'send' && input.state !== 'sent_unknown') ||
       (kind === 'confirm' && input.state !== 'response_confirmed') ||
@@ -103,7 +107,11 @@ function validateOperation(kind: Kind, operation: unknown): Input {
   return input;
 }
 
-function validateSuccessor(before: Snapshot, after: Snapshot, kind: Kind, input: Input): void {
+function validateSuccessor(before: Snapshot, after: Snapshot, kind: Kind, input: Input,
+  mapping = false): void {
+  const requested = mapping ? 'writer_mapping_requested' : 'writer_role_requested';
+  const attested = mapping ? 'writer_attested' : 'writer_role_attested';
+  const operationName = mapping ? 'writer_mapping' : 'writer_role';
   const expected = structuredClone(before);
   expected.control.revision++;
   const updatedAt = after.exactTimestamps.control.updatedAt;
@@ -111,26 +119,30 @@ function validateSuccessor(before: Snapshot, after: Snapshot, kind: Kind, input:
       after.control.updatedAt.getTime() !== Date.parse(updatedAt)) invalid();
   expected.control.updatedAt = after.control.updatedAt;
   expected.exactTimestamps.control.updatedAt = updatedAt;
-  if (kind === 'request') expected.control.stage = 'writer_role_requested';
-  else if (kind === 'attest') expected.control.stage = 'writer_role_attested';
+  if (kind === 'request') expected.control.stage = requested;
+  else if (kind === 'attest') expected.control.stage = attested;
   else if (kind === 'arm') {
     const row = after.dispatch.find(item => item.generationToken === before.control.generationToken &&
-      item.operation === 'writer_role');
+      item.operation === operationName);
     const side = after.exactTimestamps.dispatch.find(item =>
-      item.generationToken === before.control.generationToken && item.operation === 'writer_role');
+      item.generationToken === before.control.generationToken && item.operation === operationName);
     if (!row || !side) return invalid();
+    if (mapping && (row.dispatchId !== input.dispatchId ||
+        row.ownerId !== input.ownerId || row.target !== input.target ||
+        row.bodyIdentity !== input.bodyIdentity || row.state !== 'armed' ||
+        side.dispatchId !== input.dispatchId)) invalid();
     if (!micro(side.createdAt) || !(row.createdAt instanceof Date) ||
         row.createdAt.getTime() !== Date.parse(side.createdAt)) invalid();
     insertDispatch(expected.dispatch, { generationToken: before.control.generationToken!,
-      operation: 'writer_role', dispatchId: input.dispatchId as string,
+      operation: operationName, dispatchId: input.dispatchId as string,
       ownerId: input.ownerId as string, target: input.target as string,
       bodyIdentity: input.bodyIdentity as string, state: 'armed', createdAt: row.createdAt });
     insertDispatch(expected.exactTimestamps.dispatch, {
-      generationToken: before.control.generationToken!, operation: 'writer_role',
+      generationToken: before.control.generationToken!, operation: operationName,
       dispatchId: input.dispatchId as string, createdAt: side.createdAt });
   } else {
     const row = expected.dispatch.find(item => item.generationToken === before.control.generationToken &&
-      item.operation === 'writer_role');
+      item.operation === operationName);
     if (!row) return invalid();
     row.state = kind === 'send' ? 'sent_unknown' : 'response_confirmed';
   }
@@ -138,12 +150,58 @@ function validateSuccessor(before: Snapshot, after: Snapshot, kind: Kind, input:
       after.control.servingReady !== false) invalid();
 }
 
-/** One fixed writer operation per committed short transaction; never observes an engine. */
-export async function runWriterRoleCas(db: NodePgDatabase, kind: Kind,
-  predecessor: Snapshot, operation: unknown): Promise<Snapshot> {
+/** Mapping-specific locked predecessor, narrower than the shared generation CAS API. */
+function validateMappingPredecessor(snapshot: Snapshot, kind: Kind, input: Input): void {
+  const { control, history, dispatch } = snapshot;
+  const token = control.generationToken ?? invalid();
+  if (!token) invalid();
+  const candidate = history.filter(row => row.generationToken === token);
+  if (candidate.length !== 1) invalid();
+  const current = candidate[0] ?? invalid();
+  const candidateDispatch = dispatch.filter(row => row.generationToken === token);
+  if (
+      !control.sourceGenerationToken || !control.transitionToken ||
+      control.profileId !== 'station-mail-v2' ||
+      control.physicalIndex !== `station-mail-v2-g${token.replaceAll('-', '')}` ||
+      typeof control.indexUuid !== 'string' || !control.indexUuid ||
+      candidateDispatch.some(row => !['create_index', 'writer_role', 'writer_mapping']
+        .includes(row.operation)) ||
+      control.publicationEnabled !== false ||
+      control.servingReady !== false || current.lifecycle !== 'bound' ||
+      current.physicalIndex !== control.physicalIndex ||
+      current.indexUuid !== control.indexUuid ||
+      current.profileId !== control.profileId ||
+      current.writerCertFingerprint !== null ||
+      current.queryCertFingerprint !== null) invalid();
+  for (const operation of ['create_index', 'writer_role'] as const) {
+    const rows = dispatch.filter(row => row.generationToken === token && row.operation === operation);
+    const spec = searchGenerationDispatchSpec(current, operation);
+    if (rows.length !== 1 || rows[0]?.state !== 'response_confirmed' ||
+        rows[0].target !== spec.target || rows[0].bodyIdentity !== spec.bodyIdentity) invalid();
+  }
+  const mapping = dispatch.filter(row => row.generationToken === token &&
+    row.operation === 'writer_mapping');
+  if (control.stage !== (kind === 'request' ? 'writer_role_attested' :
+    'writer_mapping_requested') ||
+      mapping.length !== (kind === 'request' || kind === 'arm' ? 0 : 1)) invalid();
+  if (mapping.length) {
+    const row = mapping[0] ?? invalid();
+    const spec = searchGenerationDispatchSpec(current, 'writer_mapping');
+    if (row.target !== spec.target || row.bodyIdentity !== spec.bodyIdentity ||
+        row.state !== (kind === 'send' ? 'armed' : kind === 'confirm' ?
+          'sent_unknown' : 'response_confirmed')) invalid();
+    if (kind === 'send' || kind === 'confirm') {
+      if (row.dispatchId !== input.dispatchId || row.ownerId !== input.ownerId) invalid();
+    }
+  }
+}
+
+/** Shared private transaction body; only the two named fixed entrypoints can invoke it. */
+async function runFixedWriterCas(db: NodePgDatabase, kind: Kind, predecessor: Snapshot,
+  operation: unknown, mapping: boolean): Promise<Snapshot> {
   try {
     if (!['request', 'arm', 'send', 'confirm', 'attest'].includes(kind)) invalid();
-    const input = Object.freeze({ ...validateOperation(kind, operation) });
+    const input = Object.freeze({ ...validateOperation(kind, operation, mapping) });
     safeSnapshot(predecessor);
     const original = structuredClone(predecessor);
     return await db.transaction(async tx => {
@@ -153,6 +211,7 @@ export async function runWriterRoleCas(db: NodePgDatabase, kind: Kind,
         .from(searchGenerationControl).where(eq(searchGenerationControl.singleton, 1)).for('update');
       const before = await readTransitionRegistryInTransaction(tx);
       if (!isDeepStrictEqual(before, original)) invalid();
+      if (mapping) validateMappingPredecessor(before, kind, input);
       const expected = expectedControl(before);
       const changed = kind === 'request' || kind === 'attest' ?
         await advanceSearchGeneration(tx, expected, input.stage as string) :
@@ -163,8 +222,20 @@ export async function runWriterRoleCas(db: NodePgDatabase, kind: Kind,
       if (!changed) invalid();
       const after = await readTransitionRegistryInTransaction(tx);
       if (!isDeepStrictEqual(changed, after.control)) invalid();
-      validateSuccessor(before, after, kind, input);
+      validateSuccessor(before, after, kind, input, mapping);
       return after;
     });
   } catch { throw new SearchAdminDatabaseError('query'); }
+}
+
+/** One fixed writer-role operation per committed short transaction. */
+export function runWriterRoleCas(db: NodePgDatabase, kind: Kind,
+  predecessor: Snapshot, operation: unknown): Promise<Snapshot> {
+  return runFixedWriterCas(db, kind, predecessor, operation, false);
+}
+
+/** One fixed writer-mapping registry operation; no engine or SDK observation. */
+export function runWriterMappingCas(db: NodePgDatabase, kind: Kind,
+  predecessor: Snapshot, operation: unknown): Promise<Snapshot> {
+  return runFixedWriterCas(db, kind, predecessor, operation, true);
 }
