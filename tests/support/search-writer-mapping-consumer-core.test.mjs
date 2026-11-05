@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
@@ -12,6 +12,10 @@ import { test } from 'node:test';
 import { fixture } from './search-writer-mapping-intent-pure.test.mjs';
 import { makeWriterMappingConsumer } from '../../scripts/search-writer-mapping-consumer-core.mjs';
 import { openWriterMappingApplyInput } from '../../scripts/search-writer-mapping-apply-input.mjs';
+import { transferWriterMappingApplyInputs } from
+  '../../scripts/search-writer-mapping-apply-transfer-core.mjs';
+import { parseWriterMappingConsumerArgs, runFixedWriterMappingConsumer } from
+  '../../scripts/search-writer-mapping-consumer-wrapper.mjs';
 import { ensureSearchGenerationIdentity } from '../../scripts/search-generation-identity.mjs';
 import { canonicalAttestorValue } from '../../scripts/search-attestor-pure.mjs';
 import { issuedWriterMappingRequest } from
@@ -144,7 +148,7 @@ const command = (name, args, cwd) => {
     stdio: 'ignore' });
   assert.equal(result.status, 0);
 };
-async function realInput(t, retainedSource = false) {
+async function realInput(t, retainedSource = false, absent = false) {
   await mkdir(path.resolve('.cache/results'), { recursive: true });
   const repository = await mkdtemp(path.resolve('.cache/results/mapping-apply-'));
   t.after(() => rm(repository, { recursive: true, force: true }));
@@ -162,7 +166,7 @@ async function realInput(t, retainedSource = false) {
     retainedFingerprints = { writer: retained.writerCertFingerprint,
       query: retained.queryCertFingerprint };
   }
-  const source = fixture({ retainedSource, retainedFingerprints });
+  const source = fixture({ retainedSource, retainedFingerprints, absent });
   const priorBytes = new Map();
   for (const row of source.roleEvidence.intent.publicFiles) {
     const filename = row.path === 'ca.pem' ? path.join(security, 'ca.pem') :
@@ -173,7 +177,7 @@ async function realInput(t, retainedSource = false) {
   const candidateCa = await readFile(path.join(security, 'ca.pem'));
   const candidateWriter = await readFile(path.join(generationRoot,
     candidateToken.replaceAll('-', ''), 'writer.pem'));
-  const f = fixture({ retainedSource, retainedFingerprints, caPem: candidateCa,
+  const f = fixture({ retainedSource, retainedFingerprints, absent, caPem: candidateCa,
     writerPem: candidateWriter,
     priorDigestsOverride: source.roleEvidence.intent.publicFiles.map(row =>
       ({ path: row.path, sha256: sha(priorBytes.get(row.path)) })) });
@@ -212,6 +216,65 @@ async function realInput(t, retainedSource = false) {
   return { f, reader, root, repository, security, generationRoot, candidate };
 }
 
+async function transferredInput(t, retainedSource = false, hooks = {}, skipTransfer = false) {
+  const original = await realInput(t, retainedSource, retainedSource);
+  const stage = path.join(original.repository, 'stage');
+  await mkdir(stage, { mode: 0o700 });
+  for (const name of ['prior-public', 'candidate-public'])
+    await cp(path.join(original.root, name), path.join(stage, name), { recursive: true });
+  const source = {}, names = {
+    intentFile: 'intent.json', bindingFile: 'binding.json',
+    createIntentFile: 'create-intent.json', createBindingFile: 'create-binding.json',
+    roleIntentFile: 'role-intent.json', roleBindingFile: 'role-binding.json',
+    passwordFile: 'transition.password',
+  };
+  for (const [key, name] of Object.entries(names)) {
+    const parent = path.join(original.repository, `source-${key}`);
+    await mkdir(parent, { mode: 0o755 });
+    const file = path.join(parent, name);
+    await writeFile(file, await readFile(path.join(original.root, name)), { mode: 0o400 });
+    source[key] = file;
+  }
+  const volumeRoot = path.join(original.repository, 'volume');
+  await mkdir(volumeRoot, { mode: 0o755 });
+  source.publicRoot = stage;
+  source.volumeRoot = volumeRoot;
+  if (skipTransfer) return { ...original, source, volumeRoot };
+  await transferWriterMappingApplyInputs(source, { fixture: true,
+    creatorUid: process.getuid(), targetUid: process.getuid(), ...hooks });
+  const reader = await openWriterMappingApplyInput(volumeRoot,
+    path.join(original.repository, '.cache/search-writer-mapping-apply'),
+    { uid: process.getuid(), gid: process.getgid() });
+  return { ...original, source, volumeRoot, reader };
+}
+
+test('real certificate transfer feeds fixed mapping wrapper and core for both sources',
+  { timeout: 180_000 }, async t => {
+    for (const retainedSource of [false, true]) {
+      const actual = await transferredInput(t, retainedSource);
+      const r = rig({ f: actual.f, reader: actual.reader });
+      const a = r.context.approval;
+      const args = [a.approvedSha256, String(a.revision), a.transitionToken,
+        a.sourceToken, a.sourceIndex, a.sourceUuid, a.candidateToken,
+        a.candidateIndex, a.candidateUuid, r.context.invocationId,
+        r.context.project, String(r.context.databaseOid), r.context.systemIdentifier];
+      assert.deepEqual(await runFixedWriterMappingConsumer(
+        parseWriterMappingConsumerArgs(args), { ...r.deps,
+          openInput: async () => actual.reader }),
+      { status: 'writer_attested', ready: false });
+      assert.equal(r.casCount, 5);
+      assert.equal(r.sendCount, 1);
+      assert.equal(r.closeCount, 1);
+      if (retainedSource)
+        assert.equal(r.current.history.find(row => row.lifecycle === 'abandoned')?.indexUuid,
+          null);
+      assert.deepEqual((await readdir(actual.volumeRoot)).sort(),
+        ['binding.json', 'candidate-public', 'create-binding.json',
+          'create-intent.json', 'intent.json', 'prior-public', 'role-binding.json',
+          'role-intent.json', 'transition.password']);
+    }
+  });
+
 test('fixed mapping core orders five CAS results and one original response', async () => {
   const r = rig();
   const consumer = makeWriterMappingConsumer(r.context, r.deps);
@@ -226,6 +289,201 @@ test('fixed mapping core orders five CAS results and one original response', asy
   await assert.rejects(consumer.run());
   assert.equal(r.sendCount, 1);
 });
+
+test('networkless transfer refuses late original and created-output drift',
+  { timeout: 180_000 }, async t => {
+    for (const fault of ['source-inventory', 'output-directory',
+      'output-directory-inode', 'output-inode']) {
+      const actual = await transferredInput(t, false, {}, true);
+      let reached = false;
+      const suffix = actual.f.sealed.intent.candidateToken.replaceAll('-', '');
+      const last = `candidate-public/generations/${suffix}/writer.pem`;
+      await assert.rejects(transferWriterMappingApplyInputs(actual.source, { fixture: true,
+        creatorUid: process.getuid(), targetUid: process.getuid(),
+        beforeSync: async relative => {
+          if (relative !== last && fault !== 'output-inode' ||
+              relative !== 'intent.json' && fault === 'output-inode') return;
+          reached = true;
+          if (fault === 'source-inventory')
+            await writeFile(path.join(actual.source.publicRoot,
+              'candidate-public/generations', suffix, 'unexpected'), 'x');
+          else if (fault === 'output-directory')
+            await chmod(path.join(actual.volumeRoot,
+              'candidate-public/generations', suffix), 0o777);
+          else if (fault === 'output-directory-inode') {
+            const parent = path.join(actual.volumeRoot,
+              'candidate-public/generations', suffix);
+            await rename(parent, `${parent}-old`);
+            await mkdir(parent, { mode: 0o700 });
+            await rename(path.join(`${parent}-old`, 'writer.pem'),
+              path.join(parent, 'writer.pem'));
+          }
+          else {
+            const name = path.join(actual.volumeRoot, 'intent.json');
+            await rename(name, `${name}.old`);
+            await writeFile(name, await readFile(`${name}.old`), { mode: 0o400 });
+          }
+        },
+      }), { message: 'Private writer mapping apply transfer failed.' });
+      assert.equal(reached, true, fault);
+    }
+  });
+
+test('transfer denies an extra candidate key without opening its bytes',
+  { timeout: 90_000 }, async t => {
+    const actual = await transferredInput(t, false, {}, true);
+    const key = path.join(actual.source.publicRoot, 'candidate-public', 'private.key');
+    await writeFile(key, 'PRIVATE_KEY_SENTINEL');
+    const original = fs.promises.open;
+    let keyReads = 0;
+    try {
+      fs.promises.open = (...args) => {
+        if (args[0] === key) keyReads++;
+        return original(...args);
+      };
+      syncBuiltinESMExports();
+      await assert.rejects(transferWriterMappingApplyInputs(actual.source,
+        { fixture: true, creatorUid: process.getuid(), targetUid: process.getuid() }),
+      { message: 'Private writer mapping apply transfer failed.' });
+      assert.equal(keyReads, 0);
+    } finally { fs.promises.open = original; syncBuiltinESMExports(); }
+  });
+
+test('final source public leaf and output root sync remain fenced',
+  { timeout: 150_000 }, async t => {
+    for (const fault of ['source-final-leaf', 'output-final-root',
+      'output-final-nested']) {
+      const actual = await transferredInput(t, false, {}, true);
+      const last = path.join(actual.source.publicRoot, 'prior-public',
+        actual.f.roleEvidence.intent.publicFiles.at(-1).path);
+      const outputIntent = path.join(actual.volumeRoot, 'intent.json');
+      const original = fs.promises.open;
+      let lastReads = 0, outputReads = 0, reached = false;
+      try {
+        fs.promises.open = async (...input) => {
+          const handle = await original(...input);
+          if (input[0] === last) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => {
+              await close(); lastReads++;
+              if (fault === 'source-final-leaf' && lastReads === 3) {
+                reached = true;
+                await writeFile(path.join(path.dirname(last), 'unexpected'), 'x');
+              }
+            };
+          }
+          if (input[0] === outputIntent) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => { await close(); outputReads++; };
+          }
+          if (input[0] === actual.volumeRoot) {
+            const sync = handle.sync.bind(handle);
+            handle.sync = async () => {
+              await sync();
+              if (fault.startsWith('output-final-') && outputReads >= 2 && !reached) {
+                reached = true;
+                if (fault === 'output-final-root') await chmod(actual.volumeRoot, 0o777);
+                else await writeFile(path.join(actual.volumeRoot,
+                  'candidate-public/generations',
+                  actual.f.sealed.intent.candidateToken.replaceAll('-', ''),
+                  'unexpected'), 'x');
+              }
+            };
+          }
+          return handle;
+        };
+        syncBuiltinESMExports();
+        await assert.rejects(transferWriterMappingApplyInputs(actual.source,
+          { fixture: true, creatorUid: process.getuid(), targetUid: process.getuid() }),
+        { message: 'Private writer mapping apply transfer failed.' });
+        assert.equal(reached, true, fault);
+      } finally { fs.promises.open = original; syncBuiltinESMExports(); }
+    }
+  });
+
+test('partial copied intent and duplicate destination are never retried or adopted',
+  { timeout: 90_000 }, async t => {
+    const actual = await transferredInput(t, false, {}, true);
+    const name = path.join(actual.volumeRoot, 'intent.json');
+    const original = fs.promises.open;
+    let reached = false;
+    try {
+      fs.promises.open = async (...input) => {
+        const handle = await original(...input);
+        if (input[0] === name && !reached) {
+          const write = handle.writeFile.bind(handle);
+          handle.writeFile = async bytes => {
+            reached = true;
+            await write(Buffer.from(bytes).subarray(0, 7));
+            throw Error('private partial write');
+          };
+        }
+        return handle;
+      };
+      syncBuiltinESMExports();
+      await assert.rejects(transferWriterMappingApplyInputs(actual.source,
+        { fixture: true, creatorUid: process.getuid(), targetUid: process.getuid() }),
+      { message: 'Private writer mapping apply transfer failed.' });
+      assert.equal(reached, true);
+    } finally { fs.promises.open = original; syncBuiltinESMExports(); }
+    const before = await fs.promises.lstat(name);
+    const bytes = await readFile(name);
+    assert.equal(bytes.length, 7);
+    await assert.rejects(transferWriterMappingApplyInputs(actual.source,
+      { fixture: true, creatorUid: process.getuid(), targetUid: process.getuid() }),
+    { message: 'Private writer mapping apply transfer failed.' });
+    const after = await fs.promises.lstat(name);
+    assert.equal(after.ino, before.ino);
+    assert.deepEqual(await readFile(name), bytes);
+    const healthy = await transferredInput(t);
+    const originalIntent = await readFile(path.join(healthy.volumeRoot, 'intent.json'));
+    await assert.rejects(transferWriterMappingApplyInputs(healthy.source,
+      { fixture: true, creatorUid: process.getuid(), targetUid: process.getuid() }),
+    { message: 'Private writer mapping apply transfer failed.' });
+    assert.deepEqual(await readFile(path.join(healthy.volumeRoot, 'intent.json')),
+      originalIntent);
+  });
+
+test('fixed wrapper pins independent context and rejects actual database identity drift',
+  async () => {
+    const positive = rig();
+    const context = positive.context;
+    const copy = {
+      readInput: positive.deps.readInput,
+      recheck: positive.deps.recheckInput,
+      capturePriorPublic: positive.deps.capturePriorPublic,
+      captureCandidatePublic: positive.deps.captureCandidatePublic,
+    };
+    const adapters = { ...positive.deps, openInput: async () => {
+      context.project = 'changed-after-await';
+      context.approval.approvedSha256 = '0'.repeat(64);
+      return copy;
+    } };
+    assert.deepEqual(await runFixedWriterMappingConsumer(context, adapters),
+      { status: 'writer_attested', ready: false });
+    assert.equal(positive.casCount, 5);
+    assert.equal(positive.sendCount, 1);
+
+    const negative = rig();
+    let snapshotReached = false;
+    const readSnapshot = negative.deps.readSnapshot;
+    const bad = { ...negative.deps,
+      openInput: async () => ({ readInput: negative.deps.readInput,
+        recheck: negative.deps.recheckInput,
+        capturePriorPublic: negative.deps.capturePriorPublic,
+        captureCandidatePublic: negative.deps.captureCandidatePublic }),
+      readSnapshot: async () => {
+        snapshotReached = true;
+        const value = await readSnapshot();
+        value.identity.databaseOid++;
+        return value;
+      } };
+    await assert.rejects(runFixedWriterMappingConsumer(negative.context, bad),
+      { message: 'Private writer mapping apply failed.' });
+    assert.equal(snapshotReached, true);
+    assert.equal(negative.casCount, 0);
+    assert.equal(negative.sendCount, 0);
+  });
 
 test('retained v2 and absent history survive mapping execution', async () => {
   const r = rig({ retainedSource: true, absent: true });
