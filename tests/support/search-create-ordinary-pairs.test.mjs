@@ -11,6 +11,7 @@ const selector = path.join(here, 'search-create-ordinary-pairs.sh');
 const gate = path.resolve(here, '../../scripts/search-create-boundary-delivery-gate.sh');
 const fixedFailure = 'Create boundary delivery gate has an invalid ordinary pair selection.\n';
 const mappingFailure = 'Create boundary delivery gate has an invalid mapping-preparation selection.\n';
+const deliveryFailure = 'Create boundary delivery gate has an invalid mapping-delivery selection.\n';
 
 function selected(pair, writer = '', delivery = '', deliveryPair = '') {
   return spawnSync('bash', ['-c',
@@ -37,6 +38,47 @@ test('fixed ordinary selector preserves old two-pair mode and selects exactly on
     const result = selected(...args);
     assert.equal(result.status, 19, args.join(':'));
     assert.equal(result.stdout, '');
+  }
+});
+
+test('mapping-delivery selector accepts one fixed pair and denies mixed selectors before Docker', async t => {
+  for (const mode of ['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout'])
+    for (const pair of ['default', 'runner']) {
+      const result = spawnSync('bash', ['-c',
+        'source "$1"; select_writer_mapping_delivery_pair "$2" "$3" "" "" "" "" "" "" || exit 19; printf "%s\\n" "${mapping_delivery_pairs[@]}"',
+        '_', selector, mode, pair], { encoding: 'utf8' });
+      assert.equal(result.status, 0); assert.equal(result.stdout, `${pair}\n`);
+    }
+  await mkdir('.cache/results', { recursive: true });
+  const root = await mkdtemp(path.join(process.cwd(), '.cache/results/mapping-delivery-select-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, '.git'));
+  await mkdir(path.join(root, 'tests/support'), { recursive: true });
+  await copyFile(selector, path.join(root, 'tests/support/search-create-ordinary-pairs.sh'));
+  for (const fields of [
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_CASE: 'positive' },
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR: 'runner' },
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_CASE: 'bad',
+      STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR: 'default' },
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_CASE: 'positive',
+      STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR: 'default', STATION_CREATE_GATE_PAIR: 'runner' },
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_CASE: 'held-timeout',
+      STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR: 'runner',
+      STATION_WRITER_MAPPING_PREPARE_GATE_CASE: 'positive' },
+    { STATION_WRITER_MAPPING_DELIVERY_GATE_CASE: 'false-ack',
+      STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR: 'runner',
+      STATION_WRITER_DELIVERY_GATE_CASE: 'positive' },
+  ]) {
+    const env = { ...process.env };
+    for (const key of ['STATION_CREATE_GATE_PAIR', 'STATION_WRITER_PREPARE_GATE_VARIANT',
+      'STATION_WRITER_DELIVERY_GATE_CASE', 'STATION_WRITER_DELIVERY_GATE_PAIR',
+      'STATION_WRITER_MAPPING_PREPARE_GATE_CASE', 'STATION_WRITER_MAPPING_PREPARE_GATE_PAIR',
+      'STATION_WRITER_MAPPING_DELIVERY_GATE_CASE', 'STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR'])
+      delete env[key];
+    Object.assign(env, fields);
+    const result = spawnSync('bash', [gate], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(result.status, 1); assert.equal(result.stdout, '');
+    assert.equal(result.stderr, deliveryFailure);
   }
 });
 

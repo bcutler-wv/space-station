@@ -22,6 +22,8 @@ test('private scan covers teardown output, partial setup and generated secrets',
     'generated-transition-password-value');
   await writeFile(path.join(root, '.cache/search-security/ca.key'),
     `-----BEGIN PRIVATE KEY-----\n${'q'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
+  await writeFile(path.join(root, '.cache/search-security/admin.key'),
+    `-----BEGIN PRIVATE KEY-----\n${'a'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
   const generation = path.join(root, '.cache/search-generations',
     '11111111111141118111111111111111');
   await mkdir(generation, { recursive: true });
@@ -31,7 +33,7 @@ test('private scan covers teardown output, partial setup and generated secrets',
     `-----BEGIN PRIVATE KEY-----\n${'y'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
   assert.equal(await scanCreatePrivateLog(root, log), true);
   for (const marker of ['generated-secret-password', 'generated-transition-password-value',
-    'q'.repeat(32), 'w'.repeat(32), 'y'.repeat(32)]) {
+    'q'.repeat(32), 'a'.repeat(32), 'w'.repeat(32), 'y'.repeat(32)]) {
     await writeFile(log, `safe setup\nsafe teardown\n${marker}\n`);
     await assert.rejects(scanCreatePrivateLog(root, log));
   }
@@ -43,6 +45,9 @@ test('private scan covers teardown output, partial setup and generated secrets',
   await assert.rejects(scanCreatePrivateLog(root, log, captured));
   await writeFile(log, 'safe teardown\n');
   assert.equal(await scanCreatePrivateLog(root, log, captured), true);
+  await writeFile(log, `safe teardown\n${'a'.repeat(32)}\n`);
+  await assert.rejects(scanCreatePrivateLog(root, log, captured));
+  await writeFile(log, 'safe teardown\n');
   const markerFile = path.join(root, 'captured.json');
   await writeFile(markerFile, JSON.stringify(captured), { mode: 0o600 });
   const afterTeardown = () => spawnSync('bash', ['-c',
@@ -51,6 +56,8 @@ test('private scan covers teardown output, partial setup and generated secrets',
   { cwd: process.cwd(), env: { ...process.env, MARKER_FILE: markerFile,
     PRIVATE_LOG: log }, encoding: 'utf8' });
   await writeFile(log, `safe teardown\n${captured[0]}\n`);
+  assert.notEqual(afterTeardown().status, 0);
+  await writeFile(log, `safe teardown\n${'a'.repeat(32)}\n`);
   assert.notEqual(afterTeardown().status, 0);
   await writeFile(log, 'safe teardown\n');
   const scanned = afterTeardown();

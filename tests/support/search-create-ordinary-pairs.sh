@@ -17,3 +17,11 @@ select_writer_mapping_prepare_pair() {
      -z $ordinary && -z $writer && -z $delivery && -z $delivery_pair ]] || return 1
   mapping_pairs=("$mapping_pair")
 }
+select_writer_mapping_delivery_pair() {
+  local case_name=$1 selected_pair=$2 ordinary=$3 writer=$4 delivery=$5 delivery_pair=$6 \
+    mapping_case=$7 mapping_pair=$8
+  [[ $case_name =~ ^(positive|prestart|lost-return|false-ack|held-timeout)$ &&
+     $selected_pair =~ ^(default|runner)$ && -z $ordinary && -z $writer &&
+     -z $delivery && -z $delivery_pair && -z $mapping_case && -z $mapping_pair ]] || return 1
+  mapping_delivery_pairs=("$selected_pair")
+}

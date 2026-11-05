@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +35,7 @@ export async function runWriterMappingPrepareDeliveryCase(ctx) {
     snapshot, databaseIdentity,
     ownerEnv, fixtureRoot, sameSources, setCheckpoint } = ctx;
   assert.ok(['positive', 'measured'].includes(mode));
+  assert.ok(ctx.handoff === undefined || ctx.handoff === true && mode === 'positive');
   let step = 'baseline';
   const checkpoint = name => { step = name; setCheckpoint(`mapping-${mode}-${name}`); };
   const oldFiles = ['.cache/search-create-intent/pending.json',
@@ -426,6 +428,17 @@ export async function runWriterMappingPrepareDeliveryCase(ctx) {
       assert.equal(observed.methods.includes('OTHER'), false);
       assert.ok(observed.methods.every(method => ['LOADED', 'GET', 'HEAD'].includes(method)));
       assert.ok(derivedImage);
+    }
+    if (ctx.handoff === true) {
+      checkpoint('handoff');
+      await verifyOriginals(); await absence();
+      assert.equal(await present(lock), false);
+      return Object.freeze({ pendingBytes: Buffer.from(pendingBytes),
+        approvedSha256: result.sha256, intent: globalThis.structuredClone(intent),
+        originalFiles: originalFiles.map(item => Object.freeze({
+          bytes: Buffer.from(item.bytes), stat: item.stat })),
+        candidatePublicDigests: globalThis.structuredClone(publicEvidence.publicDigests),
+        signer: globalThis.structuredClone(signer), securityVersion });
     }
     checkpoint('replay');
     const replayBefore = mode === 'measured' ? {

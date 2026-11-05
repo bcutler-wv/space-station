@@ -11,6 +11,9 @@ import { createApplyPrepareDiagnostic, createBoundaryRejectionDiagnostic,
   './search-create-boundary-delivery-diagnostic-filter.mjs';
 import { writerDeliveryTrace, writerDeliveryShape, writerDeliveryMethodTracker } from
   './search-writer-role-delivery-diagnostic.mjs';
+import { writerDeliveryTrace as mappingDeliveryTrace,
+  writerDeliveryShape as mappingDeliveryShape } from
+  './search-writer-mapping-delivery-diagnostic.mjs';
 import { mappingPrepareCommandKind, mappingPrepareMethodTracker, mappingPrepareTrace } from
   './search-writer-mapping-prepare-diagnostic.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
@@ -22,6 +25,19 @@ test('only fixed checkpoint and owner diagnostic reach public CI output', () => 
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log), [
     'Create boundary delivery fixture failed at complete-cli.',
     'Private create boundary owner diagnostic stage=transfer-run reason=dispatch-stderr.']);
+});
+test('mapping delivery failure forwarding retains only finite case, trace and shape once', () => {
+  const failure = 'Writer mapping delivery fixture case=held-timeout step=consumer-markers.';
+  const trace = mappingDeliveryTrace({ caseName: 'held-timeout', method: 'run-apply',
+    phase: 'apply', command: 'container-wait', outcome: 'returned-nonzero',
+    last: 'fence-apply', create: 2, inspect: 2, fence: 2, start: 2 });
+  const shape = mappingDeliveryShape({ caseName: 'held-timeout', phase: 'apply',
+    state: 'created', running: 'false', started: 'zero', finished: 'zero',
+    network: 'admin-internal', stateFields: 'empty', networkFields: 'empty' });
+  const raw = [failure, trace, trace, shape, shape,
+    'Writer mapping delivery fixture case=held-timeout step=secret/private.',
+    'private-secret-do-not-forward'].join('\n');
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(raw), [failure, trace, shape]);
 });
 test('mapping diagnostics and summary accept only closed finite case and step', () => {
   const safe = 'Writer mapping preparation fixture case=measured step=readonly.';

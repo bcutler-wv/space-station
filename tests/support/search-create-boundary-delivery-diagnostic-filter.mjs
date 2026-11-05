@@ -4,6 +4,11 @@ import process from 'node:process';
 import { isCreateBoundaryDiagnosticLine } from '../../scripts/search-create-boundary-owner-diagnostic.mjs';
 import { isWriterDeliveryTraceLine, isWriterDeliveryShapeLine } from
   './search-writer-role-delivery-diagnostic.mjs';
+import { isWriterDeliveryTraceLine as isMappingDeliveryTraceLine,
+  isWriterDeliveryShapeLine as isMappingDeliveryShapeLine } from
+  './search-writer-mapping-delivery-diagnostic.mjs';
+import { isWriterDeliveryCreateOutputLine as isMappingDeliveryCreateOutputLine } from
+  './search-writer-mapping-create-output-diagnostic.mjs';
 import { isWriterDeliveryCreateOutputLine } from
   './search-writer-role-create-output-diagnostic.mjs';
 import { isMappingPrepareTraceLine } from './search-writer-mapping-prepare-diagnostic.mjs';
@@ -129,8 +134,9 @@ const deliverySteps = new Set(['approval', 'derived-image', 'owner', 'phase-evid
   'phase-counts', 'phase-registry', 'phase-originals', 'phase-engine',
   'phase-binding', 'phase-resources', 'consumer-markers', 'replay']);
 const mappingSteps = new Set(['baseline', 'signer', 'owner', 'readonly', 'image',
-  'pending', 'measure', 'replay']);
+  'pending', 'measure', 'handoff', 'replay']);
 for (const value of deliveryCases) writerCheckpoints.add(`writer-delivery-${value}`);
+for (const value of deliveryCases) writerCheckpoints.add(`writer-mapping-delivery-${value}`);
 const writerPrecreateSteps = new Set(['registry-rows-command', 'registry-rows-parse',
   'registry-micro-command', 'registry-micro-parse', 'registry-micro-shape',
   'engine-open', 'engine-observe', 'engine-parse', 'e0b-command', 'e0b-parse',
@@ -187,7 +193,9 @@ export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
   let checkpoint = false, diagnostic = false, deliveryTrace = false, mappingTrace = false;
+  let mappingDeliveryTrace = false;
   const deliveryShapes = new Set(), deliveryCreateOutputs = new Set();
+  const mappingDeliveryShapes = new Set(), mappingDeliveryCreateOutputs = new Set();
   for (const line of log.split('\n')) {
     if (line.length > 240) continue;
     const match = /^Create boundary delivery fixture failed at ([a-z-]+)\.$/.exec(line);
@@ -196,6 +204,7 @@ export function filteredCreateBoundaryDiagnostics(log) {
     const writer = /^Writer role preparation fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     const delivery = /^Writer role delivery fixture case=([a-z-]+) step=([a-z-]+)\.$/.exec(line);
     const mapping = /^Writer mapping preparation fixture case=(positive|measured) step=([a-z-]+)\.$/.exec(line);
+    const mappingDelivery = /^Writer mapping delivery fixture case=([a-z-]+) step=([a-z-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {
@@ -209,10 +218,25 @@ export function filteredCreateBoundaryDiagnostics(log) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && mapping && mappingSteps.has(mapping[2])) {
       found.push(line); checkpoint = true;
+    } else if (!checkpoint && mappingDelivery && deliveryCases.has(mappingDelivery[1]) &&
+        deliverySteps.has(mappingDelivery[2])) {
+      found.push(line); checkpoint = true;
     } else if (!deliveryTrace && isWriterDeliveryTraceLine(line)) {
       found.push(line); deliveryTrace = true;
     } else if (!mappingTrace && isMappingPrepareTraceLine(line)) {
       found.push(line); mappingTrace = true;
+    } else if (!mappingDeliveryTrace && isMappingDeliveryTraceLine(line)) {
+      found.push(line); mappingDeliveryTrace = true;
+    } else if (isMappingDeliveryShapeLine(line)) {
+      const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
+      if (!mappingDeliveryShapes.has(phase)) {
+        found.push(line); mappingDeliveryShapes.add(phase);
+      }
+    } else if (isMappingDeliveryCreateOutputLine(line)) {
+      const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
+      if (!mappingDeliveryCreateOutputs.has(phase)) {
+        found.push(line); mappingDeliveryCreateOutputs.add(phase);
+      }
     } else if (isWriterDeliveryShapeLine(line)) {
       const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
       if (!deliveryShapes.has(phase)) { found.push(line); deliveryShapes.add(phase); }

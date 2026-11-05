@@ -12,8 +12,25 @@ delivery_case=${STATION_WRITER_DELIVERY_GATE_CASE:-}
 delivery_pair=${STATION_WRITER_DELIVERY_GATE_PAIR:-}
 mapping_case=${STATION_WRITER_MAPPING_PREPARE_GATE_CASE:-}
 mapping_pair=${STATION_WRITER_MAPPING_PREPARE_GATE_PAIR:-}
+mapping_delivery_case=${STATION_WRITER_MAPPING_DELIVERY_GATE_CASE:-}
+mapping_delivery_pair=${STATION_WRITER_MAPPING_DELIVERY_GATE_PAIR:-}
+mapping_delivery_selected=''
 source "$PWD/tests/support/search-create-ordinary-pairs.sh"
-if [[ -n $mapping_case || -n $mapping_pair ]]; then
+if [[ -n $mapping_delivery_case || -n $mapping_delivery_pair ]]; then
+  if ! select_writer_mapping_delivery_pair "$mapping_delivery_case" "$mapping_delivery_pair" \
+      "${STATION_CREATE_GATE_PAIR:-}" "$writer_variant" "$delivery_case" "$delivery_pair" \
+      "$mapping_case" "$mapping_pair"; then
+    echo 'Create boundary delivery gate has an invalid mapping-delivery selection.' >&2
+    exit 1
+  fi
+  mapping_delivery_selected=1
+  ordinary_pairs=("${mapping_delivery_pairs[@]}")
+  writer_variant=$mapping_delivery_pair
+  delivery_case=positive
+  delivery_pair=$mapping_delivery_pair
+  mapping_case=positive
+  mapping_pair=$mapping_delivery_pair
+elif [[ -n $mapping_case || -n $mapping_pair ]]; then
   if ! select_writer_mapping_prepare_pair "$mapping_case" "$mapping_pair" \
       "${STATION_CREATE_GATE_PAIR:-}" "$writer_variant" "$delivery_case" "$delivery_pair"; then
     echo 'Create boundary delivery gate has an invalid mapping-preparation selection.' >&2
@@ -128,7 +145,8 @@ cleanup_pair() {
     for service in search-create-transfer search-create-boundary search-create-intent-prepare search-profile-drift \
       search-create-apply-transfer search-create-index search-writer-role-prepare-transfer \
       search-writer-role-prepare search-writer-role-apply-transfer search-writer-role-apply \
-      search-writer-mapping-prepare-transfer search-writer-mapping-prepare; do
+      search-writer-mapping-prepare-transfer search-writer-mapping-prepare \
+      search-writer-mapping-apply-transfer search-writer-mapping-apply; do
       if ! listing=$(docker ps -a --no-trunc --filter "label=com.docker.compose.project=$project_name" \
         --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>> "$private_log"); then
         teardown_failed=1; listing=''
@@ -158,13 +176,28 @@ cleanup_pair() {
         teardown_failed=1
       fi
     done <<< "$listing"
+    if ! listing=$(docker ps -a --no-trunc \
+      --filter "label=com.docker.compose.project=$project_name" \
+      --filter 'name=^/station_mapping_apply_(transfer_)?[0-9a-f]{32}$' \
+      --format '{{.ID}}' 2>> "$private_log"); then
+      teardown_failed=1; listing=''
+    fi
+    [[ ${#listing} -le 8192 ]] || teardown_failed=1
+    while IFS= read -r reference; do
+      [[ -n $reference ]] || continue
+      if [[ $reference =~ ^[0-9a-f]{64}$ ]]; then
+        docker container rm -f "$reference" >> "$private_log" 2>&1 || teardown_failed=1
+      else
+        teardown_failed=1
+      fi
+    done <<< "$listing"
     if ! listing=$(docker volume ls --filter "label=station.create.project=$project_name" --format '{{.Name}}' 2>> "$private_log"); then
       teardown_failed=1; listing=''
     fi
     [[ ${#listing} -le 8192 ]] || teardown_failed=1
     while IFS= read -r volume; do
       [[ -n $volume ]] || continue
-    if [[ $volume =~ ^${project_name}_(search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})|search_writer_prepare_[0-9a-f]{32}|search_writer_apply_[0-9a-f]{32}|search_writer_mapping_prepare_[0-9a-f]{32})$ ]]; then
+    if [[ $volume =~ ^${project_name}_(search_create_([0-9a-f]{32}|apply_[0-9a-f]{32})|search_writer_prepare_[0-9a-f]{32}|search_writer_apply_[0-9a-f]{32}|search_writer_mapping_prepare_[0-9a-f]{32}|search_writer_mapping_apply_[0-9a-f]{32})$ ]]; then
         docker volume rm "$volume" >> "$private_log" 2>&1 || teardown_failed=1
       else
         teardown_failed=1
@@ -320,20 +353,25 @@ for pair in "${ordinary_pairs[@]}"; do
       STATION_WRITER_MAPPING_PREPARE_VOLUME_NAME="${name}_search_writer_mapping_prepare_buildplaceholder" \
       STATION_WRITER_MAPPING_PREPARE_TRANSFER_NAME=station_mapping_prepare_transfer_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
       STATION_WRITER_MAPPING_PREPARE_READ_NAME=station_mapping_prepare_read_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+      STATION_WRITER_MAPPING_APPLY_PUBLIC_ROOT="$checkout/.cache" \
+      STATION_WRITER_MAPPING_APPLY_VOLUME_NAME="${name}_search_writer_mapping_apply_buildplaceholder" \
       docker compose -f compose.yaml -f compose.search-create-boundary.yaml \
       -f compose.search-create-apply.yaml -f compose.search-writer-role-prepare.yaml \
       ${delivery_case:+-f compose.search-writer-role-apply.yaml} \
       ${mapping_case:+-f compose.search-writer-mapping-prepare.yaml} \
+      ${mapping_delivery_selected:+-f compose.search-writer-mapping-apply.yaml} \
       --profile search --profile fixture --profile search-create-boundary \
       --profile search-create-apply --profile search-writer-role-prepare \
       ${delivery_case:+--profile search-writer-role-apply} \
-      ${mapping_case:+--profile search-writer-mapping-prepare} build \
+      ${mapping_case:+--profile search-writer-mapping-prepare} \
+      ${mapping_delivery_selected:+--profile search-writer-mapping-apply} build \
       migrate search-init search-profile-introduce search-profile-bootstrap search-profile-drift \
       search-create-transfer search-create-boundary search-create-intent-prepare \
       search-create-apply-transfer search-create-index \
       search-writer-role-prepare-transfer search-writer-role-prepare \
       ${delivery_case:+search-writer-role-apply-transfer search-writer-role-apply} \
-      ${mapping_case:+search-writer-mapping-prepare-transfer search-writer-mapping-prepare}
+      ${mapping_case:+search-writer-mapping-prepare-transfer search-writer-mapping-prepare} \
+      ${mapping_delivery_selected:+search-writer-mapping-apply-transfer search-writer-mapping-apply}
   else
     run_step image-build run_pair env STATION_CREATE_INVOCATION_ROOT="$checkout/.cache" \
       STATION_CREATE_VOLUME_NAME="${name}_search_create_buildplaceholder" \
@@ -435,7 +473,13 @@ for pair in "${ordinary_pairs[@]}"; do
   run_step candidate-reservation run_pair docker compose --profile search run --rm -T --no-deps \
     migrate node tests/integration/search-create-boundary-reserve.mjs
   if [[ -n $writer_variant ]]; then
-    if [[ -n $mapping_case ]]; then
+    if [[ $mapping_delivery_selected == 1 ]]; then
+      run_step writer-mapping-delivery-runtime run_pair env \
+        STATION_WPREP_GATE_CASE="$writer_variant" STATION_WRITER_DELIVERY_CASE=positive \
+        STATION_WRITER_MAPPING_GATE_CASE=positive \
+        STATION_WRITER_MAPPING_DELIVERY_CASE="$mapping_delivery_case" \
+        node tests/integration/search-writer-role-prepare-delivery.mjs
+    elif [[ -n $mapping_case ]]; then
       run_step writer-mapping-prepare-runtime run_pair env \
         STATION_WPREP_GATE_CASE="$writer_variant" STATION_WRITER_DELIVERY_CASE=positive \
         STATION_WRITER_MAPPING_GATE_CASE="$mapping_case" \
@@ -479,7 +523,17 @@ for pair in "${ordinary_pairs[@]}"; do
       exit 1
     fi
   fi
-  if [[ -n $mapping_case ]]; then
+  if [[ $mapping_delivery_selected == 1 ]]; then
+    phase=mapping-delivery-summary
+    if mapping_delivery_summary=$("$(command -v node)" \
+      "$runner_root/tests/support/search-writer-mapping-delivery-summary.mjs" \
+      "$private_log" "$mapping_delivery_case" "$mapping_delivery_pair" 2>> "$private_log"); then
+      printf '%s\n' "$mapping_delivery_summary"
+    else
+      echo 'Writer mapping delivery sanitized summary unavailable.' >&2
+      exit 1
+    fi
+  elif [[ -n $mapping_case ]]; then
     phase=mapping-summary
     if mapping_summary=$("$(command -v node)" \
       "$runner_root/tests/support/search-create-boundary-delivery-diagnostic-filter.mjs" \

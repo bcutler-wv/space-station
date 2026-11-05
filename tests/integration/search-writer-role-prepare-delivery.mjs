@@ -23,6 +23,7 @@ import { inspectWriterRolePostgres } from '../support/search-writer-role-postgre
 import { changeWriterPrepareRegistryFixture } from '../support/search-writer-role-registry-fixture.mjs';
 import { runWriterRoleDeliveryCase } from './search-writer-role-delivery-case.mjs';
 import { runWriterMappingPrepareDeliveryCase } from './search-writer-mapping-prepare-delivery-case.mjs';
+import { runWriterMappingDeliveryCase } from './search-writer-mapping-delivery-case.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const project = path.basename(repository);
@@ -54,10 +55,15 @@ assert.match(project, /^stationcreate(?:default|runner)[0-9a-f]{12}$/);
 assert.ok(['default', 'runner', 'runner-volume', 'runner-missing-o'].includes(variant));
 const deliveryCase = process.env.STATION_WRITER_DELIVERY_CASE;
 const mappingCase = process.env.STATION_WRITER_MAPPING_GATE_CASE;
+const mappingDeliveryCase = process.env.STATION_WRITER_MAPPING_DELIVERY_CASE;
 assert.ok(deliveryCase === undefined ||
   ['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout'].includes(deliveryCase));
 assert.ok(mappingCase === undefined || ['positive', 'measured'].includes(mappingCase));
 if (mappingCase) assert.equal(deliveryCase, 'positive');
+assert.ok(mappingDeliveryCase === undefined ||
+  ['positive', 'prestart', 'lost-return', 'false-ack', 'held-timeout'].includes(mappingDeliveryCase));
+if (mappingDeliveryCase) { assert.equal(mappingCase, 'positive');
+  assert.equal(deliveryCase, 'positive'); }
 if (deliveryCase) assert.ok(['default', 'runner'].includes(variant));
 assert.equal(process.env.APP_UID, String(uid)); assert.equal(process.env.APP_GID, String(gid));
 assert.equal(uid, variant === 'default' ? 1000 : 1001);
@@ -443,12 +449,21 @@ if (deliveryCase) {
     command, docker, sql, registry, engine, state, adminFiles, hostResources,
     sources, sourceRoot, pending, lock, ownerEnv, fixtureRoot, hash,
     setCheckpoint: value => { checkpoint = value; } });
-  if (mappingCase) await runWriterMappingPrepareDeliveryCase({ mode: mappingCase,
+  if (mappingCase) {
+    const mappingResult = await runWriterMappingPrepareDeliveryCase({ mode: mappingCase,
     repository, project, uid, gid, candidate, createBytes,
     createApprovedSha256: retainedCreateApprovedSha256, roleResult, command, docker, sql,
     registry, engine, state, adminFiles, hostResources, sources, snapshot,
     databaseIdentity, ownerEnv, fixtureRoot, hash, sameSources,
+    handoff: mappingDeliveryCase ? true : undefined,
     setCheckpoint: value => { checkpoint = value; } });
+    if (mappingDeliveryCase) await runWriterMappingDeliveryCase({
+      deliveryCase: mappingDeliveryCase, repository, project, uid, gid, candidate,
+      roleResult, mappingResult, command, docker, registry, engine, state, adminFiles,
+      hostResources, sources, snapshot, databaseIdentity, ownerEnv, fixtureRoot,
+      hash, setCheckpoint: value => { checkpoint = value; },
+    });
+  }
   process.exit(0);
 }
 const replay = await command('node', ['scripts/search-writer-role-prepare-owner.mjs'], ownerEnv, 20_000);
