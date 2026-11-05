@@ -147,6 +147,21 @@ function mappingContract(snapshot, intent) {
       contract.dispatchBodyIdentity !== intent.bodyIdentity) fail();
   return contract;
 }
+
+/** Reissue only from a freshly assessed original approved baseline. */
+export function constructApprovedWriterMappingContract(snapshot, observed, state,
+  createEvidence, roleEvidence, priorDigests, publicEvidence, sealed, approvedSha256) {
+  try {
+    canonicalAttestorValue(snapshot, 2 * 1024 * 1024);
+    const result = assessWriterMappingEvidence(snapshot, observed, state,
+      createEvidence, roleEvidence, priorDigests, publicEvidence, sealed, 'attested',
+      { controlUpdatedAt: snapshot.exactTimestamps.control.updatedAt,
+        mappingCreatedAt: null }, approvedSha256);
+    if (result.status !== 'writer-mapping-evidence' || result.phase !== 'attested' ||
+        result.ready !== false) fail();
+    return mappingContract(snapshot, sealed.intent);
+  } catch { fail(); }
+}
 function originalRole(roleEvidence, createEvidence, snapshot, observed, state, priorDigests) {
   if (!exact(roleEvidence, ['intent', 'binding', 'approvedSha256']) ||
       typeof roleEvidence.approvedSha256 !== 'string' ||

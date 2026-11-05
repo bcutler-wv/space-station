@@ -79,6 +79,7 @@ jobs:
       - run: node --test tests/support/opensearch-writer-mapping-sender.test.mjs
       - run: node --test tests/support/search-writer-mapping-public.test.mjs
       - run: node --test tests/support/search-writer-mapping-intent-pure.test.mjs
+      - run: node --test tests/support/search-writer-mapping-consumer-core.test.mjs
       - run: node --test tests/support/search-writer-mapping-prepare-core.test.mjs
       - run: node --test tests/support/search-writer-mapping-prepare-reader.test.mjs
       - run: node --test tests/support/search-writer-mapping-prepare-transfer.test.mjs

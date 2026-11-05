@@ -105,7 +105,8 @@ function observed(bound, roleBody, mappingBody, retained = null) {
     mappings: mappingBody ? { ...policy.mappings, [roleName]: mappingBody } : policy.mappings };
 }
 export function fixture({ absent = false, retainedSource = false,
-  caPem = publicCa, writerPem = publicWriter } = {}) {
+  caPem = publicCa, writerPem = publicWriter, priorDigestsOverride = null,
+  retainedFingerprints = null } = {}) {
   const initial = snapshot(false), bound = snapshot(true);
   let retained = null;
   if (retainedSource) {
@@ -116,7 +117,8 @@ export function fixture({ absent = false, retainedSource = false,
       writerRole: `station_indexer_${suffix}`, queryRole: `station_query_${suffix}`,
       writerPrincipal: `station-search-indexer-${suffix}`,
       queryPrincipal: `station-search-query-${suffix}`,
-      writerCertFingerprint: 'c'.repeat(64), queryCertFingerprint: 'd'.repeat(64),
+      writerCertFingerprint: retainedFingerprints?.writer ?? 'c'.repeat(64),
+      queryCertFingerprint: retainedFingerprints?.query ?? 'd'.repeat(64),
       createdAt: date() };
     for (const s of [initial, bound]) {
       s.history.push(structuredClone(retained));
@@ -151,7 +153,7 @@ export function fixture({ absent = false, retainedSource = false,
   }
   const initialView = observed(false, null, null, retained);
   const preRole = observed(true, null, null, retained);
-  const priorDigests = createPriorPublicFiles(initial, token).map(row =>
+  const priorDigests = priorDigestsOverride ?? createPriorPublicFiles(initial, token).map(row =>
     ({ path: row.path, sha256: row.path === 'ca.pem' ? sha(caPem) : 'a'.repeat(64) }));
   const create = sealCreateIntent(makeCreateIntentProjection(initial, initialView, state),
     priorDigests, { project: 'stationfixture', systemIdentifier: '123',
