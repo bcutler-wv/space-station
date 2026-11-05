@@ -127,6 +127,55 @@ export function verifyWriterMappingApplyMergedConfig(config, expected) {
   } catch { fail(); }
 }
 
+/** A created container has requested network names, not attached network IDs. */
+export function verifyWriterMappingApplyCreatedContainer(item, expected) {
+  try {
+    if (item.State?.Status !== 'created' || item.State.Running !== false ||
+        item.State.Paused !== false || item.State.Restarting !== false ||
+        item.State.OOMKilled !== false || item.State.Dead !== false ||
+        item.State.Error !== '' || item.State.ExitCode !== 0 ||
+        item.RestartCount !== 0 ||
+        item.State.StartedAt !== '0001-01-01T00:00:00Z' ||
+        item.State.FinishedAt !== '0001-01-01T00:00:00Z' ||
+        item.Name !== `/${expected.containerName}`) fail();
+    const transfer = expected.service === transferName;
+    const map = item.NetworkSettings?.Networks;
+    const names = transfer ? Object.keys(map ?? {}).length === 0 ? [] : ['none'] :
+      [`${expected.project}_search_admin_db`, `${expected.project}_search_internal`];
+    if (!map || JSON.stringify(Object.keys(map).sort()) !== JSON.stringify(names.sort()) ||
+        item.HostConfig?.NetworkMode !== (transfer ? 'none' :
+          `${expected.project}_search_admin_db`)) fail();
+    for (const [name, endpoint] of Object.entries(map)) {
+      if (!endpoint || typeof endpoint !== 'object' ||
+          Object.keys(endpoint).some(key => !['Aliases', 'NetworkID', 'EndpointID',
+            'Gateway', 'IPAddress', 'IPPrefixLen', 'IPv6Gateway', 'GlobalIPv6Address',
+            'GlobalIPv6PrefixLen', 'MacAddress', 'Links', 'IPAMConfig', 'DriverOpts',
+            'GwPriority', 'DNSNames'].includes(key)) ||
+          endpoint.NetworkID && endpoint.NetworkID !== expected.networkByName[name] ||
+          endpoint.EndpointID || endpoint.Gateway || endpoint.IPAddress ||
+          endpoint.IPPrefixLen || endpoint.IPv6Gateway || endpoint.GlobalIPv6Address ||
+          endpoint.GlobalIPv6PrefixLen || endpoint.MacAddress || endpoint.Links?.length ||
+          endpoint.IPAMConfig && !keys(endpoint.IPAMConfig, []) ||
+          endpoint.DriverOpts || endpoint.GwPriority || endpoint.DNSNames?.length ||
+          endpoint.Aliases && (!Array.isArray(endpoint.Aliases) ||
+            endpoint.Aliases.some(alias => ![expected.containerName, expected.service].includes(alias)))) fail();
+    }
+    const projected = { ...item, NetworkSettings: { ...item.NetworkSettings,
+      Networks: transfer ? {} : Object.fromEntries(names.map((name, index) =>
+        [name, { NetworkID: expected.networkIds[index] }])) } };
+    verifyWriterMappingApplyEffectiveContainer(projected, {
+      service: expected.service, id: expected.id, image: expected.image,
+      env: expected.env, entrypoint: expected.entrypoint,
+      repository: expected.repository, project: expected.project,
+      invocationId: expected.invocationId, publicRoot: expected.publicRoot,
+      volumeName: expected.volumeName, networkIds: expected.networkIds,
+      noneNetworkId: expected.noneNetworkId, approvedFields: expected.approvedFields,
+      databaseOid: expected.databaseOid,
+      systemIdentifier: expected.systemIdentifier });
+    return true;
+  } catch { fail(); }
+}
+
 /** Pure effective inspect check; an owner must separately pin its expected originals. */
 export function verifyWriterMappingApplyEffectiveContainer(item, expected) {
   try {

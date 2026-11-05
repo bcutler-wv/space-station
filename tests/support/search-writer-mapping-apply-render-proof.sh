@@ -28,4 +28,8 @@ for test_id in 1000 1001; do
     -f "$override" --profile search-writer-mapping-apply config --format json \
     search-writer-mapping-apply-transfer search-writer-mapping-apply |
     node "$repo_root/tests/support/search-writer-mapping-apply-render-check.mjs" merged "$test_id" "$test_root"
+  "${compose[@]}" -p "$project" -f compose.yaml -f compose.search-writer-mapping-apply.yaml \
+    --profile search-writer-mapping-apply config --format json \
+    search-writer-mapping-apply-transfer search-writer-mapping-apply |
+    node "$repo_root/tests/support/search-writer-mapping-apply-owner-docker-scripted.mjs" "$test_root"
 done

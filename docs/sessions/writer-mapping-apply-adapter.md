@@ -1,0 +1,7 @@
+# Fixed writer mapping apply adapter, 0.106.0
+
+The preceding 0.105 owner and lock passed all 29 jobs in exact-commit Ubuntu run `42010873688` at `8645d1c7538eb8d345a9fa2ee3310dda43a93a92`, with Astra acceptance. This version connects that owner to a fixed, mapping-only Docker adapter and nine-argument host CLI. Its own Ubuntu regression and actual mapping delivery gate remain pending.
+
+The CLI takes only the nine externally supplied approval values and checks the actual host UID/GID before owner I/O. The owner supplies the fresh invocation, checked project/database identity, exact public stage, volume, and fixed 13-field consumer command. A private Compose override carries only the two fixed commands and invocation-derived names. It is created after the binding attempt, so an uncertain override creation retains the consumed binding and lock. The adapter checks the base and merged Compose policy, created container and original ID before it awaits each owner fence; it starts that captured ID once, checks running/terminal identity and network evidence, then verifies owned removal and override absence.
+
+Local scripted factory, real-file override and daemon-free Compose tests cannot prove the actual Docker Engine's created shape, a mapping HTTP response, CAS effects, certificate signing, fingerprints, or search readiness. A separate both-UID disposable Ubuntu gate must measure delivery, uncertainty and checked teardown. Existing pinned SDK and database dependencies remain unchanged; this version adds no readiness or serving authority.

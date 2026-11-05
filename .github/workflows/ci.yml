@@ -82,6 +82,7 @@ jobs:
       - run: node --test tests/support/search-writer-mapping-consumer-core.test.mjs
       - run: node --test tests/support/search-writer-mapping-consumer-wrapper.test.mjs
       - run: node --test tests/support/search-writer-mapping-apply-lock.test.mjs tests/support/search-writer-mapping-apply-owner.test.mjs
+      - run: node --test tests/support/search-writer-mapping-apply-override.test.mjs
       - run: bash tests/support/search-writer-mapping-apply-render-proof.sh
       - run: node --test tests/support/search-writer-mapping-prepare-core.test.mjs
       - run: node --test tests/support/search-writer-mapping-prepare-reader.test.mjs
