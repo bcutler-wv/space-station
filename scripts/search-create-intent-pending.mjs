@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { canonicalAttestorValue } from './search-attestor-pure.mjs';
@@ -24,16 +24,24 @@ async function directory(name, uid, gid, mode, prior) {
 }
 
 /** Establish the only fixed proposal path and refuse any existing proposal before dispatch. */
-async function prepareFixedPending(repository, uid, gid, dirname) {
+async function prepareFixedPending(repository, uid, gid, dirname, created) {
   try {
     if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
         gid !== process.getgid?.()) fail();
     const cache = path.join(repository, '.cache');
     const cacheStat = await directory(cache, uid, gid, null);
     const root = path.join(cache, dirname);
-    try { await mkdir(root, { mode: 0o700 }); await syncDir(cache); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    let newlyOwned = false;
+    if (!created) {
+      try { await mkdir(root, { mode: 0o700 }); await syncDir(cache); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    } else {
+      try { await mkdir(root, { mode: 0o700 }); newlyOwned = true; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
     const rootStat = await directory(root, uid, gid, 0o700);
+    if (newlyOwned) created?.(Object.freeze({ root, rootStat, cache, cacheStat }));
+    if (newlyOwned) await syncDir(cache);
     const name = path.join(root, 'pending.json');
     if ((await readdir(root)).length) fail();
     try { await lstat(name); fail(); }
@@ -42,7 +50,7 @@ async function prepareFixedPending(repository, uid, gid, dirname) {
       await directory(cache, uid, gid, null, cacheStat);
       await directory(root, uid, gid, 0o700, rootStat);
     };
-    return Object.freeze({ root, name, check });
+    return Object.freeze({ root, name, check, ...(created ? { newlyOwned } : {}) });
   } catch { fail(); }
 }
 
@@ -53,6 +61,36 @@ export function prepareCreateIntentPending(repository, uid, gid) {
 /** Separate fixed proposal path; no caller-selected dirname. */
 export function prepareWriterRolePending(repository, uid, gid) {
   return prepareFixedPending(repository, uid, gid, 'search-writer-role-intent');
+}
+
+/** Only the fixed mapping proposal parent may be prepared or removed. */
+export async function prepareWriterMappingPending(repository, uid, gid, created) {
+  if (typeof created !== 'function') fail();
+  const prepared = await prepareFixedPending(repository, uid, gid,
+    'search-writer-mapping-intent', created);
+  const checkEmpty = async () => {
+    await prepared.check();
+    if ((await readdir(prepared.root)).length) fail();
+    await prepared.check();
+    return true;
+  };
+  await checkEmpty();
+  return Object.freeze({ ...prepared, checkEmpty });
+}
+
+export async function cleanupEmptyWriterMappingPendingParent(item, uid, gid) {
+  try {
+    if (!item || item.root !== path.join(item.cache,
+      'search-writer-mapping-intent') ||
+        uid !== process.getuid?.() || gid !== process.getgid?.()) fail();
+    await directory(item.cache, uid, gid, null, item.cacheStat);
+    await directory(item.root, uid, gid, 0o700, item.rootStat);
+    if ((await readdir(item.root)).length) fail();
+    await rmdir(item.root); await syncDir(item.cache);
+    try { await lstat(item.root); fail(); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    return true;
+  } catch { fail(); }
 }
 
 /** Call only after the lock marks pending attempted before exclusive file I/O. */
@@ -109,5 +147,9 @@ export async function writeCreateIntentPending(prepared, intent, expectedSha, ui
 
 /** Writer proposal uses the same exclusive canonical 0400 writer without fixture hooks. */
 export function writeWriterRolePending(prepared, intent, expectedSha, uid, gid) {
+  return writeCreateIntentPending(prepared, intent, expectedSha, uid, gid);
+}
+
+export function writeWriterMappingPending(prepared, intent, expectedSha, uid, gid) {
   return writeCreateIntentPending(prepared, intent, expectedSha, uid, gid);
 }

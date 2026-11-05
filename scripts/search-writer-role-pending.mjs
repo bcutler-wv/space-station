@@ -165,6 +165,56 @@ export async function readOriginalCreateFiles(repository, uid, gid) {
   } catch { fail(); }
 }
 
+/** Fixed original four-file capture for a later mapping proposal, without approval inference. */
+export async function readOriginalWriterMappingFiles(repository, uid, gid) {
+  try {
+    if (path.resolve(repository) !== repository || uid !== process.getuid?.() ||
+        gid !== process.getgid?.()) fail();
+    const cache = path.join(repository, '.cache');
+    const repoStat = await directory(repository, uid, gid, null);
+    const cacheStat = await directory(cache, uid, gid, null);
+    const names = Object.freeze([
+      ['createIntent', 'search-create-intent/pending.json', 256 * 1024],
+      ['createBinding', 'search-create-apply/binding.json', 1024],
+      ['intent', 'search-writer-role-intent/pending.json', 256 * 1024],
+      ['binding', 'search-writer-role-apply/binding.json', 1024],
+    ]);
+    const originals = new Map();
+    for (const [key, relative, max] of names) {
+      await directory(repository, uid, gid, null, repoStat);
+      await directory(cache, uid, gid, null, cacheStat);
+      const name = path.join(cache, relative), parent = path.dirname(name);
+      if ((await readdir(parent)).join('|') !== path.basename(name)) fail();
+      originals.set(key, { parent, parentStat: await directory(parent, uid, gid, 0o700),
+        item: await capture(name, parent, uid, gid, max) });
+    }
+    const recheck = async () => {
+      await directory(repository, uid, gid, null, repoStat);
+      await directory(cache, uid, gid, null, cacheStat);
+      const parents = async () => {
+        for (const [key, relative] of names) {
+          const { parent, parentStat } = originals.get(key);
+          await directory(parent, uid, gid, 0o700, parentStat);
+          if ((await readdir(parent)).join('|') !== path.basename(relative)) fail();
+        }
+      };
+      await parents();
+      for (const [key] of names) {
+        const { parent, parentStat, item } = originals.get(key);
+        await directory(parent, uid, gid, 0o700, parentStat);
+        await item.recheck();
+      }
+      await parents();
+      await directory(repository, uid, gid, null, repoStat);
+      await directory(cache, uid, gid, null, cacheStat);
+      return true;
+    };
+    await recheck();
+    return Object.freeze({ files: () => Object.fromEntries([...originals].map(([key, value]) =>
+      [key, Buffer.from(value.item.bytes)])), recheck });
+  } catch { fail(); }
+}
+
 /** Capture all three original files once; every later check compares their inodes and bytes. */
 export async function readWriterRolePending(repository, uid, gid, approved) {
   try {

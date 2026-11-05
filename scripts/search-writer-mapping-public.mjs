@@ -68,19 +68,22 @@ export async function captureCandidateWriterPublic(input) {
     ];
     const bytes = new Map([['ca.pem', caBytes], [logicalWriter, writerBytes]]);
     const manifest = { publicFiles };
-    const recheckDirectories = async () => {
+    const recheckDirectories = async (includeScratch = true) => {
       for (const [name, { mode, stat }] of dirs) {
+        if (!includeScratch && name === scratch) continue;
         const current = await capturePublicDirectory(name, uid, gid, mode, stat);
         if (!sameDirectory(current, stat)) fail();
       }
-      await inventory();
+      if (includeScratch) await inventory();
+      else if (JSON.stringify((await readdir(candidate)).sort()) !==
+          JSON.stringify(names)) fail();
     };
-    const recheckSources = async () => {
-      await recheckDirectories();
+    const recheckSources = async (includeScratch = true) => {
+      await recheckDirectories(includeScratch);
       await capturePublicFile(caName, uid, gid, ca);
       await capturePublicFile(writerName, uid, gid, writer);
       if (!caBytes.equals(ca.bytes) || !writerBytes.equals(writer.bytes)) fail();
-      await recheckDirectories();
+      await recheckDirectories(includeScratch);
     };
     await recheckSources();
     await validateCapturedAttestorPublic(manifest, bytes, new Date(), scratch);
@@ -97,6 +100,13 @@ export async function captureCandidateWriterPublic(input) {
       recheck: async () => {
         try {
           await recheckSources();
+          validateCapturedAttestorPublicAtTime(manifest, bytes, new Date());
+          return true;
+        } catch { fail(); }
+      },
+      recheckSourceOnly: async () => {
+        try {
+          await recheckSources(false);
           validateCapturedAttestorPublicAtTime(manifest, bytes, new Date());
           return true;
         } catch { fail(); }
