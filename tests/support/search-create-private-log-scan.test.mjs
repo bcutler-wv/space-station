@@ -22,9 +22,16 @@ test('private scan covers teardown output, partial setup and generated secrets',
     'generated-transition-password-value');
   await writeFile(path.join(root, '.cache/search-security/ca.key'),
     `-----BEGIN PRIVATE KEY-----\n${'q'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
+  const generation = path.join(root, '.cache/search-generations',
+    '11111111111141118111111111111111');
+  await mkdir(generation, { recursive: true });
+  await writeFile(path.join(generation, 'writer.key'),
+    `-----BEGIN PRIVATE KEY-----\n${'w'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
+  await writeFile(path.join(generation, 'query.key'),
+    `-----BEGIN PRIVATE KEY-----\n${'y'.repeat(80)}\n-----END PRIVATE KEY-----\n`);
   assert.equal(await scanCreatePrivateLog(root, log), true);
   for (const marker of ['generated-secret-password', 'generated-transition-password-value',
-    'q'.repeat(32)]) {
+    'q'.repeat(32), 'w'.repeat(32), 'y'.repeat(32)]) {
     await writeFile(log, `safe setup\nsafe teardown\n${marker}\n`);
     await assert.rejects(scanCreatePrivateLog(root, log));
   }

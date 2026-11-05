@@ -10,3 +10,10 @@ select_create_ordinary_pairs() {
     *) return 1 ;;
   esac
 }
+select_writer_mapping_prepare_pair() {
+  local mapping_case=$1 mapping_pair=$2 ordinary=$3 writer=$4 delivery=$5 delivery_pair=$6
+  [[ $mapping_case =~ ^(positive|measured)$ &&
+     $mapping_pair =~ ^(default|runner)$ &&
+     -z $ordinary && -z $writer && -z $delivery && -z $delivery_pair ]] || return 1
+  mapping_pairs=("$mapping_pair")
+}

@@ -6,6 +6,7 @@ import { isWriterDeliveryTraceLine, isWriterDeliveryShapeLine } from
   './search-writer-role-delivery-diagnostic.mjs';
 import { isWriterDeliveryCreateOutputLine } from
   './search-writer-role-create-output-diagnostic.mjs';
+import { isMappingPrepareTraceLine } from './search-writer-mapping-prepare-diagnostic.mjs';
 
 const checkpoints = new Set(['setup', 'network-proof', 'role-proof', 'complete-cli',
   'record-io-fault', 'lost-volume-create-response', 'lost-transfer-response', 'lost-inspect-response',
@@ -127,6 +128,8 @@ const deliveryCases = new Set(['positive', 'prestart', 'lost-return', 'false-ack
 const deliverySteps = new Set(['approval', 'derived-image', 'owner', 'phase-evidence',
   'phase-counts', 'phase-registry', 'phase-originals', 'phase-engine',
   'phase-binding', 'phase-resources', 'consumer-markers', 'replay']);
+const mappingSteps = new Set(['baseline', 'signer', 'owner', 'readonly', 'image',
+  'pending', 'measure', 'replay']);
 for (const value of deliveryCases) writerCheckpoints.add(`writer-delivery-${value}`);
 const writerPrecreateSteps = new Set(['registry-rows-command', 'registry-rows-parse',
   'registry-micro-command', 'registry-micro-parse', 'registry-micro-shape',
@@ -183,7 +186,7 @@ export async function persistWriterRolePrepareSummary(name, log, variant) {
 export function filteredCreateBoundaryDiagnostics(log) {
   if (typeof log !== 'string' || log.length > 8 * 1024 * 1024) return [];
   const found = [];
-  let checkpoint = false, diagnostic = false, deliveryTrace = false;
+  let checkpoint = false, diagnostic = false, deliveryTrace = false, mappingTrace = false;
   const deliveryShapes = new Set(), deliveryCreateOutputs = new Set();
   for (const line of log.split('\n')) {
     if (line.length > 240) continue;
@@ -192,6 +195,7 @@ export function filteredCreateBoundaryDiagnostics(log) {
     const apply = /^Create apply runtime fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     const writer = /^Writer role preparation fixture failed at ([a-z0-9-]+)\.$/.exec(line);
     const delivery = /^Writer role delivery fixture case=([a-z-]+) step=([a-z-]+)\.$/.exec(line);
+    const mapping = /^Writer mapping preparation fixture case=(positive|measured) step=([a-z-]+)\.$/.exec(line);
     if (!checkpoint && match && checkpoints.has(match[1])) {
       found.push(line); checkpoint = true;
     } else if (!checkpoint && intent && intentCheckpoints.has(intent[1])) {
@@ -203,8 +207,12 @@ export function filteredCreateBoundaryDiagnostics(log) {
     } else if (!checkpoint && delivery && deliveryCases.has(delivery[1]) &&
         deliverySteps.has(delivery[2])) {
       found.push(line); checkpoint = true;
+    } else if (!checkpoint && mapping && mappingSteps.has(mapping[2])) {
+      found.push(line); checkpoint = true;
     } else if (!deliveryTrace && isWriterDeliveryTraceLine(line)) {
       found.push(line); deliveryTrace = true;
+    } else if (!mappingTrace && isMappingPrepareTraceLine(line)) {
+      found.push(line); mappingTrace = true;
     } else if (isWriterDeliveryShapeLine(line)) {
       const phase = line.includes(' phase=transfer ') ? 'transfer' : 'apply';
       if (!deliveryShapes.has(phase)) { found.push(line); deliveryShapes.add(phase); }
@@ -219,11 +227,29 @@ export function filteredCreateBoundaryDiagnostics(log) {
   }
   return found;
 }
+export function writerMappingPrepareSummary(log, mode, pair) {
+  if (typeof log !== 'string' || log.length > 8 * 1024 * 1024 ||
+      !['positive', 'measured'].includes(mode) ||
+      !['default', 'runner'].includes(pair)) throw Error('Invalid mapping summary input');
+  const prefix = 'Writer mapping preparation summary ';
+  const lines = log.split('\n').filter(line => line.startsWith(prefix));
+  if (lines.length !== 1) throw Error('Invalid mapping summary count');
+  const match = /^Writer mapping preparation summary case=(positive|measured) pair=(default|runner) pending=exact replay=denied phase=(inferred|measured) create=(na|2) inspect=(na|2) fence=(na|2) start=(na|2) get=(na|[1-9]\d{0,2}) head=(na|\d{1,3}) other=(na|0) transfer=(na|empty|none) read=(na|admin-internal) docker=(\d+\.\d+\.\d+) api=(\d+\.\d+) compose=(v?\d+\.\d+\.\d+) opensearch=(3\.9\.0) security=(3\.9\.0\.0) sdk=(3\.9\.0) checked=true\.$/.exec(lines[0]);
+  if (!match || match[1] !== mode || match[2] !== pair ||
+      match[3] !== (mode === 'positive' ? 'inferred' : 'measured') ||
+      match.slice(4, 13).some(value => mode === 'positive' ? value !== 'na' : value === 'na'))
+    throw Error('Invalid mapping summary shape');
+  return `${lines[0]}\n`;
+}
 if (process.argv[1]?.endsWith('/search-create-boundary-delivery-diagnostic-filter.mjs')) {
   try {
     if (process.argv.length === 3) {
       if ((await stat(process.argv[2])).size > 8 * 1024 * 1024) process.exitCode = 1;
       else process.stdout.write(`${filteredCreateBoundaryDiagnostics(await readFile(process.argv[2], 'utf8')).join('\n')}\n`);
+    } else if (process.argv.length === 6 && process.argv[2] === '--mapping-emit') {
+      const name = process.argv[3], mode = process.argv[4], pair = process.argv[5];
+      if ((await stat(name)).size > 8 * 1024 * 1024) throw Error('Mapping summary size');
+      process.stdout.write(writerMappingPrepareSummary(await readFile(name, 'utf8'), mode, pair));
     } else if (process.argv.length === 6 && process.argv[2] === '--writer-summary') {
       await persistWriterRolePrepareSummary(process.argv[4],
         await readFile(process.argv[3], 'utf8'), process.argv[5]);

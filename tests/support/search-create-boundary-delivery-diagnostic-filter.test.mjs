@@ -6,10 +6,13 @@ import process from 'node:process';
 import { test } from 'node:test';
 import { createApplyPrepareDiagnostic, createBoundaryRejectionDiagnostic,
   filteredCreateBoundaryDiagnostics, persistWriterRolePrepareSummary,
-  writerPrecreateDiagnostic, writerRolePrepareSummary } from
+  writerPrecreateDiagnostic, writerRolePrepareSummary,
+  writerMappingPrepareSummary } from
   './search-create-boundary-delivery-diagnostic-filter.mjs';
 import { writerDeliveryTrace, writerDeliveryShape, writerDeliveryMethodTracker } from
   './search-writer-role-delivery-diagnostic.mjs';
+import { mappingPrepareCommandKind, mappingPrepareMethodTracker, mappingPrepareTrace } from
+  './search-writer-mapping-prepare-diagnostic.mjs';
 test('only fixed checkpoint and owner diagnostic reach public CI output', () => {
   const log = ['private-secret-do-not-print',
     'Create boundary delivery fixture failed at complete-cli.',
@@ -19,6 +22,74 @@ test('only fixed checkpoint and owner diagnostic reach public CI output', () => 
   assert.deepEqual(filteredCreateBoundaryDiagnostics(log), [
     'Create boundary delivery fixture failed at complete-cli.',
     'Private create boundary owner diagnostic stage=transfer-run reason=dispatch-stderr.']);
+});
+test('mapping diagnostics and summary accept only closed finite case and step', () => {
+  const safe = 'Writer mapping preparation fixture case=measured step=readonly.';
+  assert.deepEqual(filteredCreateBoundaryDiagnostics([
+    'private-password-secret', safe, safe,
+    'Writer mapping preparation fixture case=measured step=secret.',
+    `${safe}private-password-secret`].join('\n')), [safe]);
+  const summary = 'Writer mapping preparation summary case=measured pair=runner ' +
+    'pending=exact replay=denied phase=measured create=2 inspect=2 fence=2 start=2 ' +
+    'get=9 head=0 other=0 transfer=none read=admin-internal docker=28.0.4 api=1.48 ' +
+    'compose=v2.38.2 opensearch=3.9.0 security=3.9.0.0 sdk=3.9.0 checked=true.';
+  assert.equal(writerMappingPrepareSummary(`${summary}\n`, 'measured', 'runner'),
+    `${summary}\n`);
+  assert.throws(() => writerMappingPrepareSummary(`${summary}\n${summary}\n`,
+    'measured', 'runner'));
+  assert.throws(() => writerMappingPrepareSummary(`${summary}private-secret\n`,
+    'measured', 'runner'));
+  const positive = summary.replace('case=measured pair=runner',
+    'case=positive pair=default').replace('phase=measured', 'phase=inferred')
+    .replace(/create=2 inspect=2 fence=2 start=2 get=9 head=0 other=0 transfer=none read=admin-internal/,
+      'create=na inspect=na fence=na start=na get=na head=na other=na transfer=na read=na');
+  assert.equal(writerMappingPrepareSummary(`${positive}\n`, 'positive', 'default'),
+    `${positive}\n`);
+  assert.throws(() => writerMappingPrepareSummary(`${summary.replace('get=9', 'get=0')}\n`,
+    'measured', 'runner'));
+});
+test('mapping measured failure retains reached command, phase and first nested fence', async () => {
+  assert.equal(mappingPrepareCommandKind(['volume', 'ls', '--format', '{{.Name}}']),
+    'other');
+  assert.equal(mappingPrepareCommandKind(['container', 'inspect', 'x']),
+    'container-inspect');
+  const volumeFailure = mappingPrepareTrace({ method: 'volume-absent',
+    phase: 'owner', command: mappingPrepareCommandKind(['volume', 'ls']),
+    outcome: 'returned-nonzero', last: 'preflight', create: 0, inspect: 0,
+    fence: 0, start: 0 });
+  assert.deepEqual(filteredCreateBoundaryDiagnostics(volumeFailure), [volumeFailure]);
+  for (const [boundary, command, counts] of [
+    ['create', 'compose-create', [1, 0, 0, 0]],
+    ['inspect', 'container-inspect', [1, 1, 0, 0]],
+    ['fence', 'container-inspect', [1, 1, 0, 0]],
+  ]) {
+    const diagnostic = { method: 'owner', phase: 'transfer', command: 'none',
+      outcome: 'none', last: 'none' };
+    const run = mappingPrepareMethodTracker(diagnostic);
+    let saved = null;
+    const traced = async (label, action) => {
+      try { return await run(label, action); }
+      catch (error) {
+        saved ??= mappingPrepareTrace({ ...diagnostic,
+          create: counts[0], inspect: counts[1], fence: counts[2], start: counts[3] });
+        throw error;
+      }
+    };
+    await assert.rejects(traced('run-transfer', async () => {
+      diagnostic.command = command;
+      diagnostic.outcome = 'returned-zero';
+      if (boundary === 'fence') await traced('fence-transfer', async () => {
+        await traced('recheck-owner', async () => { throw Error('private sentinel'); });
+      });
+      else throw Error('private sentinel');
+    }));
+    diagnostic.command = 'container-rm';
+    diagnostic.outcome = 'returned-zero';
+    assert.match(saved, boundary === 'fence' ? /method=recheck-owner/ : /method=run-transfer/);
+    assert.match(saved, new RegExp(`command=${command}`));
+    assert.deepEqual(filteredCreateBoundaryDiagnostics([saved, saved,
+      `${saved}private sentinel`].join('\n')), [saved]);
+  }
 });
 test('all four create-boundary rejection modes preserve their finite failing substep', () => {
   const steps = ['state-mode', 'snapshot', 'owner-command', 'owner-output',

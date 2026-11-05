@@ -34,6 +34,13 @@ export async function captureCreatePrivateMarkers(root) {
     const privateKey = await bounded(path.join(root, '.cache/search-security/ca.key'), 16_384);
     if (privateKey !== null) markers.push(privateKey.split('\n')
       .find(line => line.length >= 40)?.slice(0, 32));
+    const generation = path.join(root, '.cache/search-generations',
+      '11111111111141118111111111111111');
+    for (const leaf of ['writer.key', 'query.key']) {
+      const key = await bounded(path.join(generation, leaf), 16_384);
+      if (key !== null) markers.push(key.split('\n')
+        .find(line => line.length >= 40)?.slice(0, 32));
+    }
     if (markers.some(marker => typeof marker !== 'string' || marker.length < 16 ||
         marker.length > 8192)) fail();
     return markers;

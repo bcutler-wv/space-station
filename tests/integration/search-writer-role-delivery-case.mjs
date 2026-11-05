@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { readFile, lstat, rename, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -478,6 +479,8 @@ export async function runWriterRoleDeliveryCase(ctx) {
     if (mode !== 'positive') process.stdout.write('Writer role delivery created-shape ' +
       `transfer=${createdStates[0].networkShape} apply=${createdStates[1].networkShape} ` +
       `fence=${fences.length}.\n`);
+    if (mode === 'positive') return Object.freeze({ approvedSha256: approvedSha,
+      pendingBytes: Buffer.from(roleBytes), intent, versions });
   } catch {
     report();
     throw Error('Writer role delivery fixture failed');
