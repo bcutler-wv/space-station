@@ -1,0 +1,98 @@
+services:
+  search-writer-mapping-prepare-transfer:
+    profiles: [search-writer-mapping-prepare]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-writer-mapping-prepare-transfer.mjs"]
+    user: "0:0"
+    volumes:
+      - type: bind
+        source: ./.cache/search-create-intent/pending.json
+        target: /run/writer-mapping-prepare-create-intent/create-intent.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./.cache/search-create-apply/binding.json
+        target: /run/writer-mapping-prepare-create-binding/create-binding.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./.cache/search-writer-role-intent/pending.json
+        target: /run/writer-mapping-prepare-role-intent/role-intent.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./.cache/search-writer-role-apply/binding.json
+        target: /run/writer-mapping-prepare-role-binding/role-binding.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${STATION_WRITER_MAPPING_PREPARE_INVOCATION_ROOT:?Set STATION_WRITER_MAPPING_PREPARE_INVOCATION_ROOT}/invocation.json
+        target: /run/writer-mapping-prepare-invocation/invocation.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./.cache/search-db/initial-v1/transition.password
+        target: /run/writer-mapping-prepare-password/password
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${STATION_WRITER_MAPPING_PREPARE_PUBLIC_ROOT:?Set STATION_WRITER_MAPPING_PREPARE_PUBLIC_ROOT}
+        target: /run/writer-mapping-prepare-public
+        read_only: true
+        bind: {create_host_path: false}
+      - type: volume
+        source: search_writer_mapping_prepare_input
+        target: /run/search-writer-mapping-prepare
+        volume: {nocopy: true}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,uid=0,gid=0,mode=0700
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    network_mode: none
+    restart: "no"
+
+  search-writer-mapping-prepare:
+    profiles: [search-writer-mapping-prepare]
+    build:
+      context: .
+      target: search-attestor
+    command: ["node", "scripts/search-writer-mapping-prepare.mjs"]
+    user: "1000:1000"
+    volumes:
+      - type: volume
+        source: search_writer_mapping_prepare_input
+        target: /run/search-writer-mapping-prepare
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: search_admin_certs
+        target: /run/station-admin
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: search_security_state
+        target: /run/station-state
+        read_only: true
+        volume: {nocopy: true}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [search_admin_db, search_internal]
+    restart: "no"
+
+volumes:
+  search_writer_mapping_prepare_input:
+    external: true
+    name: ${STATION_WRITER_MAPPING_PREPARE_VOLUME_NAME:?Set STATION_WRITER_MAPPING_PREPARE_VOLUME_NAME}
